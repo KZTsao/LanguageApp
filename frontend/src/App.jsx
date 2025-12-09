@@ -18,10 +18,10 @@ function App() {
 
   // 本機 vs 線上 API base
   const API_BASE =
-    import.meta.env.MODE === "development"
-      ? "http://localhost:4000"
-      : "https://languageapp-8j45.onrender.com";
+    import.meta.env.VITE_API_BASE_URL ||
+    "http://localhost:4000";
 
+    console.log("🔥 API_BASE in production is:", API_BASE);
   // 深淺色主題
   const [theme, setTheme] = useState(() => {
     const stored = window.localStorage.getItem("appTheme");

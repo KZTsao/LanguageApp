@@ -4,9 +4,10 @@ import { useState, useEffect, useCallback } from "react";
 
 // ✅ 統一管理後端 base URL：本機用 localhost，正式環境用 Render
 const API_BASE =
-  import.meta.env.PROD
-    ? "https://languageapp-8j45.onrender.com" // ⬅︎ 這行換成你的 Render 後端網址
-    : "http://localhost:4000";
+  import.meta.env.VITE_API_BASE_URL ||
+  "http://localhost:4000";
+  
+  console.log("📘 [useExamples] API_BASE:", API_BASE);
 
 export default function useExamples({
   d,
