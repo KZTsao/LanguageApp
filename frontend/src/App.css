@@ -1,0 +1,6 @@
+/* 讓 React root 佔滿整個視窗寬度，不要限制 max-width */
+#root {
+  margin: 0;
+  padding: 0;
+  max-width: none;
+}

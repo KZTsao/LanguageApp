@@ -1,0 +1,139 @@
+:root {
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+.app-root {
+  min-height: 100vh;
+}
+
+/* ==========================
+   Light Theme（參考照片暖黃系＋略微變暗）
+   ========================== */
+.theme-light {
+  /* 整體背景略暗一階，偏灰藍 */
+  --page-bg: #e7ecf3;
+  --text-main: #111827;
+  --text-muted: #6b7280;
+
+  /* 卡片與輸入框微暖白 */
+  --card-bg: #fdfbf7;
+  --card-subtle-bg: #f3f4f7;
+  --input-bg: #f3f4f7;
+
+  --border-subtle: #d4d7e2;
+  --border-strong: #b7c1dd;
+
+  /* 主題色：取一棟黃色房子當 accent */
+  --accent: #f4a62a; /* 溫暖黃橘 */
+  --accent-soft: rgba(244, 166, 42, 0.16);
+
+  /* 小 chip 背景略帶奶油黃 */
+  --chip-bg: #fff7e6;
+  --chip-border: #f4c46c;
+
+  --button-text: #ffffff;
+  --code-bg: #eef0f6;
+
+  /* 冠詞顏色：從照片挑的幾個色系 */
+  --article-der: #2563eb;  /* 藍屋頂／窗框 */
+  --article-die: #c2410c;  /* 磚紅窗框 */
+  --article-das: #15803d;  /* 綠色外牆 */
+  --article-plural: #b45309; /* 深橘複數 */
+
+  /* 文字黑細框，避免亮底時模糊 */
+  --text-outline: 0 0 1px rgba(0, 0, 0, 0.35);
+}
+
+/* ==========================
+   Dark Theme
+   ========================== */
+.theme-dark {
+  --page-bg: #020617;
+  --text-main: #e5e7eb;
+  --text-muted: #9ca3af;
+
+  --card-bg: #020617;
+  --card-subtle-bg: #111827;
+  --input-bg: #111827;
+
+  --border-subtle: #4b5563;
+  --border-strong: #6b7280;
+
+  --accent: #60a5fa;
+  --accent-soft: rgba(56, 189, 248, 0.16);
+
+  --chip-bg: #111827;
+  --chip-border: #374151;
+
+  --button-text: #ffffff;
+  --code-bg: #020617;
+
+  --article-der: #93c5fd;
+  --article-die: #f9a8d4;
+  --article-das: #6ee7b7;
+  --article-plural: #fdba74;
+
+  /* 深色也保留一點細框，讓字更銳利 */
+  --text-outline: 0 0 1px rgba(0, 0, 0, 0.8);
+}
+
+a {
+  font-weight: 500;
+  color: var(--accent);
+  text-decoration: inherit;
+}
+a:hover {
+  text-decoration: underline;
+}
+
+button {
+  font-family: inherit;
+}
+
+input,
+textarea,
+select {
+  font-family: inherit;
+}
+
+/* ==========================
+   Example refresh icon styles
+   ========================== */
+
+/* 亮版：用 accent 橘色 */
+.theme-light .example-refresh-button {
+  color: var(--accent);
+}
+
+/* 暗版：強制純白箭頭（不吃藍色 accent） */
+.theme-dark .example-refresh-button {
+  color: #ffffff !important;
+}
+
+/* hover 微動畫 */
+.example-refresh-button {
+  transition: transform 0.15s ease, opacity 0.15s ease;
+}
+
+.example-refresh-button:hover {
+  transform: rotate(-45deg);
+  opacity: 0.9;
+}
+
+.example-refresh-icon {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
