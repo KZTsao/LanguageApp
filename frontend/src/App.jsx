@@ -14,16 +14,15 @@ function App() {
   const [result, setResult] = useState(null);
   const [uiLang, setUiLang] = useState("zh-TW");
   const [loading, setLoading] = useState(false);
-  const [showRaw, setShowRaw] = useState(false);
-
-  // 本機 vs 線上 API base
+  
   const API_BASE =
   window.location.hostname === "localhost" ||
   window.location.hostname === "127.0.0.1"
     ? "http://localhost:4000"
     : "https://languageapp-8j45.onrender.com";
 
-    console.log("🔥 API_BASE in production is:", API_BASE);
+  const [showRaw, setShowRaw] = useState(false);
+  console.log("🔥 API_BASE in production is:", API_BASE);
   // 深淺色主題
   const [theme, setTheme] = useState(() => {
     const stored = window.localStorage.getItem("appTheme");
