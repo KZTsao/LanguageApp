@@ -14,28 +14,64 @@ function App() {
   const [result, setResult] = useState(null);
   const [uiLang, setUiLang] = useState("zh-TW");
   const [loading, setLoading] = useState(false);
+  const API_BASE =
+    import.meta.env.MODE === "development"
+      ? "http://localhost:4000"
+      : "https://languageapp-8j45.onrender.com";
   const [showRaw, setShowRaw] = useState(false);
 
-  // 深淺色主題
+  //
+  // ★ 深淺色主題（存在 localStorage）
+  //
   const [theme, setTheme] = useState(() => {
     const stored = window.localStorage.getItem("appTheme");
-    if (stored === "light" || stored === "dark") {
-      return stored;
-    }
-    return "light";
+    if (stored === "light" || stored === "dark") return stored;
+    return window.matchMedia("(prefers-color-scheme: dark)").matches
+      ? "dark"
+      : "light";
   });
-
-  // 查詢歷史：[{ text, result }]
-  const [history, setHistory] = useState([]);
-  const [historyIndex, setHistoryIndex] = useState(-1); // 指向 history 中目前顯示的那一筆
 
   useEffect(() => {
     window.localStorage.setItem("appTheme", theme);
+    document.documentElement.classList.toggle("dark", theme === "dark");
   }, [theme]);
 
-  const t = uiText[uiLang];
+  //
+  // ★ 查詢歷史：存最近 10 筆（之後可以用在「上一筆 / 下一筆」）
+  //
+  const [history, setHistory] = useState([]);
+  const [historyIndex, setHistoryIndex] = useState(-1);
 
-  // 共用的查詢函式：給目前輸入框 or 點擊單字都用這個
+  //
+  // ★ 每次 UI 語言改變，把文字貼到 localStorage
+  //
+  useEffect(() => {
+    window.localStorage.setItem("uiLang", uiLang);
+  }, [uiLang]);
+
+  //
+  // ★ 進來時從 localStorage 撈 uiLang、最後一次輸入
+  //
+  useEffect(() => {
+    const storedLang = window.localStorage.getItem("uiLang");
+    if (storedLang) setUiLang(storedLang);
+
+    const storedText = window.localStorage.getItem("lastText");
+    if (storedText) setText(storedText);
+  }, []);
+
+  //
+  // ★ 輸入框變動時，順便寫到 localStorage
+  //
+  const handleTextChange = (value) => {
+    setText(value);
+    window.localStorage.setItem("lastText", value);
+  };
+
+  //
+  // ★ 核心：呼叫後端 analyze API
+  //   （給目前輸入框 or 點擊單字都用這個）
+  //
   const runAnalyze = async (inputText) => {
     const trimmed = (inputText || "").trim();
     if (!trimmed) return;
@@ -44,7 +80,7 @@ function App() {
     setResult(null);
 
     try {
-      const resp = await fetch("http://localhost:4000/api/analyze", {
+      const resp = await fetch(`${API_BASE}/api/analyze`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -64,58 +100,52 @@ function App() {
         if (historyIndex >= 0 && historyIndex < prev.length - 1) {
           base = prev.slice(0, historyIndex + 1);
         }
-        const updated = [...base, { text: trimmed, result: data }];
-
-        // 同步更新指標到最後一筆
-        setHistoryIndex(updated.length - 1);
-
-        return updated;
+        const next = [...base, { text: trimmed, result: data }];
+        // 最多保留 10 筆
+        if (next.length > 10) next.shift();
+        return next;
+      });
+      setHistoryIndex((prev) => {
+        // 新的一筆永遠指向陣列最後一項
+        const afterUpdateLength =
+          historyIndex >= 0 && historyIndex < history.length - 1
+            ? historyIndex + 2
+            : history.length + 1;
+        return Math.min(afterUpdateLength - 1, 9);
       });
     } catch (err) {
-      console.error(err);
-      setResult({ error: "Failed to fetch" });
+      console.error("Error calling /api/analyze:", err);
+      alert("後端服務目前無法使用，請稍後再試或檢查伺服器狀態。");
     } finally {
       setLoading(false);
     }
   };
 
-  // 按下查詢按鈕（使用目前 input 的 text）
+  //
+  // ★ 按 Enter 或按「Analyze」時觸發
+  //
   const handleAnalyze = () => {
-    if (!loading) {
-      runAnalyze(text);
-    }
+    runAnalyze(text);
   };
 
-  // Enter 查詢
-  const handleKeyDown = (e) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      if (!loading) {
-        runAnalyze(text);
-      }
-    }
+  //
+  // ★ 點某個字卡時，丟該單字給 runAnalyze
+  //
+  const handleWordClick = (word) => {
+    setText(word);
+    runAnalyze(word);
   };
 
-  // 點單字再查：直接用點到的字重新查，不依賴當下 text state
-  const handleWordClick = (w) => {
-    setText(w);
-    if (!loading) {
-      runAnalyze(w);
-    }
+  //
+  // ★ 切換顯示 JSON 原始資料
+  //
+  const handleToggleRaw = () => {
+    setShowRaw((prev) => !prev);
   };
 
-  // 德語發音
-  const speak = (txt) => {
-    if (!txt) return;
-    window.speechSynthesis.cancel();
-    const utter = new SpeechSynthesisUtterance(txt);
-    utter.lang = "de-DE";
-    utter.rate = 1.0;
-    utter.pitch = 1.0;
-    window.speechSynthesis.speak(utter);
-  };
-
-  // 上一個 / 下一個 查詢結果
+  //
+  // ★ 歷史：上一筆、下一筆
+  //
   const handlePrevResult = () => {
     if (historyIndex <= 0) return;
     const newIndex = historyIndex - 1;
@@ -144,29 +174,29 @@ function App() {
   return (
     <LayoutShell
       theme={theme}
-      onToggleTheme={() => setTheme(theme === "dark" ? "light" : "dark")}
-      uiLang={uiLang}
-      onChangeUiLang={setUiLang}
-      t={t}
+      onToggleTheme={() =>
+        setTheme((prev) => (prev === "dark" ? "light" : "dark"))
+      }
     >
       <SearchBox
         text={text}
-        onChangeText={setText}
-        onKeyDown={handleKeyDown}
-        onSubmit={handleAnalyze}
+        onTextChange={handleTextChange}
+        onAnalyze={handleAnalyze}
         loading={loading}
-        t={t}
+        uiLang={uiLang}
+        onUiLangChange={setUiLang}
+        uiText={uiText[uiLang]}
       />
 
       <ResultPanel
         result={result}
+        loading={loading}
         showRaw={showRaw}
-        onToggleShowRaw={() => setShowRaw((prev) => !prev)}
-        t={t}
-        onWordClick={handleWordClick}
-        onSpeak={speak}
+        onToggleRaw={handleToggleRaw}
+        uiText={uiText[uiLang]}
         WordCard={WordCard}
         GrammarCard={GrammarCard}
+        onWordClick={handleWordClick}
         // ★ 新增：歷史導航相關 props
         canPrev={canGoPrev}
         canNext={canGoNext}
