@@ -18,8 +18,10 @@ function App() {
 
   // 本機 vs 線上 API base
   const API_BASE =
-    import.meta.env.VITE_API_BASE_URL ||
-    "http://localhost:4000";
+  window.location.hostname === "localhost" ||
+  window.location.hostname === "127.0.0.1"
+    ? "http://localhost:4000"
+    : "https://languageapp-8j45.onrender.com";
 
     console.log("🔥 API_BASE in production is:", API_BASE);
   // 深淺色主題

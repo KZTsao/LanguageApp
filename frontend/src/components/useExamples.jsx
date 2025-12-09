@@ -4,9 +4,11 @@ import { useState, useEffect, useCallback } from "react";
 
 // ✅ 統一管理後端 base URL：本機用 localhost，正式環境用 Render
 const API_BASE =
-  import.meta.env.VITE_API_BASE_URL ||
-  "http://localhost:4000";
-  
+  window.location.hostname === "localhost" ||
+  window.location.hostname === "127.0.0.1"
+    ? "http://localhost:4000"
+    : "https://languageapp-8j45.onrender.com";
+
   console.log("📘 [useExamples] API_BASE:", API_BASE);
 
 export default function useExamples({
