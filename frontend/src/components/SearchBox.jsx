@@ -1,55 +1,115 @@
 // frontend/src/components/SearchBox.jsx
-// 單行 input + 字體放大（18px）
+
+import React from "react";
 
 function SearchBox({
   text,
-  onChangeText,
-  onKeyDown,
-  onSubmit,
+  onTextChange,
+  onAnalyze,
   loading,
-  t,
+  uiLang,
+  onUiLangChange,
+  uiText,
 }) {
-  return (
-    <>
-      {/* 單行輸入框 */}
-      <input
-        type="text"
-        value={text}
-        onChange={(e) => onChangeText(e.target.value)}
-        onKeyDown={onKeyDown}
-        placeholder={t.placeholder}
-        style={{
-          width: "100%",
-          padding: "10px 12px",
-          height: "48px",    // ★ 微調高度讓大字更舒適
-          borderRadius: 10,
-          border: "1px solid var(--border-subtle)",
-          background: "var(--input-bg)",
-          color: "var(--text-main)",
-          marginBottom: 12,
-          fontSize: "18px",  // ★ 字體放大
-          lineHeight: "24px",
-          fontWeight: 500,   // ★ 看起來更清楚（可改回 400）
-        }}
-      />
+  // 安全展開 uiText，避免 undefined
+  const safeText = uiText || {};
 
-      {/* 查詢按鈕 */}
-      <button
-        onClick={onSubmit}
-        disabled={loading}
+  const placeholder =
+    safeText.placeholder ||
+    "Gib ein Wort oder einen Satz ein / 請輸入單字或句子";
+
+  const analyzeLabel = safeText.analyzeButtonLabel || "Analyze";
+  const inputLabel = safeText.inputLabel || "";
+  const langLabel = safeText.langLabel || "UI Language";
+
+  const handleKeyDown = (e) => {
+    if (e.key === "Enter") {
+      onAnalyze();
+    }
+  };
+
+  return (
+    <div
+      style={{
+        marginBottom: 16,
+        padding: 12,
+        borderRadius: 16,
+        border: "1px solid var(--border-subtle)",
+        background: "var(--card-bg)",
+        display: "flex",
+        flexDirection: "column",
+        gap: 8,
+      }}
+    >
+      {inputLabel && (
+        <div style={{ fontSize: 13, color: "var(--text-muted)" }}>
+          {inputLabel}
+        </div>
+      )}
+
+      <div style={{ display: "flex", gap: 8 }}>
+        <input
+          type="text"
+          value={text}
+          onChange={(e) => onTextChange(e.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder={placeholder}
+          style={{
+            flex: 1,
+            padding: "8px 10px",
+            borderRadius: 999,
+            border: "1px solid var(--border-subtle)",
+            background: "var(--input-bg)",
+            color: "var(--text-main)",
+            outline: "none",
+          }}
+        />
+        <button
+          onClick={onAnalyze}
+          disabled={loading}
+          style={{
+            padding: "8px 16px",
+            borderRadius: 999,
+            border: "none",
+            background: "var(--accent)",
+            color: "#fff",
+            cursor: loading ? "wait" : "pointer",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {loading ? "Loading..." : analyzeLabel}
+        </button>
+      </div>
+
+      {/* 簡單的 UI 語言切換（保留介面，之後你要再做漂亮都可以） */}
+      <div
         style={{
-          padding: "10px 20px",
-          borderRadius: 10,
-          border: "none",
-          fontWeight: 600,
-          cursor: "pointer",
-          background: loading ? "var(--border-subtle)" : "var(--accent)",
-          color: "var(--button-text)",
+          display: "flex",
+          gap: 8,
+          alignItems: "center",
+          justifyContent: "flex-end",
+          fontSize: 12,
+          color: "var(--text-muted)",
         }}
       >
-        {loading ? t.loading : t.submit}
-      </button>
-    </>
+        <span>{langLabel}:</span>
+        <select
+          value={uiLang}
+          onChange={(e) => onUiLangChange(e.target.value)}
+          style={{
+            padding: "4px 8px",
+            borderRadius: 999,
+            border: "1px solid var(--border-subtle)",
+            background: "var(--input-bg)",
+            color: "var(--text-main)",
+          }}
+        >
+          <option value="zh-TW">中文</option>
+          <option value="de-DE">Deutsch</option>
+          <option value="en-US">English</option>
+        </select>
+      </div>
+    </div>
   );
 }
 

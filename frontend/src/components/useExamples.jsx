@@ -2,6 +2,12 @@
 
 import { useState, useEffect, useCallback } from "react";
 
+// ✅ 統一管理後端 base URL：本機用 localhost，正式環境用 Render
+const API_BASE =
+  import.meta.env.PROD
+    ? "https://languageapp-8j45.onrender.com" // ⬅︎ 這行換成你的 Render 後端網址
+    : "http://localhost:4000";
+
 export default function useExamples({
   d,
   senseIndex,
@@ -27,9 +33,7 @@ export default function useExamples({
 
   const [loading, setLoading] = useState(false);
 
-  // ⭐ 關鍵補強：
-  // 只要 d 改變（包含 UI 語言改成英文重新查字），
-  // 就重新從 d 裡同步一次例句 + 翻譯，避免卡住上一個語言的結果。
+  // ⭐ 只要 d 改變（含換 UI 語言重新查），就從 d 重新同步例句＋翻譯
   useEffect(() => {
     if (!d) {
       setExamples([]);
@@ -46,7 +50,7 @@ export default function useExamples({
       setExamples([]);
     }
 
-    // 同步翻譯（依照後端當次 explainLang，像你貼的 JSON 那樣）
+    // 同步翻譯（依照後端當次 explainLang）
     if (
       typeof d.exampleTranslation === "string" &&
       d.exampleTranslation.trim()
@@ -78,7 +82,8 @@ export default function useExamples({
       setLoading(true);
 
       try {
-        const resp = await fetch("/api/dictionary/examples", {
+        // 🔁 這裡改成打到後端 API_BASE，而不是相對路徑
+        const resp = await fetch(`${API_BASE}/api/dictionary/examples`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -108,7 +113,13 @@ export default function useExamples({
           }),
         });
 
-        console.log("[useExamples] fetch response", resp.status, resp.ok);
+        console.log(
+          "[useExamples] fetch response",
+          resp.status,
+          resp.ok,
+          "→",
+          `${API_BASE}/api/dictionary/examples`
+        );
 
         let data = null;
         try {

@@ -1,5 +1,5 @@
 // frontend/src/App.jsx
-// 拆成：App 只管狀態與邏輯，畫面交給 LayoutShell / SearchBox / ResultPanel
+// App 只管狀態與邏輯，畫面交給 LayoutShell / SearchBox / ResultPanel
 
 import { useState, useEffect } from "react";
 import { uiText } from "./uiText";
@@ -14,15 +14,15 @@ function App() {
   const [result, setResult] = useState(null);
   const [uiLang, setUiLang] = useState("zh-TW");
   const [loading, setLoading] = useState(false);
+  const [showRaw, setShowRaw] = useState(false);
+
+  // 本機 vs 線上 API base
   const API_BASE =
     import.meta.env.MODE === "development"
       ? "http://localhost:4000"
       : "https://languageapp-8j45.onrender.com";
-  const [showRaw, setShowRaw] = useState(false);
 
-  //
-  // ★ 深淺色主題（存在 localStorage）
-  //
+  // 深淺色主題
   const [theme, setTheme] = useState(() => {
     const stored = window.localStorage.getItem("appTheme");
     if (stored === "light" || stored === "dark") return stored;
@@ -36,22 +36,16 @@ function App() {
     document.documentElement.classList.toggle("dark", theme === "dark");
   }, [theme]);
 
-  //
-  // ★ 查詢歷史：存最近 10 筆（之後可以用在「上一筆 / 下一筆」）
-  //
+  // 查詢歷史：存最近 10 筆
   const [history, setHistory] = useState([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
 
-  //
-  // ★ 每次 UI 語言改變，把文字貼到 localStorage
-  //
+  // 每次 UI 語言改變，寫入 localStorage
   useEffect(() => {
     window.localStorage.setItem("uiLang", uiLang);
   }, [uiLang]);
 
-  //
-  // ★ 進來時從 localStorage 撈 uiLang、最後一次輸入
-  //
+  // 初始化：從 localStorage 撈 uiLang 和 lastText
   useEffect(() => {
     const storedLang = window.localStorage.getItem("uiLang");
     if (storedLang) setUiLang(storedLang);
@@ -60,18 +54,13 @@ function App() {
     if (storedText) setText(storedText);
   }, []);
 
-  //
-  // ★ 輸入框變動時，順便寫到 localStorage
-  //
+  // 輸入框變動
   const handleTextChange = (value) => {
     setText(value);
     window.localStorage.setItem("lastText", value);
   };
 
-  //
-  // ★ 核心：呼叫後端 analyze API
-  //   （給目前輸入框 or 點擊單字都用這個）
-  //
+  // 呼叫後端 /api/analyze
   const runAnalyze = async (inputText) => {
     const trimmed = (inputText || "").trim();
     if (!trimmed) return;
@@ -95,18 +84,16 @@ function App() {
 
       // 更新查詢歷史
       setHistory((prev) => {
-        // 如果之前有往回翻頁，先砍掉「當前指標之後」的紀錄，再接新的一筆
         let base = prev;
         if (historyIndex >= 0 && historyIndex < prev.length - 1) {
           base = prev.slice(0, historyIndex + 1);
         }
         const next = [...base, { text: trimmed, result: data }];
-        // 最多保留 10 筆
         if (next.length > 10) next.shift();
         return next;
       });
+
       setHistoryIndex((prev) => {
-        // 新的一筆永遠指向陣列最後一項
         const afterUpdateLength =
           historyIndex >= 0 && historyIndex < history.length - 1
             ? historyIndex + 2
@@ -121,31 +108,19 @@ function App() {
     }
   };
 
-  //
-  // ★ 按 Enter 或按「Analyze」時觸發
-  //
   const handleAnalyze = () => {
     runAnalyze(text);
   };
 
-  //
-  // ★ 點某個字卡時，丟該單字給 runAnalyze
-  //
   const handleWordClick = (word) => {
     setText(word);
     runAnalyze(word);
   };
 
-  //
-  // ★ 切換顯示 JSON 原始資料
-  //
   const handleToggleRaw = () => {
     setShowRaw((prev) => !prev);
   };
 
-  //
-  // ★ 歷史：上一筆、下一筆
-  //
   const handlePrevResult = () => {
     if (historyIndex <= 0) return;
     const newIndex = historyIndex - 1;
@@ -171,6 +146,10 @@ function App() {
   const canGoPrev = historyIndex > 0;
   const canGoNext = historyIndex >= 0 && historyIndex < history.length - 1;
 
+  // 🚑 uiText 的安全 fallback，避免 undefined
+  const currentUiText =
+    uiText[uiLang] || uiText["zh-TW"] || Object.values(uiText)[0] || {};
+
   return (
     <LayoutShell
       theme={theme}
@@ -185,7 +164,7 @@ function App() {
         loading={loading}
         uiLang={uiLang}
         onUiLangChange={setUiLang}
-        uiText={uiText[uiLang]}
+        uiText={currentUiText}
       />
 
       <ResultPanel
@@ -193,11 +172,10 @@ function App() {
         loading={loading}
         showRaw={showRaw}
         onToggleRaw={handleToggleRaw}
-        uiText={uiText[uiLang]}
+        uiText={currentUiText}
         WordCard={WordCard}
         GrammarCard={GrammarCard}
         onWordClick={handleWordClick}
-        // ★ 新增：歷史導航相關 props
         canPrev={canGoPrev}
         canNext={canGoNext}
         onPrev={handlePrevResult}
