@@ -4,7 +4,10 @@ const cors = require('cors');
 const path = require('path');
 
 const analyzeRoute = require('./routes/analyzeRoute');
-const dictionaryRoute = require('./routes/dictionaryRoute'); // ★ 新增
+const ttsRoute = require("./routes/ttsRoute");
+const dictionaryRoute = require('./routes/dictionaryRoute'); // ★ 例句 API
+const authTestRoute = require("./routes/authTestRoute");      // ★ /api/auth-test
+const adminUsageRoute = require('./routes/adminUsageRoute');  // ★ 新增：用量管理 API
 
 const { errorMiddleware } = require('./utils/errorHandler');
 const { logger } = require('./utils/logger');
@@ -21,7 +24,12 @@ app.use(express.static(publicPath));
 
 // Routes
 app.use('/api/analyze', analyzeRoute);
-app.use('/api/dictionary', dictionaryRoute); // ★ 新增：例句 API 進這裡
+app.use('/api/tts', ttsRoute);
+app.use('/api/dictionary', dictionaryRoute); // ★ 例句 API
+app.use('/api', authTestRoute);              // ★ /api/auth-test
+
+// Admin / 用量檢視
+app.use('/admin', adminUsageRoute);
 
 // Error handler
 app.use(errorMiddleware);

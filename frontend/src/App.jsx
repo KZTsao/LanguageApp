@@ -2,27 +2,28 @@
 // App 只管狀態與邏輯，畫面交給 LayoutShell / SearchBox / ResultPanel
 
 import { useState, useEffect } from "react";
-import { uiText } from "./uiText";
-import WordCard from "./components/WordCard";
-import GrammarCard from "./components/GrammarCard";
-import LayoutShell from "./components/LayoutShell";
-import SearchBox from "./components/SearchBox";
-import ResultPanel from "./components/ResultPanel";
+import uiText from "./uiText";
+import WordCard from "./components/word/WordCard";
+import GrammarCard from "./components/grammar/GrammarCard";
+import LayoutShell from "./components/layout/LayoutShell";
+import SearchBox from "./components/search/SearchBox";
+import ResultPanel from "./components/result/ResultPanel";
+import { AuthProvider } from "./context/AuthProvider"; // ⬅️ 新增
 
 function App() {
   const [text, setText] = useState("");
   const [result, setResult] = useState(null);
   const [uiLang, setUiLang] = useState("zh-TW");
   const [loading, setLoading] = useState(false);
-  
+
   const API_BASE =
-  window.location.hostname === "localhost" ||
-  window.location.hostname === "127.0.0.1"
-    ? "http://localhost:4000"
-    : "https://languageapp-8j45.onrender.com";
+    window.location.hostname === "localhost" ||
+    window.location.hostname === "127.0.0.1"
+      ? "http://localhost:4000"
+      : "https://languageapp-8j45.onrender.com";
 
   const [showRaw, setShowRaw] = useState(false);
-  console.log("🔥 API_BASE in production is:", API_BASE);
+
   // 深淺色主題
   const [theme, setTheme] = useState(() => {
     const stored = window.localStorage.getItem("appTheme");
@@ -94,6 +95,7 @@ function App() {
         return next;
       });
 
+      // 更新 historyIndex（指到最後一筆）
       setHistoryIndex((prev) => {
         const afterUpdateLength =
           historyIndex >= 0 && historyIndex < history.length - 1
@@ -152,39 +154,44 @@ function App() {
     uiText[uiLang] || uiText["zh-TW"] || Object.values(uiText)[0] || {};
 
   return (
-    <LayoutShell
-      theme={theme}
-      onToggleTheme={() =>
-        setTheme((prev) => (prev === "dark" ? "light" : "dark"))
-      }
-    >
-      <SearchBox
-        text={text}
-        onTextChange={handleTextChange}
-        onAnalyze={handleAnalyze}
-        loading={loading}
+    <AuthProvider>
+      <LayoutShell
+        theme={theme}
+        onToggleTheme={() =>
+          setTheme((prev) => (prev === "dark" ? "light" : "dark"))
+        }
         uiLang={uiLang}
-        onUiLangChange={setUiLang}
-        uiText={currentUiText}
-      />
+        onChangeUiLang={setUiLang}
+      >
+        <SearchBox
+          text={text}
+          onTextChange={handleTextChange}
+          onAnalyze={handleAnalyze}
+          loading={loading}
+          uiLang={uiLang}
+          onUiLangChange={setUiLang}
+          uiText={currentUiText}
+        />
 
-      <ResultPanel
-        result={result}
-        loading={loading}
-        showRaw={showRaw}
-        onToggleRaw={handleToggleRaw}
-        uiText={currentUiText}
-        WordCard={WordCard}
-        GrammarCard={GrammarCard}
-        onWordClick={handleWordClick}
-        canPrev={canGoPrev}
-        canNext={canGoNext}
-        onPrev={handlePrevResult}
-        onNext={handleNextResult}
-        historyIndex={historyIndex}
-        historyLength={history.length}
-      />
-    </LayoutShell>
+        <ResultPanel
+          result={result}
+          loading={loading}
+          showRaw={showRaw}
+          onToggleRaw={handleToggleRaw}
+          uiText={currentUiText}
+          uiLang={uiLang}
+          WordCard={WordCard}
+          GrammarCard={GrammarCard}
+          onWordClick={handleWordClick}
+          canPrev={canGoPrev}
+          canNext={canGoNext}
+          onPrev={handlePrevResult}
+          onNext={handleNextResult}
+          historyIndex={historyIndex}
+          historyLength={history.length}
+        />
+      </LayoutShell>
+    </AuthProvider>
   );
 }
 

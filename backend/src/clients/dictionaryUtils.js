@@ -1,5 +1,3 @@
-// backend/src/clients/dictionaryUtils.js
-
 /**
  * Groq 出錯或無法解析時的安全預設值
  */
@@ -12,6 +10,40 @@ function fallback(word) {
     gender: '',
     plural: '',
     baseForm: w,
+
+    // 動詞相關欄位（預設為空）
+    verbSubtype: '',
+    separable: false,
+    reflexive: false,
+    auxiliary: '',
+    conjugation: {
+      praesens: {
+        ich: '',
+        du: '',
+        er_sie_es: '',
+        wir: '',
+        ihr: '',
+        sie_Sie: '',
+      },
+      praeteritum: {
+        ich: '',
+        du: '',
+        er_sie_es: '',
+        wir: '',
+        ihr: '',
+        sie_Sie: '',
+      },
+      perfekt: {
+        ich: '',
+        du: '',
+        er_sie_es: '',
+        wir: '',
+        ihr: '',
+        sie_Sie: '',
+      },
+    },
+    valenz: [],
+
     definition_de: '',
     definition_de_translation: '',
     definition: 'AI 暫時沒有提供定義（fallback）。',
@@ -101,18 +133,29 @@ function normalizeGender(raw) {
 }
 
 /**
+ * 🔧 根據 baseForm 推斷是否為可分動詞（模型保險用）
+ */
+function inferSeparableFromBaseForm(baseForm) {
+  if (!baseForm || typeof baseForm !== 'string') return false;
+
+  const prefixes = [
+    'ab', 'an', 'auf', 'aus', 'bei', 'ein',
+    'fest', 'fort', 'her', 'hin', 'los',
+    'mit', 'nach', 'vor', 'weg', 'weiter',
+    'zurück', 'zusammen'
+  ];
+
+  return prefixes.some((p) => baseForm.startsWith(p));
+}
+
+/**
  * 清洗／正規化 Groq 回傳的字典資料
- * - definition / definition_de / definition_de_translation 支援字串或陣列
- * - 修正詞性、性別
- * - 清 notes 裡面不確定的語氣
  */
 function normalizeDictionaryResult(parsed, word) {
   const safeWord = String(word || '').trim();
 
-  // definition: 允許字串或陣列
   let definitionField = parsed.definition;
   if (Array.isArray(definitionField)) {
-    // 保留陣列，交給前端決定是否條列顯示
     definitionField = definitionField.map((v) =>
       typeof v === 'string' ? v.trim() : ''
     );
@@ -122,7 +165,6 @@ function normalizeDictionaryResult(parsed, word) {
     definitionField = '';
   }
 
-  // definition_de
   const defDe = parsed.definition_de;
   let definitionDeField = defDe;
   if (Array.isArray(defDe)) {
@@ -135,7 +177,6 @@ function normalizeDictionaryResult(parsed, word) {
     definitionDeField = '';
   }
 
-  // definition_de_translation
   const defDeTrans = parsed.definition_de_translation;
   let definitionDeTransField = defDeTrans;
   if (Array.isArray(defDeTrans)) {
@@ -148,6 +189,64 @@ function normalizeDictionaryResult(parsed, word) {
     definitionDeTransField = '';
   }
 
+  const verbSubtype = parsed.verbSubtype || '';
+
+  let separable =
+    typeof parsed.separable === 'boolean' ? parsed.separable : false;
+
+  if (!separable && inferSeparableFromBaseForm(parsed.baseForm || safeWord)) {
+    separable = true;
+  }
+
+  const reflexive =
+    typeof parsed.reflexive === 'boolean' ? parsed.reflexive : false;
+
+  const auxiliary = parsed.auxiliary || '';
+
+  const defaultConjugation = {
+    praesens: {
+      ich: '',
+      du: '',
+      er_sie_es: '',
+      wir: '',
+      ihr: '',
+      sie_Sie: '',
+    },
+    praeteritum: {
+      ich: '',
+      du: '',
+      er_sie_es: '',
+      wir: '',
+      ihr: '',
+      sie_Sie: '',
+    },
+    perfekt: {
+      ich: '',
+      du: '',
+      er_sie_es: '',
+      wir: '',
+      ihr: '',
+      sie_Sie: '',
+    },
+  };
+
+  const conjugation =
+    parsed.conjugation && typeof parsed.conjugation === 'object'
+      ? parsed.conjugation
+      : defaultConjugation;
+
+  // ✅ 關鍵修正：清掉空 valenz placeholder
+  let valenz = [];
+  if (Array.isArray(parsed.valenz)) {
+    valenz = parsed.valenz.filter((v) => {
+      if (!v || typeof v !== 'object') return false;
+      const hasPrep = v.prep != null && String(v.prep).trim() !== '';
+      const hasKasus = v.kasus && String(v.kasus).trim() !== '';
+      const hasNote = v.note && String(v.note).trim() !== '';
+      return hasPrep || hasKasus || hasNote;
+    });
+  }
+
   const result = {
     word: parsed.word || safeWord,
     language: parsed.language || 'de',
@@ -155,6 +254,14 @@ function normalizeDictionaryResult(parsed, word) {
     gender: parsed.gender || '',
     plural: parsed.plural || '',
     baseForm: parsed.baseForm || safeWord,
+
+    verbSubtype,
+    separable,
+    reflexive,
+    auxiliary,
+    conjugation,
+    valenz,
+
     definition_de: definitionDeField || '',
     definition_de_translation: definitionDeTransField || '',
     definition: definitionField || '',
@@ -172,12 +279,9 @@ function normalizeDictionaryResult(parsed, word) {
     notes: parsed.notes || '',
   };
 
-  // 限制 gender 為 der/die/das
   const g = normalizeGender(result.gender);
   result.gender = g;
 
-  // 清洗 notes：移除「可能、大概、也許」等等不確定語氣，
-  // 並且避免和 gender 互相矛盾的描述
   if (result.notes && typeof result.notes === 'string') {
     let notes = result.notes;
     const unsurePattern =
@@ -185,23 +289,6 @@ function normalizeDictionaryResult(parsed, word) {
     if (unsurePattern.test(notes)) {
       notes = '';
     }
-
-    if (notes && result.gender) {
-      const containsNeuter = /(中性|neutrum|neuter)/i.test(notes);
-      const containsFeminine = /(陰性|阴性|feminin)/i.test(notes);
-      const containsMasculine = /(陽性|阳性|maskulin)/i.test(notes);
-
-      if (result.gender === 'die' && (containsNeuter || containsMasculine)) {
-        notes = '';
-      }
-      if (result.gender === 'der' && (containsNeuter || containsFeminine)) {
-        notes = '';
-      }
-      if (result.gender === 'das' && (containsFeminine || containsMasculine)) {
-        notes = '';
-      }
-    }
-
     result.notes = notes || '';
   }
 

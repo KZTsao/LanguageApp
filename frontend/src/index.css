@@ -19,41 +19,47 @@ body {
 }
 
 /* ==========================
-   Light Theme（參考照片暖黃系＋略微變暗）
+   Light Theme（暖奶油底・最柔）
    ========================== */
 .theme-light {
-  /* 整體背景略暗一階，偏灰藍 */
-  --page-bg: #e7ecf3;
-  --text-main: #111827;
-  --text-muted: #6b7280;
+  --page-bg: #f5efe7;
 
-  /* 卡片與輸入框微暖白 */
-  --card-bg: #fdfbf7;
-  --card-subtle-bg: #f3f4f7;
-  --input-bg: #f3f4f7;
+  --text-main: #2c2c2c;
+  --text-muted: #6b6b6b;
 
-  --border-subtle: #d4d7e2;
-  --border-strong: #b7c1dd;
+  --card-bg: #ffffff;
+  --card-subtle-bg: #faf6f0;
+  --input-bg: #faf6f0;
 
-  /* 主題色：取一棟黃色房子當 accent */
-  --accent: #f4a62a; /* 溫暖黃橘 */
-  --accent-soft: rgba(244, 166, 42, 0.16);
+  --border-subtle: #e6ddd4;
+  --border-strong: #d2c8bc;
 
-  /* 小 chip 背景略帶奶油黃 */
-  --chip-bg: #fff7e6;
-  --chip-border: #f4c46c;
+  --accent: #e7a23a;
+  --accent-soft: rgba(231, 162, 58, 0.16);
+
+  --chip-bg: #fff6e8;
+  --chip-border: #e7b86a;
 
   --button-text: #ffffff;
-  --code-bg: #eef0f6;
+  --code-bg: #f3efe9;
 
-  /* 冠詞顏色：從照片挑的幾個色系 */
-  --article-der: #2563eb;  /* 藍屋頂／窗框 */
-  --article-die: #c2410c;  /* 磚紅窗框 */
-  --article-das: #15803d;  /* 綠色外牆 */
-  --article-plural: #b45309; /* 深橘複數 */
+  --article-der: #6BA7FF;
+  --article-die: #FF6F91;
+  --article-das: #4ede70;
+  --article-plural: #FFB873;
 
-  /* 文字黑細框，避免亮底時模糊 */
   --text-outline: 0 0 1px rgba(0, 0, 0, 0.35);
+
+  --icon-sound: var(--accent);
+
+  --button-ghost-bg: #ffffff;
+  --button-ghost-fg: var(--text-main);
+  --button-ghost-border: var(--border-subtle);
+
+  --text-color: var(--text-main);
+
+  /* ⭐ 新增：亮版箭頭顏色 */
+  --conversation-arrow-color: #333333;
 }
 
 /* ==========================
@@ -85,8 +91,18 @@ body {
   --article-das: #6ee7b7;
   --article-plural: #fdba74;
 
-  /* 深色也保留一點細框，讓字更銳利 */
   --text-outline: 0 0 1px rgba(0, 0, 0, 0.8);
+
+  --icon-sound: #ffffff;
+
+  --button-ghost-bg: rgba(15, 23, 42, 0.9);
+  --button-ghost-fg: #e5e7eb;
+  --button-ghost-border: #4b5563;
+
+  --text-color: var(--text-main);
+
+  /* ⭐ 新增：暗版箭頭顏色（純白） */
+  --conversation-arrow-color: #ffffff;
 }
 
 a {
@@ -112,17 +128,14 @@ select {
    Example refresh icon styles
    ========================== */
 
-/* 亮版：用 accent 橘色 */
 .theme-light .example-refresh-button {
   color: var(--accent);
 }
 
-/* 暗版：強制純白箭頭（不吃藍色 accent） */
 .theme-dark .example-refresh-button {
   color: #ffffff !important;
 }
 
-/* hover 微動畫 */
 .example-refresh-button {
   transition: transform 0.15s ease, opacity 0.15s ease;
 }
@@ -136,4 +149,72 @@ select {
   width: 16px;
   height: 16px;
   display: block;
+}
+
+/* ==========================
+   共用 icon 按鈕（發音／刷新／上一頁下一頁）
+   ========================== */
+
+.icon-button {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.sound-icon {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+
+.theme-light .example-sound-button {
+  color: var(--icon-sound);
+}
+
+.theme-dark .example-sound-button {
+  color: var(--icon-sound) !important;
+}
+
+.theme-light .sound-button {
+  color: var(--icon-sound);
+}
+
+.theme-dark .sound-button {
+  color: var(--icon-sound) !important;
+}
+
+/* ==========================
+   History nav buttons
+   ========================== */
+
+.history-nav-button {
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle);
+  background: transparent;
+  padding: 4px 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  min-width: 28px;
+  min-height: 28px;
+}
+
+.history-nav-button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.theme-light .history-nav-button {
+  color: var(--accent);
+}
+
+.theme-dark .history-nav-button {
+  color: #ffffff;
+  border-color: #4b5563;
+  background: rgba(15, 23, 42, 0.7);
 }

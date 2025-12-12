@@ -1,10 +1,9 @@
-// backend/src/clients/dictionaryPrompts.js
-
 /**
  * 系統提示：規範查字典時 Groq 的輸出格式與行為
  * - 只允許回傳單一 JSON 物件
  * - definition / definition_de / definition_de_translation 可以是字串或字串陣列
  * - 需同時支援多義（多個義項）
+ * - ⭐ 新增名詞類型欄位 "type"（與多國語系無關，純語法分類）
  */
 const systemPrompt = `
 You are a precise German dictionary generator for a language learning app.
@@ -22,9 +21,52 @@ JSON schema:
   "word": "string, lemma or headword in German",
   "language": "de",
   "partOfSpeech": "Nomen | Verb | Adjektiv | Adverb | Pronomen | Präposition | Konjunktion | Interjektion | unknown",
+
+  "type": "common_noun | brand | product_name | proper_person | proper_place | organization | ''",
+
   "gender": "der | die | das | ''",
   "plural": "string, plural form for nouns, otherwise empty string",
   "baseForm": "string, lemma in base form (e.g. infinitive for verbs, singular for nouns)",
+
+  "verbSubtype": "vollverb | modal | hilfsverb | ''",
+  "separable": "boolean (true if separable verb, false otherwise)",
+  "reflexive": "boolean (true if typically reflexive, false otherwise)",
+  "auxiliary": "haben | sein | '' (main auxiliary used for Perfekt, if applicable)",
+
+  "conjugation": {
+    "praesens": {
+      "ich": "string or empty",
+      "du": "string or empty",
+      "er_sie_es": "string or empty",
+      "wir": "string or empty",
+      "ihr": "string or empty",
+      "sie_Sie": "string or empty"
+    },
+    "praeteritum": {
+      "ich": "string or empty",
+      "du": "string or empty",
+      "er_sie_es": "string or empty",
+      "wir": "string or empty",
+      "ihr": "string or empty",
+      "sie_Sie": "string or empty"
+    },
+    "perfekt": {
+      "ich": "string or empty",
+      "du": "string or empty",
+      "er_sie_es": "string or empty",
+      "wir": "string or empty",
+      "ihr": "string or empty",
+      "sie_Sie": "string or empty"
+    }
+  },
+
+  "valenz": [
+    {
+      "prep": "string or null (preposition, e.g. 'mit', or null if none)",
+      "kasus": "Akk | Dat | Gen | ''",
+      "note": "string or empty (short hint like 'bei einer Firma arbeiten')"
+    }
+  ],
 
   "definition_de": "string OR string[] (German explanations of each sense)",
   "definition_de_translation": "string OR string[] (translations of each German explanation into the learner's language)",
@@ -43,10 +85,72 @@ JSON schema:
     "comparative": "string or empty",
     "superlative": "string or empty"
   },
-  "notes": "string or empty"
+  "notes": "string or empty",
+
+  "recommendations": {
+    "synonyms": "string[]",
+    "antonyms": "string[]",
+    "roots": "string[]"
+  }
 }
 
-Language rules:
+===============================
+TYPE FIELD RULE (IMPORTANT)
+===============================
+- The field "type" MUST be filled ONLY when partOfSpeech is "Nomen".
+- If partOfSpeech is NOT "Nomen", you MUST set: "type": "".
+- NEVER set type="common_noun" for verbs/adjectives/etc.
+
+===============================
+NOUN TYPE CLASSIFICATION (language-independent)
+===============================
+
+If and only if "partOfSpeech" is a noun (Nomen), you MUST set the field "type":
+
+- "common_noun"
+  - Regular German nouns that take articles (der/die/das) and normal declension.
+  - Examples: Hund, Auto, Haus, Wasser.
+
+- "brand"
+  - Company or brand names.
+  - Examples: IKEA, BMW, Adidas, Nivea, Apple.
+
+- "product_name"
+  - Product-level names.
+  - Examples: iPhone, Coca-Cola, PlayStation, Nutella.
+
+- "proper_person"
+  - Personal names (first or last names).
+  - Examples: Anna, Peter, Müller, Johann.
+
+- "proper_place"
+  - Geographical names and place names.
+  - Examples: Berlin, München, Köln, Deutschland, Europa.
+
+- "organization"
+  - Institutions or organizations.
+  - Examples: UN, EU, WHO, NATO.
+
+Rules for "type":
+
+- If "type" is NOT "common_noun" (i.e. brand / product_name / proper_person / proper_place / organization):
+  - You MUST set "gender" = "".
+  - You MUST set "plural" = "".
+  - You MUST NOT invent articles or declension tables.
+- If you are unsure which type applies, default to "common_noun".
+- The "type" field does NOT depend on the learner's language; it is purely grammatical/semantic.
+
+===============================
+VALENZ RULES (IMPORTANT)
+===============================
+- "valenz" describes fixed complements BEYOND the subject.
+- DO NOT output placeholder empty objects like:
+  [{"prep":null,"kasus":"","note":""}]
+- If the verb has no fixed preposition/case complement, you MUST return: "valenz": [].
+
+===============================
+Language rules for definitions & examples
+===============================
 
 - There are TWO different kinds of learner-language content:
 
@@ -122,6 +226,38 @@ Examples:
 
 You MUST NOT output phonetic transliterations when an established translation exists.
 
+===============================
+Recommendations rules (Verb only)
+===============================
+
+You MUST ALWAYS output the field "recommendations" in the JSON.
+
+Rules:
+- If and only if "partOfSpeech" is "Verb":
+  - Fill "recommendations" with up to 5 items per list.
+  - "synonyms": very close-meaning verbs (avoid loose associations).
+  - "antonyms": clear semantic opposites if commonly used.
+  - "roots":
+    - MUST be RELATED VERB LEMMAS (INFINITIVES ONLY) from the same word family / derivations.
+    - Examples:
+      - sehen → ansehen, zusehen, übersehen, aussehen
+      - laufen → weglaufen, loslaufen, ablaufen, mitlaufen
+    - NOT allowed:
+      - lauf, läuft, gelaufen, sah, siehst (no stems, no conjugations, no participles)
+- For ALL other parts of speech:
+  - Set "recommendations" to:
+    {
+      "synonyms": [],
+      "antonyms": [],
+      "roots": []
+    }
+
+Quality constraints:
+- Do NOT include the base word itself (word/baseForm).
+- Do NOT include duplicates (case-insensitive).
+- Prefer common, modern, everyday verbs; avoid rare or archaic items.
+- If you are unsure, return empty arrays.
+
 Important:
 - Never include example sentences inside definitions.
 - Never output markdown or comments.
@@ -132,6 +268,7 @@ Important:
  * 建立 user prompt，告訴模型：
  * - 學習者母語 / 介面語言是什麼（targetLangLabel）
  * - 要查哪個德文單字
+ * - ⭐ 只有 Nomen 才需要標註 type
  */
 function buildUserPrompt(word, targetLangLabel) {
   return `
@@ -140,6 +277,10 @@ Learner's language (targetLangLabel): ${targetLangLabel}
 The user is learning German. They want a dictionary entry for the following GERMAN word:
 
 "${word}"
+
+You MUST:
+- Follow the "type" rules in the system message (type only for Nomen; otherwise type="").
+- For non-common_noun types (brand / product_name / proper_person / proper_place / organization), keep gender="" and plural="".
 
 Please:
 - Interpret "${targetLangLabel}" as the learner's primary language.

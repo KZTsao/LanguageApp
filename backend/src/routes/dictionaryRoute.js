@@ -3,12 +3,19 @@
 const express = require("express");
 const router = express.Router();
 
-const { lookupWord, generateExamples } = require("../clients/dictionaryClient");
+const {
+  lookupWord,
+  generateExamples,
+  generateConversation,
+} = require("../clients/dictionaryClient");
 
-/**
- * 例句刷新 API
- * POST /api/dictionary/examples
- */
+const { logUsage } = require("../utils/usageLogger");
+
+// =========================
+// 例句刷新 API
+// POST /api/dictionary/examples
+// =========================
+
 router.post("/examples", async (req, res) => {
   const startedAt = Date.now();
   try {
@@ -20,17 +27,24 @@ router.post("/examples", async (req, res) => {
       senseIndex,
       explainLang,
 
-      // 單義版舊欄位（原本就有的）
       definitionDe,
       definition,
 
-      // ★ 新增：優先吃前端傳來的多義清單（如果有的話）
       definitionDeList: bodyDefinitionDeList,
       definitionLangList: bodyDefinitionLangList,
 
       options,
-      _ts, // 前端丟來的時間戳，當作「隨機標記」
+      _ts,
     } = req.body;
+
+    // ★ 記錄用量（依字元數粗估 Token）
+    const textForCount = (word || baseForm || "").toString();
+    logUsage({
+      endpoint: "/api/dictionary/examples",
+      charCount: textForCount.length,
+      kind: "llm",
+      ip: req.ip,
+    });
 
     console.log("[dictionaryRoute] /examples START", {
       word,
@@ -43,10 +57,7 @@ router.post("/examples", async (req, res) => {
       _ts,
     });
 
-    // ★ 正規化成陣列：
-    // 1. 若前端有直接傳 definitionDeList / definitionLangList 且非空陣列 → 優先用它
-    // 2. 否則退回舊邏輯：用 definitionDe / definition 包成單一元素陣列
-
+    // ======== 正規化成陣列 ========
     const definitionDeList =
       Array.isArray(bodyDefinitionDeList) && bodyDefinitionDeList.length > 0
         ? bodyDefinitionDeList
@@ -76,15 +87,14 @@ router.post("/examples", async (req, res) => {
       options,
       definitionDeList,
       definitionLangList,
-      _ts, // 傳給 LLM，用來打破完全相同的 prompt
+      _ts,
     });
 
     if (process.env.DEBUG_DICTIONARY === "1") {
-      console.log("[dictionaryRoute] /examples rawResult =", rawResult);
+      console.log("[/examples raw]", rawResult);
     }
-    
 
-    // 把結果整理成前端好吃的格式：
+    // ======== 清洗回傳 ========
     const cleaned = {
       word: rawResult.word || word || "",
       baseForm: rawResult.baseForm || baseForm || "",
@@ -99,7 +109,6 @@ router.post("/examples", async (req, res) => {
       exampleTranslation: "",
     };
 
-    // 只保留第一句例句
     const rawExamples = Array.isArray(rawResult.examples)
       ? rawResult.examples
       : [];
@@ -113,7 +122,6 @@ router.post("/examples", async (req, res) => {
       cleaned.examples = [firstExample];
     }
 
-    // 翻譯（如果有）
     if (
       typeof rawResult.exampleTranslation === "string" &&
       rawResult.exampleTranslation.trim().length > 0
@@ -121,10 +129,8 @@ router.post("/examples", async (req, res) => {
       cleaned.exampleTranslation = rawResult.exampleTranslation.trim();
     }
 
-    // 如果真的完全沒生成句子，給一個 placeholder，方便 debug
     if (cleaned.examples.length === 0) {
-      const fallback = `(No example generated - ${Date.now()})`;
-      cleaned.examples = [fallback];
+      cleaned.examples = [`(No example generated - ${Date.now()})`];
       cleaned.exampleTranslation = "";
     }
 
@@ -134,6 +140,51 @@ router.post("/examples", async (req, res) => {
   } catch (err) {
     console.error("[dictionaryRoute] /examples error:", err);
     res.status(500).json({ error: "example_generation_failed" });
+  }
+});
+
+// =========================
+// 連續對話 API
+// POST /api/dictionary/conversation
+// =========================
+
+router.post("/conversation", async (req, res) => {
+  try {
+    const { sentence, explainLang } = req.body || {};
+
+    console.log("[dictionaryRoute] /conversation START", {
+      sentence,
+      explainLang,
+    });
+
+    if (!sentence || typeof sentence !== "string") {
+      return res.status(400).json({ error: "sentence is required" });
+    }
+
+    // ★ 記錄用量
+    logUsage({
+      endpoint: "/api/dictionary/conversation",
+      charCount: sentence.length,
+      kind: "llm",
+      ip: req.ip,
+    });
+
+    const turns = await generateConversation({
+      sentence,
+      explainLang,
+    });
+
+    console.log(
+      "[dictionaryRoute] /conversation DONE, turns.length =",
+      Array.isArray(turns) ? turns.length : 0
+    );
+
+    return res.json({ turns: Array.isArray(turns) ? turns : [] });
+  } catch (err) {
+    console.error("[dictionaryRoute] /conversation error:", err);
+    return res
+      .status(500)
+      .json({ error: "conversation_generation_failed" });
   }
 });
 

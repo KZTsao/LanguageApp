@@ -79,6 +79,25 @@ async function lookupWord(rawWord, explainLang = 'zh-TW') {
       normalized.example = parsed.example;
     }
 
+    // ★ 補回 normalize 可能忽略的欄位（保持向下相容）
+    if (parsed.type && !normalized.type) {
+      normalized.type = parsed.type;
+    }
+
+    if (parsed.recommendations && !normalized.recommendations) {
+      normalized.recommendations = {
+        synonyms: Array.isArray(parsed.recommendations.synonyms)
+          ? parsed.recommendations.synonyms
+          : [],
+        antonyms: Array.isArray(parsed.recommendations.antonyms)
+          ? parsed.recommendations.antonyms
+          : [],
+        roots: Array.isArray(parsed.recommendations.roots)
+          ? parsed.recommendations.roots
+          : [],
+      };
+    }
+
     return normalized;
   } catch (err) {
     // 這裡同時處理一般錯誤與 Groq rate limit
