@@ -1,7 +1,7 @@
 // backend/src/routes/dictionaryRoute.js
-
 const express = require("express");
 const router = express.Router();
+const jwt = require("jsonwebtoken");
 
 const {
   lookupWord,
@@ -10,6 +10,49 @@ const {
 } = require("../clients/dictionaryClient");
 
 const { logUsage } = require("../utils/usageLogger");
+
+// =========================
+// 共用：嘗試解析登入使用者（不強制）
+// verify → decode fallback（只用於用量歸戶）
+// =========================
+function tryGetAuthUser(req) {
+  const authHeader =
+    req.headers["authorization"] || req.headers["Authorization"];
+  if (!authHeader || !authHeader.startsWith("Bearer ")) return null;
+
+  const token = authHeader.slice("Bearer ".length).trim();
+  if (!token) return null;
+
+  // ① 優先 verify（若環境變數存在）
+  if (process.env.SUPABASE_JWT_SECRET) {
+    try {
+      const decoded = jwt.verify(token, process.env.SUPABASE_JWT_SECRET);
+      return {
+        id: decoded.sub || "",
+        email: decoded.email || "",
+        source: "verify",
+      };
+    } catch (e) {
+      console.warn(
+        "[dictionaryRoute] jwt.verify failed, fallback to decode"
+      );
+    }
+  }
+
+  // ② fallback：decode（不驗證，只做用量歸戶）
+  try {
+    const decoded = jwt.decode(token);
+    if (!decoded) return null;
+
+    return {
+      id: decoded.sub || "",
+      email: decoded.email || "",
+      source: "decode",
+    };
+  } catch {
+    return null;
+  }
+}
 
 // =========================
 // 例句刷新 API
@@ -37,6 +80,8 @@ router.post("/examples", async (req, res) => {
       _ts,
     } = req.body;
 
+    const authUser = tryGetAuthUser(req);
+
     // ★ 記錄用量（依字元數粗估 Token）
     const textForCount = (word || baseForm || "").toString();
     logUsage({
@@ -44,6 +89,8 @@ router.post("/examples", async (req, res) => {
       charCount: textForCount.length,
       kind: "llm",
       ip: req.ip,
+      userId: authUser?.id || "",
+      email: authUser?.email || "",
     });
 
     console.log("[dictionaryRoute] /examples START", {
@@ -114,9 +161,8 @@ router.post("/examples", async (req, res) => {
       : [];
 
     const firstExample =
-      rawExamples.find(
-        (s) => typeof s === "string" && s.trim().length > 0
-      ) || "";
+      rawExamples.find((s) => typeof s === "string" && s.trim().length > 0) ||
+      "";
 
     if (firstExample) {
       cleaned.examples = [firstExample];
@@ -161,12 +207,17 @@ router.post("/conversation", async (req, res) => {
       return res.status(400).json({ error: "sentence is required" });
     }
 
+    // ✅【新增】解析使用者（僅用於用量歸戶）
+    const authUser = tryGetAuthUser(req);
+
     // ★ 記錄用量
     logUsage({
       endpoint: "/api/dictionary/conversation",
       charCount: sentence.length,
       kind: "llm",
       ip: req.ip,
+      userId: authUser?.id || "",
+      email: authUser?.email || "",
     });
 
     const turns = await generateConversation({
@@ -189,3 +240,4 @@ router.post("/conversation", async (req, res) => {
 });
 
 module.exports = router;
+// backend/src/routes/dictionaryRoute.js

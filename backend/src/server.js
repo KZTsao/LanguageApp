@@ -1,3 +1,5 @@
+// backend/src/server.js
+
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
@@ -8,6 +10,7 @@ const ttsRoute = require("./routes/ttsRoute");
 const dictionaryRoute = require('./routes/dictionaryRoute'); // ★ 例句 API
 const authTestRoute = require("./routes/authTestRoute");      // ★ /api/auth-test
 const adminUsageRoute = require('./routes/adminUsageRoute');  // ★ 新增：用量管理 API
+const usageMeRoute = require("./routes/usageMeRoute");        // ★ 新增：/api/usage/me
 
 const { errorMiddleware } = require('./utils/errorHandler');
 const { logger } = require('./utils/logger');
@@ -28,6 +31,9 @@ app.use('/api/tts', ttsRoute);
 app.use('/api/dictionary', dictionaryRoute); // ★ 例句 API
 app.use('/api', authTestRoute);              // ★ /api/auth-test
 
+// Usage（登入使用者自己的用量）
+app.use("/api/usage", usageMeRoute);
+
 // Admin / 用量檢視
 app.use('/admin', adminUsageRoute);
 
@@ -37,3 +43,5 @@ app.use(errorMiddleware);
 app.listen(PORT, () => {
   logger.info(`LanguageApp backend running on http://localhost:${PORT}`);
 });
+
+// backend/src/server.js

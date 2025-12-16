@@ -100,6 +100,77 @@ function detectTypeAuto(word, partOfSpeech) {
 }
 
 /**
+ * ✅ 從 definition_de 推回可能的原型（避免寫死 kann→können）
+ * - 只在「Verb」且 parsed.baseForm 缺失/不可信時使用
+ * - 優先抓出最像德文不定詞的 token（können / müssen / dürfen / sein / haben / werden...）
+ */
+function inferVerbBaseFormFromDefinitionDe(definitionDeField) {
+  // 把 definition_de 統一成單一字串
+  let raw = "";
+  if (Array.isArray(definitionDeField)) raw = definitionDeField.join(" ; ");
+  else if (typeof definitionDeField === "string") raw = definitionDeField;
+  raw = String(raw || "").trim();
+  if (!raw) return "";
+
+  // 以常見分隔符切開：逗號、分號、斜線、頓號等
+  const parts = raw
+    .split(/[，,；;/、]+/)
+    .map((s) => String(s || "").trim())
+    .filter(Boolean);
+
+  // 抽出第一個「看起來像德文不定詞」的候選
+  // 規則：全小寫字母(含變音符) + (en|n) 結尾，或是常見不定詞例外（sein/tun）
+  for (const p of parts) {
+    // 可能是片語：例如 "fähig sein" -> 抓最後一個字 "sein"
+    const words = p
+      .split(/\s+/)
+      .map((w) => w.replace(/[()«»„“”"'`.,!?]/g, "").trim())
+      .filter(Boolean);
+
+    if (words.length === 0) continue;
+
+    // 先試最後一個（處理 "fähig sein"）
+    const tail = words[words.length - 1] || "";
+    const head = words[0] || "";
+
+    const candidates = [tail, head]; // tail 優先，head 當 fallback
+
+    for (const c of candidates) {
+      const w = String(c || "").trim();
+      if (!w) continue;
+
+      // 必須含德文字母
+      if (!/[a-zäöüß]/.test(w)) continue;
+
+      const lower = w.toLowerCase();
+
+      const looksLikeInfinitive =
+        /[a-zäöüß]+(en|n)$/.test(lower) || ["sein", "tun"].includes(lower);
+
+      if (looksLikeInfinitive) return lower;
+    }
+  }
+
+  return "";
+}
+
+/**
+ * ✅ 判斷目前 baseForm 是否「不可信」
+ * - 常見情況：模型沒給 baseForm -> 用 safeWord 回填，導致 baseForm = "kann"
+ * - 我們只在 Verb 的情境下做輕量判斷
+ */
+function isUnreliableVerbBaseForm(baseForm, safeWord) {
+  const b = String(baseForm || "").trim();
+  const s = String(safeWord || "").trim();
+  if (!b || !s) return true;
+
+  // baseForm 直接等於輸入詞，通常就是回填造成（尤其在 Verb 變位）
+  if (b.toLowerCase() === s.toLowerCase()) return true;
+
+  return false;
+}
+
+/**
  * 清洗與補強模型輸出的 JSON，確保前端拿到穩定結構
  * - definition / definition_de / definition_de_translation 都可能是「字串或陣列」
  * - 這裡只做基本 trim ＋安全檢查＋ type 處理
@@ -162,6 +233,13 @@ function normalizeDictionaryResult(parsed, word) {
     type = detectTypeAuto(parsed.word || safeWord, partOfSpeech);
   }
 
+  // ✅ baseForm 補強：只在 Verb 且缺失/不可信時，從 definition_de 推回
+  let baseForm = parsed.baseForm || safeWord;
+  if (partOfSpeech === "Verb" && isUnreliableVerbBaseForm(baseForm, safeWord)) {
+    const inferred = inferVerbBaseFormFromDefinitionDe(definitionDeField);
+    if (inferred) baseForm = inferred;
+  }
+
   const result = {
     word: parsed.word || safeWord,
     language: parsed.language || "de",
@@ -169,7 +247,7 @@ function normalizeDictionaryResult(parsed, word) {
     type, // ⭐ 已新增 type
     gender: parsed.gender || "",
     plural: parsed.plural || "",
-    baseForm: parsed.baseForm || safeWord,
+    baseForm,
     definition_de: definitionDeField || "",
     definition_de_translation: definitionDeTransField || "",
     definition: definitionField || "",
@@ -238,3 +316,5 @@ module.exports = {
   normalizePartOfSpeech,
   normalizeDictionaryResult,
 };
+
+// backend/src/core/dictionaryNormalizer.js

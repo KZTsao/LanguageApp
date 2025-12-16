@@ -6,20 +6,107 @@
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  
+  /* ==========================
+     Theme tokens (default = light)
+     ========================== */
+  --page-bg: #f5efe7;
+
+  --text-main: #2c2c2c;
+  --text-muted: #6b6b6b;
+
+  --card-bg: #ffffff;
+  --card-subtle-bg: #faf6f0;
+  --input-bg: #faf6f0;
+
+  --border-subtle: #e6ddd4;
+  --border-strong: #d2c8bc;
+
+  --accent: #e7a23a;
+  --accent-soft: rgba(231, 162, 58, 0.16);
+
+  --chip-bg: #fff6e8;
+  --chip-border: #e7b86a;
+
+  --button-text: #ffffff;
+  --code-bg: #f3efe9;
+
+  --article-der: #6BA7FF;
+  --article-die: #FF6F91;
+  --article-das: #4ede70;
+  --article-plural: #FFB873;
+
+  --text-outline: 0 0 1px rgba(0, 0, 0, 0.35);
+
+  --icon-sound: var(--accent);
+
+  --button-ghost-bg: #ffffff;
+  --button-ghost-fg: var(--text-main);
+  --button-ghost-border: var(--border-subtle);
+
+  --text-color: var(--text-main);
+
+  /* ⭐ 新增：亮版箭頭顏色 */
+  --conversation-arrow-color: #333333;
+}
+
+:root.dark {
+  --page-bg: #020617;
+  --text-main: #e5e7eb;
+  --text-muted: #9ca3af;
+
+  --card-bg: #020617;
+  --card-subtle-bg: #111827;
+  --input-bg: #111827;
+
+  --border-subtle: #4b5563;
+  --border-strong: #6b7280;
+
+  --accent: #60a5fa;
+  --accent-soft: rgba(56, 189, 248, 0.16);
+
+  --chip-bg: #111827;
+  --chip-border: #374151;
+
+  --button-text: #ffffff;
+  --code-bg: #020617;
+
+  --article-der: #93c5fd;
+  --article-die: #f9a8d4;
+  --article-das: #6ee7b7;
+  --article-plural: #fdba74;
+
+  --text-outline: 0 0 1px rgba(0, 0, 0, 0.8);
+
+  --icon-sound: #ffffff;
+
+  --button-ghost-bg: rgba(15, 23, 42, 0.9);
+  --button-ghost-fg: #e5e7eb;
+  --button-ghost-border: #4b5563;
+
+  --text-color: var(--text-main);
+
+  /* ⭐ 新增：暗版箭頭顏色（純白） */
+  --conversation-arrow-color: #ffffff;
 }
 
 body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
+  background: var(--page-bg);
+  color: var(--text-color);
 }
 
 .app-root {
   min-height: 100vh;
+  background: var(--page-bg);
+  color: var(--text-color);
 }
 
 /* ==========================
    Light Theme（暖奶油底・最柔）
+   （保留相容舊結構：theme-light）
    ========================== */
 .theme-light {
   --page-bg: #f5efe7;
@@ -64,6 +151,7 @@ body {
 
 /* ==========================
    Dark Theme
+   （保留相容舊結構：theme-dark）
    ========================== */
 .theme-dark {
   --page-bg: #020617;
@@ -128,11 +216,14 @@ select {
    Example refresh icon styles
    ========================== */
 
-.theme-light .example-refresh-button {
+.theme-light .example-refresh-button,
+:root:not(.dark) .example-refresh-button {
   color: var(--accent);
 }
 
-.theme-dark .example-refresh-button {
+.theme-dark .example-refresh-button,
+:root.dark .example-refresh-button,
+.dark .example-refresh-button {
   color: #ffffff !important;
 }
 
@@ -171,19 +262,25 @@ select {
   display: block;
 }
 
-.theme-light .example-sound-button {
+.theme-light .example-sound-button,
+:root:not(.dark) .example-sound-button {
   color: var(--icon-sound);
 }
 
-.theme-dark .example-sound-button {
+.theme-dark .example-sound-button,
+:root.dark .example-sound-button,
+.dark .example-sound-button {
   color: var(--icon-sound) !important;
 }
 
-.theme-light .sound-button {
+.theme-light .sound-button,
+:root:not(.dark) .sound-button {
   color: var(--icon-sound);
 }
 
-.theme-dark .sound-button {
+.theme-dark .sound-button,
+:root.dark .sound-button,
+.dark .sound-button {
   color: var(--icon-sound) !important;
 }
 
@@ -209,11 +306,14 @@ select {
   cursor: default;
 }
 
-.theme-light .history-nav-button {
+.theme-light .history-nav-button,
+:root:not(.dark) .history-nav-button {
   color: var(--accent);
 }
 
-.theme-dark .history-nav-button {
+.theme-dark .history-nav-button,
+:root.dark .history-nav-button,
+.dark .history-nav-button {
   color: #ffffff;
   border-color: #4b5563;
   background: rgba(15, 23, 42, 0.7);

@@ -3,14 +3,26 @@
 const { lookupWord } = require("./dictionaryLookup");
 const { generateExamples } = require("./dictionaryExamples");
 const groqClient = require("./groqClient");
+const { logLLMUsage } = require("../utils/usageLogger");
 
 /**
  * 連續對話產生器
  * - STEP 1：請 Groq 產生 4–6 句德文對話（每行一句，不要求 JSON）
  * - STEP 2：再請 Groq 產生對應母語翻譯（每行一句）
  * - 前端使用格式：Array<{ de: string, translation: string }>
+ *
+ * ✅ 本輪只新增：把 Groq 回傳的 usage 寫入 logLLMUsage（真實 tokens）
+ * ✅ 參數相容：新增 userId/email/requestId 不會影響既有呼叫
  */
-async function generateConversation({ sentence, explainLang }) {
+async function generateConversation({
+  sentence,
+  explainLang,
+
+  // ✅ 相容擴充：若 route 有傳就能做 user 切分；沒傳也不影響
+  userId = "",
+  email = "",
+  requestId = "",
+} = {}) {
   console.log("\n[conversation] generateConversation START", {
     sentence,
     explainLang,
@@ -88,6 +100,20 @@ async function generateConversation({ sentence, explainLang }) {
         },
       ],
     });
+
+    // ✅ 真實 tokens：STEP 1（德文對話）
+    if (completion && completion.usage) {
+      logLLMUsage({
+        endpoint: "/api/conversation/generate",
+        model,
+        provider: "groq",
+        usage: completion.usage,
+        kind: "llm",
+        userId,
+        email,
+        requestId,
+      });
+    }
 
     const raw = completion?.choices?.[0]?.message?.content || "";
     console.log("[conversation] RAW german response =", raw);
@@ -173,6 +199,20 @@ async function generateConversation({ sentence, explainLang }) {
         },
       ],
     });
+
+    // ✅ 真實 tokens：STEP 2（翻譯）
+    if (transCompletion && transCompletion.usage) {
+      logLLMUsage({
+        endpoint: "/api/conversation/translate",
+        model,
+        provider: "groq",
+        usage: transCompletion.usage,
+        kind: "llm",
+        userId,
+        email,
+        requestId,
+      });
+    }
 
     const rawTrans = transCompletion?.choices?.[0]?.message?.content || "";
     console.log("[conversation] RAW translation response =", rawTrans);

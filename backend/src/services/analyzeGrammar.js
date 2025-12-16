@@ -1,33 +1,30 @@
-const Groq = require('groq-sdk');
-
-const client = new Groq({
-  apiKey: process.env.GROQ_API_KEY,
-});
+// analyzeGrammar.js (FULL FILE REPLACE)
+const groqClient = require("../clients/groqClient");
 
 function mapExplainLang(explainLang) {
   switch (explainLang) {
-    case 'en':
-      return 'English';
-    case 'zh-CN':
-      return 'Simplified Chinese';
-    case 'ar':
-      return 'Arabic';
-    case 'zh-TW':
+    case "en":
+      return "English";
+    case "zh-CN":
+      return "Simplified Chinese";
+    case "ar":
+      return "Arabic";
+    case "zh-TW":
     default:
-      return 'Traditional Chinese';
+      return "Traditional Chinese";
   }
 }
 
 function fallbackGrammar() {
   return {
     isCorrect: true,
-    overallComment: '',
+    overallComment: "",
     errors: [],
   };
 }
 
-async function analyzeGrammar(text, explainLang = 'zh-TW') {
-  const t = String(text || '').trim();
+async function analyzeGrammar(text, explainLang = "zh-TW") {
+  const t = String(text || "").trim();
   if (!t) return fallbackGrammar();
 
   const targetLangLabel = mapExplainLang(explainLang);
@@ -59,11 +56,11 @@ async function analyzeGrammar(text, explainLang = 'zh-TW') {
 `;
 
   try {
-    const response = await client.chat.completions.create({
-      model: 'llama-3.3-70b-versatile',
-      messages: [{ role: 'user', content: prompt }],
+    const response = await groqClient.chat.completions.create({
+      model: "llama-3.3-70b-versatile",
+      messages: [{ role: "user", content: prompt }],
       temperature: 0.2,
-      response_format: { type: 'json_object' },
+      response_format: { type: "json_object" },
     });
 
     const content = response.choices[0]?.message?.content;
@@ -78,11 +75,11 @@ async function analyzeGrammar(text, explainLang = 'zh-TW') {
 
     return {
       isCorrect: Boolean(parsed.isCorrect),
-      overallComment: parsed.overallComment || '',
+      overallComment: parsed.overallComment || "",
       errors: Array.isArray(parsed.errors) ? parsed.errors : [],
     };
   } catch (err) {
-    console.error('[grammar] Groq error:', err.message);
+    console.error("[grammar] Groq error:", err.message);
     return fallbackGrammar();
   }
 }

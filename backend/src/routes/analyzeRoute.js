@@ -1,32 +1,71 @@
 const express = require('express');
 const router = express.Router();
 
+const jwt = require("jsonwebtoken");
+
 const { analyzeWord } = require('../services/analyzeWord');
-const { analyzeSentence } = require('../services/analyzeSentence'); // 先保留引用（未使用），之後句子模式開啟可直接用
+const { analyzeSentence } = require('../services/analyzeSentence'); // 先保留引用（未使用）
 const { AppError } = require('../utils/errorHandler');
 const { detectMode } = require('../core/languageRules');
-const { logUsage } = require('../utils/usageLogger'); // ★ 新增：用量記錄
+const { logUsage } = require('../utils/usageLogger');
 
-// 判斷是否「像句子」：先用標點做最保守的切分（符合你：句子之後用輸入匡模式才開）
-// 你之後要更嚴格也可以，但這版先最小可行。
+// 判斷是否「像句子」
 function looksLikeSentence(input) {
   const s = (input || '').trim();
   if (!s) return false;
-  // 任何句子常見標點都先視為句子（含德文常見用法）
   return /[.!?;:]/.test(s);
 }
 
-// 非句子查詢分類：word / phrase（先不硬分 idiom，先都走同一條查詢邏輯）
 function detectNonSentenceLookupMode(input) {
   const s = (input || '').trim();
   if (!s) return 'word';
 
-  // 如果 detectMode 已經能判 word，就尊重它（通常單字）
-  // 但保護：只要含空白，就視為 phrase（避免掉回 sentence）
   const hasSpace = /\s/.test(s);
-
   if (!hasSpace && detectMode(s) === 'word') return 'word';
   return 'phrase';
+}
+
+// 嘗試從 Authorization Bearer token 解析出 user（不強制登入）
+// 規則：
+// 1) 有 SUPABASE_JWT_SECRET → 先 verify
+// 2) verify 失敗或沒 secret → fallback 用 decode（只用來記錄用量）
+function tryGetAuthUser(req) {
+  const authHeader =
+    req.headers["authorization"] || req.headers["Authorization"];
+  if (!authHeader || !authHeader.startsWith("Bearer ")) return null;
+
+  const token = authHeader.slice("Bearer ".length).trim();
+  if (!token) return null;
+
+  // ① 優先嘗試 verify
+  if (process.env.SUPABASE_JWT_SECRET) {
+    try {
+      const decoded = jwt.verify(token, process.env.SUPABASE_JWT_SECRET);
+      return {
+        id: decoded.sub || "",
+        email: decoded.email || "",
+        source: "verify",
+      };
+    } catch (e) {
+      console.warn(
+        "[tryGetAuthUser] jwt.verify failed, fallback to decode"
+      );
+    }
+  }
+
+  // ② fallback：decode（不驗證，只做用量歸戶）
+  try {
+    const decoded = jwt.decode(token);
+    if (!decoded) return null;
+
+    return {
+      id: decoded.sub || "",
+      email: decoded.email || "",
+      source: "decode",
+    };
+  } catch {
+    return null;
+  }
 }
 
 router.post('/', async (req, res, next) => {
@@ -40,21 +79,22 @@ router.post('/', async (req, res, next) => {
     const trimmed = text.trim();
     if (!trimmed) return res.json({ error: 'empty_input' });
 
+    const authUser = tryGetAuthUser(req);
+
     // 記錄本次 /api/analyze 呼叫的粗略用量
     logUsage({
       endpoint: '/api/analyze',
       charCount: trimmed.length,
       kind: 'llm',
       ip: req.ip,
+      userId: authUser?.id || "",
+      email: authUser?.email || "",
     });
 
     const options = {
       explainLang: explainLang || 'zh-TW',
-      // 可選：之後你要在 analyzeWord 內部用這個做 prompt 分流
-      // queryMode: 'word' | 'phrase'
     };
 
-    // ✅ 先不支援句子：有句子標點就擋掉
     if (looksLikeSentence(trimmed)) {
       throw new AppError(
         '目前只支援「單字 / 片語 / 慣用語」（非句子）。若要分析句子，之後會在輸入匡加入「句子模式」選擇。',
@@ -63,13 +103,9 @@ router.post('/', async (req, res, next) => {
     }
 
     const lookupMode = detectNonSentenceLookupMode(trimmed);
-
-    // ✅ 非句子：全部走 analyzeWord（先把「多字片語」導回字典路徑）
-    // 你之後要把 idiom/phrase 做更精細的 prompt 分流，可在 analyzeWord 內使用 options.queryMode
     options.queryMode = lookupMode;
 
     const result = await analyzeWord(trimmed, options);
-
     res.json(result);
   } catch (err) {
     next(err);

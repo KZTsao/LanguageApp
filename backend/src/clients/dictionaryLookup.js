@@ -9,6 +9,93 @@ const {
 const { systemPrompt, buildUserPrompt } = require('./dictionaryPrompts');
 
 /**
+ * 依據已正規化的 conjugation 判斷「不規則」類型（B 方案：結構化）
+ * - strong: 強變化（Präteritum 通常非 -te，Partizip II 常為 -en）
+ * - mixed: 混合（Präteritum 為 -te，但仍非完全規則；Partizip II 常為 -t）
+ * - suppletive: 完全不規則（目前先針對 sein）
+ *
+ * 回傳：
+ * - null：代表判定為規則或資料不足
+ * - "strong" | "mixed" | "suppletive"
+ */
+function detectIrregularTypeFromNormalized(normalized) {
+  try {
+    if (!normalized || normalized.partOfSpeech !== 'Verb') return null;
+
+    const base = String(normalized.baseForm || normalized.word || '').trim().toLowerCase();
+
+    // 先處理最明確的 suppletive
+    // （德語教學上最典型：sein）
+    if (base === 'sein') return 'suppletive';
+
+    const conj = normalized.conjugation || {};
+    const praesens = conj.praesens || {};
+    const praeteritum = conj.praeteritum || {};
+    const perfekt = conj.perfekt || {};
+
+    const prI = String(praesens.ich || '').trim();
+    const ptI = String(praeteritum.ich || '').trim();
+    const pfI = String(perfekt.ich || '').trim();
+
+    // 資料不足：不判
+    if (!ptI && !pfI) return null;
+
+    // ---- 取 Partizip II（perfekt.ich 通常像： "habe gegessen" / "bin gegangen"）
+    let partizip = '';
+    if (pfI) {
+      const parts = pfI.split(/\s+/).filter(Boolean);
+      partizip = parts.length >= 2 ? parts[parts.length - 1] : '';
+    }
+
+    const ptLower = ptI.toLowerCase();
+    const partLower = partizip.toLowerCase();
+
+    const praeteritumLooksWeak = !!ptLower && ptLower.endsWith('te'); // ich machte / ich dachte
+    const partizipLooksWeak = !!partLower && partLower.endsWith('t'); // gemacht / gedacht
+    const partizipLooksStrong = !!partLower && partLower.endsWith('en'); // gegangen / gegessen
+
+    // ---- mixed：Präteritum 是 -te，但仍不當作純規則（多半會伴隨詞幹變化）
+    // 這裡用最保守判斷：pt=-te 且 Partizip II = -t -> mixed
+    // （machen: machte / gemacht 會符合，但它是規則；因此再加一個「詞幹明顯不同」的檢查）
+    if (praeteritumLooksWeak && partizipLooksWeak) {
+      // 詞幹差異粗略判斷（避免把純規則當 mixed）
+      // 取 baseForm 的詞幹（去掉 -en / -n）
+      const baseStem = base.replace(/(en|n)$/i, '');
+      const ptStem = ptLower.replace(/te$/i, '');
+      const partStem = partLower
+        .replace(/^ge/i, '')
+        .replace(/t$/i, '');
+
+      // 若 präteritum / partizip 的 stem 都跟 baseStem 很接近，就當作規則（不標）
+      // 若至少一個明顯不同，視為 mixed
+      const looksSimilar = (a, b) => {
+        if (!a || !b) return false;
+        if (a === b) return true;
+        // 簡易相似：其中一個包含另一個
+        return a.includes(b) || b.includes(a);
+      };
+
+      const ptSimilar = looksSimilar(ptStem, baseStem);
+      const partSimilar = looksSimilar(partStem, baseStem);
+
+      if (!(ptSimilar && partSimilar)) {
+        return 'mixed';
+      }
+      return null;
+    }
+
+    // ---- strong：Präteritum 不像弱變化（非 -te）或 Partizip II 明顯為 -en
+    if (partizipLooksStrong) return 'strong';
+    if (!!ptLower && !praeteritumLooksWeak) return 'strong';
+
+    // 其餘：不判（當作規則或資訊不足）
+    return null;
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
  * 查詢單字主函式
  * rawWord: 使用者查的字
  * explainLang: zh-TW / en / ...
@@ -98,6 +185,15 @@ async function lookupWord(rawWord, explainLang = 'zh-TW') {
       };
     }
 
+    // ★ Step C（本輪新增）：不規則動詞判斷（B 方案：結構化）
+    // - 不改動既有欄位，只新增 normalized.irregular
+    // - 若判定為規則或資料不足：enabled=false
+    const irregularType = detectIrregularTypeFromNormalized(normalized);
+    normalized.irregular = {
+      enabled: !!irregularType,
+      type: irregularType || null, // "strong" | "mixed" | "suppletive" | null
+    };
+
     return normalized;
   } catch (err) {
     // 這裡同時處理一般錯誤與 Groq rate limit
@@ -120,3 +216,5 @@ async function lookupWord(rawWord, explainLang = 'zh-TW') {
 }
 
 module.exports = { lookupWord };
+
+// backend/src/clients/dictionaryLookup.js

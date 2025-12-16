@@ -1,3 +1,4 @@
+// backend/src/clients/dictionaryPrompts.js
 /**
  * 系統提示：規範查字典時 Groq 的輸出格式與行為
  * - 只允許回傳單一 JSON 物件
@@ -235,15 +236,41 @@ You MUST ALWAYS output the field "recommendations" in the JSON.
 Rules:
 - If and only if "partOfSpeech" is "Verb":
   - Fill "recommendations" with up to 5 items per list.
-  - "synonyms": very close-meaning verbs (avoid loose associations).
-  - "antonyms": clear semantic opposites if commonly used.
+
+  - Mandatory constraints (apply to synonyms/antonyms/roots):
+    - Do NOT include the base word itself (word OR baseForm).
+    - Do NOT include duplicates (case-insensitive).
+    - Prefer common, modern, everyday verbs; avoid rare or archaic items.
+    - If you are unsure, return empty arrays.
+    - NEVER output the same verb in BOTH synonyms and antonyms.
+
+  - "synonyms":
+    - ONLY very close-meaning verbs (true near-synonyms).
+    - MUST NOT include verbs that are semantic opposites.
+    - MUST NOT overlap with "antonyms".
+    - If no true synonyms exist, return [].
+
+  - "antonyms":
+    - ONLY clear and commonly accepted semantic opposites.
+    - MUST NOT overlap with "synonyms".
+    - If no clear antonym exists, return [].
+
   - "roots":
-    - MUST be RELATED VERB LEMMAS (INFINITIVES ONLY) from the same word family / derivations.
-    - Examples:
+    - STRICT meaning: derivational verb family members formed by prefixes
+      (same verbal stem + different prefix) — NOT lemma mapping.
+    - MUST be INFINITIVES ONLY.
+    - Examples (allowed):
+      - ziehen → anziehen, ausziehen, umziehen, einziehen
       - sehen → ansehen, zusehen, übersehen, aussehen
-      - laufen → weglaufen, loslaufen, ablaufen, mitlaufen
-    - NOT allowed:
-      - lauf, läuft, gelaufen, sah, siehst (no stems, no conjugations, no participles)
+      - laufen → loslaufen, weglaufen, mitlaufen, ablaufen
+    - NOT allowed (MUST NOT output):
+      - conjugated forms: kann, läuft, zog, siehst
+      - participles: gezogen, gelaufen
+      - bare stems: lauf
+      - the lemma/baseForm itself: ziehen, sehen, laufen
+      - loose semantic associations (related meaning but NOT a prefix-derivation family)
+    - If no clear prefix-derivation family exists, return [].
+
 - For ALL other parts of speech:
   - Set "recommendations" to:
     {
@@ -251,12 +278,6 @@ Rules:
       "antonyms": [],
       "roots": []
     }
-
-Quality constraints:
-- Do NOT include the base word itself (word/baseForm).
-- Do NOT include duplicates (case-insensitive).
-- Prefer common, modern, everyday verbs; avoid rare or archaic items.
-- If you are unsure, return empty arrays.
 
 Important:
 - Never include example sentences inside definitions.
@@ -298,3 +319,4 @@ module.exports = {
   systemPrompt,
   buildUserPrompt,
 };
+// backend/src/clients/dictionaryPrompts.js
