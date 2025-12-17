@@ -56,7 +56,7 @@ async function elevenTTS(text, lang = "de") {
     // - style: 0.05  幾乎不誇張
     // - use_speaker_boost: true  提升清晰度
     voice_settings: {
-      stability: 0.85,
+      stability: 0.5,
       similarity_boost: 0.9,
       style: 0.05,
       use_speaker_boost: true,
@@ -99,7 +99,7 @@ async function elevenTTS(text, lang = "de") {
     model_id: "eleven_multilingual_v2",
     voice_settings: {
       stability: 0.5,
-      similarity_boost: 0.9,
+      similarity_boost: 0.5,
       // v2 不加 speed / style，避免不相容
     },
   };
