@@ -98,7 +98,7 @@ async function elevenTTS(text, lang = "de") {
     text,
     model_id: "eleven_multilingual_v2",
     voice_settings: {
-      stability: 0.8,
+      stability: 0.5,
       similarity_boost: 0.9,
       // v2 不加 speed / style，避免不相容
     },

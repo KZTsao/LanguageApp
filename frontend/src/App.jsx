@@ -17,6 +17,9 @@
  *   1) handleAnalyze / loadLibraryFromApi / addFavoriteViaApi / removeFavoriteViaApi：補上 res.json() 解析
  *      避免把原生 Response 物件塞進 state 導致 render 取值噴錯（白畫面）
  *   2) 新增 readApiJson / assertApiOk（Production 排查用）：統一記錄 lastError 與回應內容片段
+ * - 2025-12-17：Phase 4 修正（FavoriteStar active 永遠 false）
+ *   1) getFavoriteKey：支援多種 entry 形狀（WordCard/ResultPanel 可能傳 dictionary 型或 entry 型），統一計算 headword/canonicalPos
+ *   2) isFavorited：改用 getFavoriteKey 做一致化比對，避免「點星星存的是一套 key、active 判斷用另一套 key」造成星星永不變色
  */
 
 // App 只管狀態與邏輯，畫面交給 LayoutShell / SearchBox / ResultPanel
@@ -537,8 +540,55 @@ function AppInner() {
    * - 只存原型（你已定義收藏只存原型）
    */
   const getFavoriteKey = (entry) => {
-    const headword = (entry?.headword || "").trim();
-    const canonicalPos = (entry?.canonicalPos || "").trim();
+    // DEPRECATED (2025-12-17): 早期版本只吃 entry.headword / entry.canonicalPos
+    // const headword = (entry?.headword || "").trim();
+    // const canonicalPos = (entry?.canonicalPos || "").trim();
+    // return { headword, canonicalPos };
+
+    /**
+     * 功能：安全取值（避免不同元件傳入不同 entry 形狀）
+     * - WordCard/ResultPanel 可能傳：
+     *   A) { headword, canonicalPos }
+     *   B) { dictionary: { baseForm/word, canonicalPos/partOfSpeech } }
+     *   C) { baseForm/word, canonicalPos/partOfSpeech }（少一層 dictionary）
+     */
+    const pickString = (...vals) => {
+      for (const v of vals) {
+        if (typeof v === "string" && v.trim()) return v.trim();
+      }
+      return "";
+    };
+
+    /**
+     * 功能：標準化詞性欄位（canonicalPos）
+     * - 保持原字串，不做映射（避免自行推測），但先 trim
+     * - 若 entry 來自 dictionary，可能只有 partOfSpeech
+     */
+    const normalizePos = (pos) => (typeof pos === "string" ? pos.trim() : "");
+
+    const dict = entry?.dictionary && typeof entry.dictionary === "object" ? entry.dictionary : null;
+
+    // headword：優先原型（baseForm），其次 word/headword（維持你「只存原型」的設計）
+    const headword = pickString(
+      entry?.headword,
+      entry?.baseForm,
+      dict?.baseForm,
+      entry?.word,
+      dict?.word
+    );
+
+    // canonicalPos：優先 canonicalPos，其次 partOfSpeech（兼容不同回傳）
+    const canonicalPos = normalizePos(
+      pickString(
+        entry?.canonicalPos,
+        dict?.canonicalPos,
+        entry?.canonical_pos,
+        dict?.canonical_pos,
+        entry?.partOfSpeech,
+        dict?.partOfSpeech
+      )
+    );
+
     return { headword, canonicalPos };
   };
 
@@ -690,8 +740,12 @@ function AppInner() {
 
   // ✅ isFavorited：WordCard 顯示用（以 lemma/headword 來對照）
   const isFavorited = (entry) => {
-    const headword = (entry?.headword || "").trim();
-    const canonicalPos = (entry?.canonicalPos || "").trim();
+    // DEPRECATED (2025-12-17): 早期版本只吃 entry.headword / entry.canonicalPos
+    // const headword = (entry?.headword || "").trim();
+    // const canonicalPos = (entry?.canonicalPos || "").trim();
+    // if (!headword) return false;
+
+    const { headword, canonicalPos } = getFavoriteKey(entry);
     if (!headword) return false;
 
     return libraryItems.some((x) => {
