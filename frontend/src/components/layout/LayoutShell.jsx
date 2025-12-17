@@ -1,10 +1,19 @@
 // frontend/src/components/layout/LayoutShell.jsx
-// 負責：外層版面、主題切換、語言切換（Sprache）
+/**
+ * 文件說明（LayoutShell）
+ * - 目的：提供全站外層版面（置中容器 + Header 區），並把「語言切換 / 亮暗切換」的 UI 事件
+ *   正確回傳給上層（App.jsx）管理的狀態（uiLang / theme）。
+ * - 本次修改重點（不改業務邏輯）：
+ *   1) props 介面對齊 App.jsx：使用 onThemeChange / onUiLangChange（原本 LayoutShell 用錯名字）
+ *   2) 亮暗切換採全站等級：App.jsx 已負責將 theme 寫入 localStorage 並套用 <html>.classList.dark
+ * - 其他：保留既有 UI 結構與資料抓取（usage/debug key/menu），不改動行為。
+ */
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import LoginButton from "../auth/LoginButton";
 import { useAuth } from "../../context/AuthProvider";
 
+/** 模組：將字串 seed 穩定映射到色相（供頭像底色使用） */
 function hashToHue(seed = "") {
   let h = 0;
   for (let i = 0; i < seed.length; i++) {
@@ -13,6 +22,7 @@ function hashToHue(seed = "") {
   return h % 360;
 }
 
+/** 模組：產生頭像樣式（依 email + theme 做顏色/明暗調整） */
 function getAvatarStyle(seedEmail, theme) {
   const hue = hashToHue(seedEmail || "");
   const s = 68;
@@ -34,6 +44,7 @@ function getAvatarStyle(seedEmail, theme) {
   };
 }
 
+/** 模組：方案 pill（右上角頭像旁） */
 function getPlanPillStyle() {
   return {
     fontSize: 9.5,
@@ -48,19 +59,7 @@ function getPlanPillStyle() {
   };
 }
 
-function getUsagePillStyle() {
-  return {
-    fontSize: 10,
-    fontWeight: 600,
-    color: "var(--text-muted)",
-    opacity: 0.7,
-    lineHeight: "12px",
-    letterSpacing: 0.2,
-    userSelect: "none",
-    whiteSpace: "nowrap",
-  };
-}
-
+/** 模組：debug key pill（淡淡顯示 key var name） */
 function getDebugKeyPillStyle() {
   return {
     fontSize: 9.5,
@@ -75,7 +74,7 @@ function getDebugKeyPillStyle() {
   };
 }
 
-// 選單內顯示用（比頭像旁邊更容易看見，但仍然淡）
+/** 模組：選單內顯示 debug key（比頭像旁邊更容易看見，但仍然淡） */
 function getDebugKeyMenuStyle() {
   return {
     marginTop: 6,
@@ -89,7 +88,7 @@ function getDebugKeyMenuStyle() {
   };
 }
 
-// 從 localStorage 取得 supabase access token（不引入新 client）
+/** 模組：從 localStorage 取得 supabase access token（不引入新 client） */
 function getAccessTokenFromLocalStorage() {
   try {
     const key = Object.keys(localStorage).find((k) => k.includes("auth-token"));
@@ -101,34 +100,48 @@ function getAccessTokenFromLocalStorage() {
   }
 }
 
-function LayoutShell({ theme, onToggleTheme, uiLang, onChangeUiLang, children }) {
+/**
+ * LayoutShell（外層版面）
+ * - 注意：App.jsx 會傳入 uiLang / onUiLangChange / theme / onThemeChange
+ * - 本檔案只負責觸發事件，不自行持有「全站語言/主題」狀態
+ */
+function LayoutShell({
+  theme,
+  onThemeChange,
+  uiLang,
+  onUiLangChange,
+  children,
+}) {
   const { user, profile, signOut } = useAuth();
 
-  // UI state
+  /** 模組：選單開關（右上角頭像選單） */
   const [menuOpen, setMenuOpen] = useState(false);
   const menuWrapRef = useRef(null);
 
-  // usage state（未登入/已登入都看得到）
+  /** 模組：usage state（未登入/已登入都看得到） */
   const [usage, setUsage] = useState(null);
 
-  // debug: groq key var（只有指定帳號看得到）
+  /** 模組：debug: groq key var（只有指定帳號看得到） */
   const [groqKeyDebug, setGroqKeyDebug] = useState(null);
 
-  const showDebugKey = "1"
-    //String(import.meta?.env?.VITE_SHOW_DEBUG_KEY || "").trim() === "1";
+  // 保留你的設定（目前固定顯示）
+  const showDebugKey = "1";
+  //String(import.meta?.env?.VITE_SHOW_DEBUG_KEY || "").trim() === "1";
 
-  // ✅ 讓你在 Console 不用 import.meta 也能看 showDebugKey / key 狀態
+  /** 模組：提供簡單的 debug 入口（避免在 console 使用 import.meta） */
   useEffect(() => {
     window.__layoutShellDebug = window.__layoutShellDebug || {};
     window.__layoutShellDebug.showDebugKey = showDebugKey;
     window.__layoutShellDebug.userId = user?.id || null;
   }, [showDebugKey, user?.id]);
 
+  /** 模組：plan 文字 */
   const planText = useMemo(() => {
     const p = (profile?.plan || "free").toString().trim();
     return `${p}plan`.toLowerCase();
   }, [profile?.plan]);
 
+  /** 模組：點外面關閉選單 */
   useEffect(() => {
     function onDocClick(e) {
       if (!menuWrapRef.current) return;
@@ -140,11 +153,12 @@ function LayoutShell({ theme, onToggleTheme, uiLang, onChangeUiLang, children })
     return () => document.removeEventListener("click", onDocClick);
   }, []);
 
+  /** 模組：切換帳號就關閉選單 */
   useEffect(() => {
     setMenuOpen(false);
   }, [user?.id]);
 
-  // ✅ 對齊後端：GET /admin/usage?days=7
+  /** 模組：對齊後端：GET /admin/usage?days=7 */
   async function fetchUsageSummary() {
     const token = getAccessTokenFromLocalStorage();
 
@@ -176,7 +190,6 @@ function LayoutShell({ theme, onToggleTheme, uiLang, onChangeUiLang, children })
       // debug key：只有 canView=true 才能看到 currentKeyVar（且你只要變數名，不要實際值）
       const dbg = data?.__debug?.groq;
 
-      // ✅ console 之外，直接放到 window 讓你看（不需要改 build / 不需要 import.meta）
       window.__layoutShellDebug = window.__layoutShellDebug || {};
       window.__layoutShellDebug.lastGroq = dbg || null;
 
@@ -204,7 +217,7 @@ function LayoutShell({ theme, onToggleTheme, uiLang, onChangeUiLang, children })
     }
   }
 
-  // 開站就抓一次（未登入也抓 usage；登入後才可能拿到 debug key）
+  /** 模組：開站/登入狀態變化就抓一次 usage */
   useEffect(() => {
     if (!user?.id) {
       setGroqKeyDebug(null);
@@ -214,8 +227,7 @@ function LayoutShell({ theme, onToggleTheme, uiLang, onChangeUiLang, children })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id, showDebugKey]);
 
-  // ✅ 核心：每次前端「真的呼叫 API 成功」就更新一次 usage（無輪詢）
-  // apiClient.js 會在 resp.ok 時 dispatch：window.dispatchEvent(new Event("usage-updated"))
+  /** 模組：核心：每次前端真的呼叫 API 成功就更新 usage（無輪詢） */
   useEffect(() => {
     const onUsageUpdated = () => {
       fetchUsageSummary();
@@ -225,13 +237,17 @@ function LayoutShell({ theme, onToggleTheme, uiLang, onChangeUiLang, children })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id, showDebugKey]);
 
-  const usageText = usage
-    ? `Usage · Today LLM ${usage.today.byKind.llm || 0} · TTS ${
-        usage.today.byKind.tts || 0
-      } · Month LLM ${usage.month.byKind.llm || 0} · TTS ${
-        usage.month.byKind.tts || 0
-      }`
-    : "";
+  /** 模組：亮暗切換（只呼叫上層 onThemeChange；真正套用 <html>.dark 在 App.jsx） */
+  const handleToggleTheme = () => {
+    const cur = theme === "dark" ? "dark" : "light";
+    const next = cur === "dark" ? "light" : "dark";
+    if (typeof onThemeChange === "function") onThemeChange(next);
+  };
+
+  /** 模組：語言切換（只回傳上層 onUiLangChange） */
+  const handleUiLangChange = (nextLang) => {
+    if (typeof onUiLangChange === "function") onUiLangChange(nextLang);
+  };
 
   // ====== 未登入 UI ======
   if (!user) {
@@ -257,7 +273,7 @@ function LayoutShell({ theme, onToggleTheme, uiLang, onChangeUiLang, children })
               gap: 12,
             }}
           >
-            {/* ★ 語言選擇：同一個匡（pill） */}
+            {/* 模組：語言選擇（同一個匡 pill） */}
             <div
               style={{
                 display: "inline-flex",
@@ -284,7 +300,7 @@ function LayoutShell({ theme, onToggleTheme, uiLang, onChangeUiLang, children })
 
               <select
                 value={uiLang}
-                onChange={(e) => onChangeUiLang(e.target.value)}
+                onChange={(e) => handleUiLangChange(e.target.value)}
                 style={{
                   padding: "6px 10px 6px 0px",
                   border: "none",
@@ -307,7 +323,7 @@ function LayoutShell({ theme, onToggleTheme, uiLang, onChangeUiLang, children })
               <LoginButton uiLang={uiLang} />
 
               <button
-                onClick={onToggleTheme}
+                onClick={handleToggleTheme}
                 style={{
                   padding: "6px 10px",
                   borderRadius: 999,
@@ -367,7 +383,7 @@ function LayoutShell({ theme, onToggleTheme, uiLang, onChangeUiLang, children })
             gap: 12,
           }}
         >
-          {/* ★ 語言選擇：同一個匡（pill） */}
+          {/* 模組：語言選擇（同一個匡 pill） */}
           <div
             style={{
               display: "inline-flex",
@@ -394,7 +410,7 @@ function LayoutShell({ theme, onToggleTheme, uiLang, onChangeUiLang, children })
 
             <select
               value={uiLang}
-              onChange={(e) => onChangeUiLang(e.target.value)}
+              onChange={(e) => handleUiLangChange(e.target.value)}
               style={{
                 padding: "6px 10px 6px 0px",
                 border: "none",
@@ -428,7 +444,7 @@ function LayoutShell({ theme, onToggleTheme, uiLang, onChangeUiLang, children })
             >
               <span style={getPlanPillStyle()}>{planText}</span>
 
-              {/* ✅ 淡淡顯示目前 key 變數名（不顯示實際值） */}
+              {/* 模組：淡淡顯示目前 key 變數名（不顯示實際值） */}
               {debugKeyText ? (
                 <span style={getDebugKeyPillStyle()}>{debugKeyText}</span>
               ) : null}
@@ -438,7 +454,6 @@ function LayoutShell({ theme, onToggleTheme, uiLang, onChangeUiLang, children })
                 onClick={() => {
                   const next = !menuOpen;
                   setMenuOpen(next);
-                  // 打開選單就立刻刷新一次（更像「即時」）
                   if (next) fetchUsageSummary();
                 }}
                 style={{
@@ -485,7 +500,7 @@ function LayoutShell({ theme, onToggleTheme, uiLang, onChangeUiLang, children })
                 >
                   <div style={{ fontSize: 12, fontWeight: 700 }}>{email}</div>
 
-                  {/* ✅ 也放在選單內，確保你真的看得到（仍只顯示變數名） */}
+                  {/* 模組：選單內也放一份 debug key（仍只顯示變數名） */}
                   {debugKeyText ? (
                     <div style={getDebugKeyMenuStyle()}>{debugKeyText}</div>
                   ) : null}
@@ -544,7 +559,7 @@ function LayoutShell({ theme, onToggleTheme, uiLang, onChangeUiLang, children })
             </div>
 
             <button
-              onClick={onToggleTheme}
+              onClick={handleToggleTheme}
               style={{
                 padding: "6px 10px",
                 borderRadius: 999,
@@ -567,4 +582,5 @@ function LayoutShell({ theme, onToggleTheme, uiLang, onChangeUiLang, children })
 }
 
 export default LayoutShell;
+
 // frontend/src/components/layout/LayoutShell.jsx

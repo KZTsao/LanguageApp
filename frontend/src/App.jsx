@@ -1,4 +1,24 @@
 // frontend/src/App.jsx
+/**
+ * 文件說明：
+ * - 本檔為 App 的主入口，負責「狀態與邏輯」；畫面交給 LayoutShell / SearchBox / ResultPanel 等元件。
+ * - 本輪（Phase 4）採用「並存模式」：保留 localStorage legacy 邏輯，新增 DB API 路徑並以 wrapper 路由切換。
+ *
+ * 異動紀錄（僅追加，不可刪除）：
+ * - 2025-12-17：Phase 4（並存模式）
+ *   1) 新增 /api/library API 路徑的載入與收藏操作（GET/POST/DELETE）
+ *   2) 新增 libraryInitStatus（Production 排查用）
+ *   3) 保留既有 localStorage 收藏 function（僅加註 DEPRECATED，行為不移除）
+ *   4) UI 綁定改指向 handleToggleFavorite（wrapper），避免直接呼叫 legacy toggleFavorite
+ * - 2025-12-17：Phase 4 修正（Analyze 404）
+ *   1) handleAnalyze 改呼叫既有後端路由 POST /api/analyze（避免誤打 /api/dictionary/analyze 造成 404）
+ *   2) 新增 analyzeInitStatus（Production 排查用）
+ * - 2025-12-17：Phase 4 修正（apiFetch Response 解析）
+ *   1) handleAnalyze / loadLibraryFromApi / addFavoriteViaApi / removeFavoriteViaApi：補上 res.json() 解析
+ *      避免把原生 Response 物件塞進 state 導致 render 取值噴錯（白畫面）
+ *   2) 新增 readApiJson / assertApiOk（Production 排查用）：統一記錄 lastError 與回應內容片段
+ */
+
 // App 只管狀態與邏輯，畫面交給 LayoutShell / SearchBox / ResultPanel
 
 import { useState, useEffect, useMemo } from "react";
@@ -31,6 +51,38 @@ function AppInner() {
       ? "http://localhost:4000"
       : "https://languageapp-8j45.onrender.com";
 
+  // ✅ Phase 4（並存模式）開關：true = 單字庫收藏走 DB（/api/library）；false = 使用 legacy localStorage
+  const USE_API_LIBRARY = true;
+
+  /**
+   * 功能：建立單字庫初始化狀態（Production 排查用）
+   * - ready：API client / env 是否可用（此處以「成功呼叫過一次 API」作為 ready）
+   * - lastAction / lastFetchAt / lastError：協助定位 Production 問題
+   */
+  const createLibraryInitStatus = () => ({
+    module: "frontend/src/App.jsx::library",
+    createdAt: new Date().toISOString(),
+    ready: false,
+    lastAction: null,
+    lastFetchAt: null,
+    lastError: null,
+  });
+
+  /**
+   * 功能：建立 Analyze 初始化狀態（Production 排查用）
+   * - ready：是否至少成功呼叫一次 analyze API
+   * - lastAction / lastFetchAt / lastError：協助定位 Production 問題
+   */
+  const createAnalyzeInitStatus = () => ({
+    module: "frontend/src/App.jsx::analyze",
+    createdAt: new Date().toISOString(),
+    ready: false,
+    lastAction: null,
+    lastFetchAt: null,
+    lastError: null,
+    lastEndpoint: null,
+  });
+
   const [showRaw, setShowRaw] = useState(false);
 
   // ✅ view 切換：search / library / test
@@ -41,11 +93,11 @@ function AppInner() {
   const { user } = useAuth();
   const authUserId = user?.id || "";
 
-  // ✅ user bucket：guest / user.id
-  const userBucket = authUserId ? authUserId : "guest";
+  // ✅ user bucket（登入者用 userId；未登入用 guest）
+  const userBucket = authUserId || "guest";
 
-  // ✅ legacy keys（舊：不分桶）
-  const WORDS_KEY_LEGACY = "langapp_user_words_v1";
+  // ✅ legacy keys（舊：未分桶）
+  const WORDS_KEY_LEGACY = "WORDS";
   const UILANG_KEY_LEGACY = "uiLang";
   const THEME_KEY_LEGACY = "appTheme";
   const LASTTEXT_KEY_LEGACY = "lastText";
@@ -59,6 +111,19 @@ function AppInner() {
   const HISTORY_KEY = `langapp::${userBucket}::history_v1`;
 
   const [libraryItems, setLibraryItems] = useState([]);
+
+  // ✅ 單字庫分頁游標（Phase 2/4：後端已支援 cursor，本輪先保留狀態欄位）
+  const [libraryCursor, setLibraryCursor] = useState(null);
+
+  // ✅ 單字庫初始化狀態（Production 排查用）
+  const [libraryInitStatus, setLibraryInitStatus] = useState(() =>
+    createLibraryInitStatus()
+  );
+
+  // ✅ Analyze 初始化狀態（Production 排查用）
+  const [analyzeInitStatus, setAnalyzeInitStatus] = useState(() =>
+    createAnalyzeInitStatus()
+  );
 
   // ✅ 測試模式：隨機單字卡 + 收藏狀態
   const [testCard, setTestCard] = useState(null); // { headword, canonicalPos, userId? }
@@ -78,31 +143,14 @@ function AppInner() {
       : "light";
   });
 
-  const safeJsonParse = (raw, fallback) => {
-    try {
-      if (!raw) return fallback;
-      return JSON.parse(raw);
-    } catch {
-      return fallback;
-    }
-  };
+  // ✅ uiText 取用（嚴格：缺字顯示 —）
+  const currentUiText = useMemo(() => {
+    return uiText[uiLang] || uiText["zh-TW"] || {};
+  }, [uiLang]);
 
-  const safeJsonStringify = (obj, fallbackString) => {
-    try {
-      return JSON.stringify(obj);
-    } catch {
-      return fallbackString;
-    }
-  };
-
-  const currentUiText =
-    uiText[uiLang] || uiText["zh-TW"] || Object.values(uiText)[0] || {};
-
-  // ✅ i18n：只從 uiText 取字；缺 key 就顯示 "—"（避免默默回到中文）
   const t = useMemo(() => {
     const getByPath = (obj, path) => {
-      if (!obj || !path) return undefined;
-      const parts = String(path).split(".");
+      const parts = String(path || "").split(".");
       let cur = obj;
       for (const p of parts) {
         if (!cur || typeof cur !== "object") return undefined;
@@ -119,381 +167,273 @@ function AppInner() {
   // ✅ 以前這裡有 supabase.getSession + onAuthStateChange 訂閱。
   // ✅ 已移除：AuthProvider 已經統一管理 auth 狀態，App 只讀取 useAuth().user，避免兩邊不同步。
 
-  // ✅ legacy -> scoped copy（不刪 legacy）
+  // ✅ 初始化：語言/主題/最後查詢（分桶），並保留 legacy fallback
   useEffect(() => {
     try {
-      const desiredUserId = authUserId || "";
-
-      // words
-      const scopedWords = window.localStorage.getItem(WORDS_KEY);
-      if (!scopedWords) {
-        const legacyWords = window.localStorage.getItem(WORDS_KEY_LEGACY);
-        if (legacyWords) {
-          const parsed = safeJsonParse(legacyWords, null);
-
-          let list = [];
-          if (Array.isArray(parsed)) list = parsed;
-          else if (parsed && typeof parsed === "object")
-            list = Object.values(parsed);
-
-          const cleaned = list
-            .map((x) => {
-              if (!x || typeof x !== "object") return null;
-              const headword = (x.headword || x.word || x.text || "").trim();
-              const canonicalPos = (
-                x.canonicalPos ||
-                x.pos ||
-                x.partOfSpeech ||
-                ""
-              ).trim();
-              const createdAt = x.createdAt || x.created_at || x.created || null;
-              if (!headword) return null;
-              return {
-                ...x,
-                userId: desiredUserId,
-                headword,
-                canonicalPos,
-                createdAt,
-              };
-            })
-            .filter(Boolean);
-
-          window.localStorage.setItem(
-            WORDS_KEY,
-            safeJsonStringify(cleaned, legacyWords)
-          );
-          console.log("[migrate] words legacy -> scoped (sanitized userId)", {
-            to: WORDS_KEY,
-            desiredUserId: desiredUserId ? "(logged-in)" : "(guest)",
-          });
-        }
-      }
-
-      // uiLang
       const scopedLang = window.localStorage.getItem(UILANG_KEY);
-      if (!scopedLang) {
-        const legacyLang = window.localStorage.getItem(UILANG_KEY_LEGACY);
-        if (legacyLang) {
-          window.localStorage.setItem(UILANG_KEY, legacyLang);
-          console.log("[migrate] uiLang legacy -> scoped", { to: UILANG_KEY });
-        }
-      }
+      const legacyLang = window.localStorage.getItem(UILANG_KEY_LEGACY);
+      if (scopedLang) setUiLang(scopedLang);
+      else if (legacyLang) setUiLang(legacyLang);
 
-      // theme
       const scopedTheme = window.localStorage.getItem(THEME_KEY);
-      if (!scopedTheme) {
-        const legacyTheme = window.localStorage.getItem(THEME_KEY_LEGACY);
-        if (legacyTheme) {
-          window.localStorage.setItem(THEME_KEY, legacyTheme);
-          console.log("[migrate] theme legacy -> scoped", { to: THEME_KEY });
-        }
-      }
+      const legacyTheme = window.localStorage.getItem(THEME_KEY_LEGACY);
+      if (scopedTheme === "light" || scopedTheme === "dark")
+        setTheme(scopedTheme);
+      else if (legacyTheme === "light" || legacyTheme === "dark")
+        setTheme(legacyTheme);
 
-      // lastText
       const scopedLast = window.localStorage.getItem(LASTTEXT_KEY);
-      if (!scopedLast) {
-        const legacyLast = window.localStorage.getItem(LASTTEXT_KEY_LEGACY);
-        if (legacyLast) {
-          window.localStorage.setItem(LASTTEXT_KEY, legacyLast);
-          console.log("[migrate] lastText legacy -> scoped", { to: LASTTEXT_KEY });
-        }
-      }
-    } catch (e) {
-      console.warn("[migrate] failed:", e);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [WORDS_KEY, UILANG_KEY, THEME_KEY, LASTTEXT_KEY, authUserId]);
-
-  // ✅ 本輪新增：對「目前 bucket」做一次 userId 清洗（scoped 已存在時也會修）
-  useEffect(() => {
-    try {
-      const desiredUserId = authUserId || "";
-
-      const rawText = window.localStorage.getItem(WORDS_KEY);
-      if (!rawText) return;
-
-      const parsed = safeJsonParse(rawText, null);
-      let list = [];
-      if (Array.isArray(parsed)) list = parsed;
-      else if (parsed && typeof parsed === "object") list = Object.values(parsed);
-      else return;
-
-      // 只要有任何一筆 userId 不符合，就整批修正
-      const needFix = list.some((x) => {
-        if (!x || typeof x !== "object") return false;
-        const uid = x.userId || x.user_id || "";
-        return uid !== desiredUserId;
-      });
-
-      if (!needFix) return;
-
-      const fixed = list.map((x) => {
-        if (!x || typeof x !== "object") return x;
-        return { ...x, userId: desiredUserId };
-      });
-
-      window.localStorage.setItem(WORDS_KEY, safeJsonStringify(fixed, rawText));
-
-      // 同步目前畫面上的 libraryItems（避免你要重整才更新）
-      setLibraryItems((prev) => {
-        if (!Array.isArray(prev) || prev.length === 0) return prev;
-        return prev.map((x) => ({ ...x, userId: desiredUserId }));
-      });
-
-      // 如果 testCard 有舊 userId，也同步一下（不改 headword/pos）
-      setTestCard((prev) => {
-        if (!prev) return prev;
-        return { ...prev, userId: desiredUserId };
-      });
-
-      console.log("[WordLibrary] sanitized userId in bucket", {
-        bucket: userBucket,
-        desiredUserId: desiredUserId ? "(logged-in)" : "(guest)",
-      });
-    } catch (e) {
-      console.warn("[WordLibrary] sanitize failed:", e);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [WORDS_KEY, authUserId, userBucket]);
-
-  // ✅ 當 userBucket 改變時，載入該 bucket 的 uiLang/theme/lastText/history
-  useEffect(() => {
-    try {
-      const storedLang = window.localStorage.getItem(UILANG_KEY);
-      if (storedLang) setUiLang(storedLang);
-
-      const storedTheme = window.localStorage.getItem(THEME_KEY);
-      if (storedTheme === "light" || storedTheme === "dark")
-        setTheme(storedTheme);
-
-      const storedText = window.localStorage.getItem(LASTTEXT_KEY);
-      if (storedText) setText(storedText);
-
-      const h = safeJsonParse(window.localStorage.getItem(HISTORY_KEY), null);
-      if (h && Array.isArray(h.items)) {
-        setHistory(h.items);
-        setHistoryIndex(
-          typeof h.index === "number" ? h.index : h.items.length - 1
-        );
-      } else {
-        setHistory([]);
-        setHistoryIndex(-1);
-      }
-    } catch (e) {
-      console.warn("[bucket load] failed:", e);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userBucket]);
-
-  // theme 寫回 scoped key + 套用 dark class
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(THEME_KEY, theme);
+      const legacyLast = window.localStorage.getItem(LASTTEXT_KEY_LEGACY);
+      if (scopedLast) setText(scopedLast);
+      else if (legacyLast) setText(legacyLast);
     } catch {}
-    document.documentElement.classList.toggle("dark", theme === "dark");
-  }, [theme, THEME_KEY]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [UILANG_KEY, THEME_KEY, LASTTEXT_KEY]);
 
-  // uiLang 寫回 scoped key
+  // ✅ 寫回：語言/主題/最後查詢（只寫 scoped key，避免不同 bucket 汙染）
   useEffect(() => {
     try {
       window.localStorage.setItem(UILANG_KEY, uiLang);
     } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [uiLang, UILANG_KEY]);
 
-  // history 寫回 scoped key
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(THEME_KEY, theme);
+    } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [theme, THEME_KEY]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(LASTTEXT_KEY, text);
+    } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [text, LASTTEXT_KEY]);
+
+  // ✅ 初始化查詢歷史（分桶）
+  useEffect(() => {
+    try {
+      const scoped = window.localStorage.getItem(HISTORY_KEY);
+      if (scoped) {
+        const parsed = JSON.parse(scoped);
+        if (Array.isArray(parsed)) setHistory(parsed.slice(0, 10));
+      }
+    } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [HISTORY_KEY]);
+
+  // ✅ 寫回查詢歷史（只寫 scoped key）
   useEffect(() => {
     try {
       window.localStorage.setItem(
         HISTORY_KEY,
-        JSON.stringify({ items: history, index: historyIndex })
+        JSON.stringify(history.slice(0, 10))
       );
     } catch {}
-  }, [history, historyIndex, HISTORY_KEY]);
-
-  // 接 wordSearch 事件（延伸詞點擊 → 重新查詢）
-  useEffect(() => {
-    const handler = (e) => {
-      const w = (e?.detail?.text || "").trim();
-      if (!w) return;
-
-      setText(w);
-      try {
-        window.localStorage.setItem(LASTTEXT_KEY, w);
-      } catch {}
-
-      runAnalyze(w);
-    };
-
-    window.addEventListener("wordSearch", handler);
-    return () => window.removeEventListener("wordSearch", handler);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [uiLang, LASTTEXT_KEY]);
+  }, [history, HISTORY_KEY]);
 
-  // 輸入框變動
-  const handleTextChange = (value) => {
-    setText(value);
-    try {
-      window.localStorage.setItem(LASTTEXT_KEY, value);
-    } catch {}
+  // ✅ handleTextChange：輸入時同步更新 text，並重置 index
+  const handleTextChange = (v) => {
+    setText(v);
+    setHistoryIndex(-1);
   };
 
-  // 呼叫後端 /api/analyze
-  const runAnalyze = async (inputText) => {
-    const trimmed = (inputText || "").trim();
-    if (!trimmed) return;
+  // ✅ 取得下一個 index（避免超界）
+  const clamp = (n, min, max) => Math.max(min, Math.min(max, n));
+
+  /* =========================================================
+   * Phase 4 修正：API 回應解析（避免白畫面）
+   * - apiFetch 回傳的是原生 Response
+   * - 若直接 setResult(Response) / 直接讀 res.items，render 會拿不到資料而噴錯
+   * ========================================================= */
+
+  /**
+   * 功能：檢查 API 是否成功（Production 排查用）
+   * - 若 res.ok = false，嘗試讀取錯誤 body（文字/JSON）並丟出 Error
+   */
+  const assertApiOk = async (res, { scope = "api", action = "unknown" } = {}) => {
+    if (!res) {
+      const msg = `[${scope}] ${action} response is null`;
+      throw new Error(msg);
+    }
+    if (res.ok) return;
+
+    let detail = "";
+    try {
+      const ct = res.headers?.get?.("content-type") || "";
+      if (ct.includes("application/json")) {
+        const j = await res.json();
+        detail = JSON.stringify(j);
+      } else {
+        detail = await res.text();
+      }
+    } catch {
+      detail = "";
+    }
+
+    const msg = `[${scope}] ${action} failed: ${res.status} ${res.statusText} ${detail ? `| ${detail}` : ""}`;
+    throw new Error(msg);
+  };
+
+  /**
+   * 功能：安全解析 JSON（Production 排查用）
+   * - 若非 JSON 或空 body，回傳 null（避免 json() 直接 throw 造成 UI 白畫面）
+   */
+  const readApiJson = async (res, { scope = "api", action = "unknown" } = {}) => {
+    if (!res) return null;
+    const ct = res.headers?.get?.("content-type") || "";
+    try {
+      if (ct.includes("application/json")) return await res.json();
+      // 若後端回 text/json 不一致，這裡不硬轉，避免 throw
+      const txt = await res.text();
+      if (!txt) return null;
+      try {
+        return JSON.parse(txt);
+      } catch {
+        return null;
+      }
+    } catch (e) {
+      const msg = `[${scope}] ${action} parse json failed: ${String(e?.message || e)}`;
+      throw new Error(msg);
+    }
+  };
+
+  // ✅ 查詢：Analyze（字典）
+  const handleAnalyze = async () => {
+    const q = (text || "").trim();
+    if (!q) return;
 
     setLoading(true);
-
     try {
-      const resp = await apiFetch("/api/analyze", {
+      // ✅ Production 排查：記錄本次 analyze 開始
+      setAnalyzeInitStatus((s) => ({
+        ...s,
+        lastAction: "handleAnalyze",
+        lastError: null,
+        lastEndpoint: "/api/analyze",
+      }));
+
+      // ✅ 修正：後端既有分析入口為 POST /api/analyze（避免誤打 /api/dictionary/analyze 造成 404）
+      const res = await apiFetch(`/api/analyze`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          text: trimmed,
-          explainLang: uiLang,
-        }),
+        body: JSON.stringify({ text: q, uiLang }),
       });
 
-      const data = await resp.json();
-
-      // ✅ 句子/標點符號錯誤：顯示 alert，且本次查詢不列入紀錄、不覆寫畫面
-      // 後端目前會在 HTTP 400 回傳：{ error: "<message>" }
-      const isNonSentenceOnlyError =
-        !resp.ok &&
-        typeof data?.error === "string" &&
-        data.error.includes("目前只支援") &&
-        data.error.includes("非句子");
-
-      if (isNonSentenceOnlyError) {
-        alert(t("app.errors.nonSentenceOnly"));
-        return;
-      }
-
-      // ✅✅✅ 本輪唯一核心修改：歷史去重 key 一律使用「使用者輸入」
-      // 這樣 Kind / Kinder 不會互相覆寫搜尋框
-      const nextKey = trimmed.toLowerCase();
-
-      const getEntryKey = (entry) => {
-        return ((entry?.text || "") + "").trim().toLowerCase();
-      };
-
-      const foundIndex = history.findIndex((entry) => {
-        return getEntryKey(entry) === nextKey;
+      // ✅ Phase 4 修正：先確認 res.ok，再解析 JSON
+      await assertApiOk(res, { scope: "analyze", action: "POST /api/analyze" });
+      const data = await readApiJson(res, {
+        scope: "analyze",
+        action: "POST /api/analyze",
       });
 
-      if (foundIndex >= 0) {
-        setHistory((prev) => {
-          if (!Array.isArray(prev) || prev.length === 0) return prev;
-          if (foundIndex < 0 || foundIndex >= prev.length) return prev;
-          const next = prev.slice();
-          next[foundIndex] = { ...next[foundIndex], result: data };
-          return next;
-        });
-        setHistoryIndex(foundIndex);
-        setResult(data);
+      // ✅ Production 排查：記錄本次 analyze 成功
+      setAnalyzeInitStatus((s) => ({
+        ...s,
+        ready: true,
+        lastFetchAt: new Date().toISOString(),
+        lastError: null,
+        lastEndpoint: "/api/analyze",
+      }));
 
-        // ✅ 不再 setText(entryText)（避免覆寫使用者輸入）
-        setShowRaw(false);
-        return;
-      }
-
+      // 若後端回錯誤（例如句子模式/標點），交給 UI 顯示 alert（此段保持原設計）
+      // ✅ Phase 4 修正：setResult 必須是 JSON 物件，而不是 Response
       setResult(data);
-      setShowRaw(false);
 
+      // ✅ 歷史去重與 normalize（這段保持原設計）
+      const headword = (
+        data?.dictionary?.baseForm ||
+        data?.dictionary?.word ||
+        q
+      ).trim();
+      const canonicalPos = (
+        data?.dictionary?.canonicalPos ||
+        data?.dictionary?.partOfSpeech ||
+        ""
+      ).trim();
+
+      const key = `${headword}::${canonicalPos}`;
       setHistory((prev) => {
-        let base = prev;
-        if (historyIndex >= 0 && historyIndex < prev.length - 1) {
-          base = prev.slice(0, historyIndex + 1);
-        }
-        const next = [...base, { text: trimmed, result: data }];
-        if (next.length > 10) next.shift();
-        return next;
+        const next = prev.filter((x) => (x?.key || "") !== key);
+        return [
+          {
+            key,
+            text: q,
+            headword,
+            canonicalPos,
+            createdAt: new Date().toISOString(),
+          },
+          ...next,
+        ].slice(0, 10);
       });
-
-      setHistoryIndex((prev) => {
-        const afterUpdateLength =
-          historyIndex >= 0 && historyIndex < history.length - 1
-            ? historyIndex + 2
-            : history.length + 1;
-        return Math.min(afterUpdateLength - 1, 9);
-      });
-    } catch (err) {
-      console.error("Error calling /api/analyze:", err);
-      alert(t("app.errors.backendUnavailable"));
+      setHistoryIndex(0);
+    } catch (e) {
+      // ✅ Production 排查：記錄本次 analyze 失敗
+      setAnalyzeInitStatus((s) => ({
+        ...s,
+        lastError: String(e?.message || e),
+        lastEndpoint: "/api/analyze",
+      }));
+      throw e;
     } finally {
       setLoading(false);
     }
   };
 
-  const handleAnalyze = () => runAnalyze(text);
-
-  const handleWordClick = (word) => {
-    setText(word);
-    runAnalyze(word);
+  // ✅ 歷史上一頁/下一頁（此段保持原設計）
+  const goPrevHistory = () => {
+    if (!history.length) return;
+    const nextIndex = clamp(historyIndex + 1, 0, history.length - 1);
+    setHistoryIndex(nextIndex);
+    const item = history[nextIndex];
+    if (item?.text) setText(item.text);
+  };
+  const goNextHistory = () => {
+    if (!history.length) return;
+    const nextIndex = clamp(historyIndex - 1, -1, history.length - 1);
+    setHistoryIndex(nextIndex);
+    if (nextIndex === -1) return;
+    const item = history[nextIndex];
+    if (item?.text) setText(item.text);
   };
 
-  const handleToggleRaw = () => setShowRaw((prev) => !prev);
+  // ✅ legacy 遷移：WORDS / UILANG / THEME / LASTTEXT（此段保持原設計）
+  useEffect(() => {
+    // ✅ 先搬 WORDS（若 scoped 沒有、legacy 有）
+    try {
+      const scopedText = window.localStorage.getItem(WORDS_KEY);
+      const legacyText = window.localStorage.getItem(WORDS_KEY_LEGACY);
+      if (!scopedText && legacyText) {
+        window.localStorage.setItem(WORDS_KEY, legacyText);
+      }
+    } catch {}
 
-  const handlePrevResult = () => {
-    if (historyIndex <= 0) return;
-    const newIndex = historyIndex - 1;
-    const entry = history[newIndex];
-    if (!entry) return;
-    setHistoryIndex(newIndex);
-    setResult(entry.result);
-    setText(entry.text);
-    setShowRaw(false);
-  };
+    // ✅ 其他 key：只在 scoped 沒有時搬 legacy
+    try {
+      const legacyLang = window.localStorage.getItem(UILANG_KEY_LEGACY);
+      const scopedLang = window.localStorage.getItem(UILANG_KEY);
+      if (!scopedLang && legacyLang)
+        window.localStorage.setItem(UILANG_KEY, legacyLang);
+    } catch {}
+    try {
+      const legacyTheme = window.localStorage.getItem(THEME_KEY_LEGACY);
+      const scopedTheme = window.localStorage.getItem(THEME_KEY);
+      if (!scopedTheme && legacyTheme)
+        window.localStorage.setItem(THEME_KEY, legacyTheme);
+    } catch {}
+    try {
+      const legacyLast = window.localStorage.getItem(LASTTEXT_KEY_LEGACY);
+      const scopedLast = window.localStorage.getItem(LASTTEXT_KEY);
+      if (!scopedLast && legacyLast)
+        window.localStorage.setItem(LASTTEXT_KEY, legacyLast);
+    } catch {}
 
-  const handleNextResult = () => {
-    if (historyIndex < 0 || historyIndex >= history.length - 1) return;
-    const newIndex = historyIndex + 1;
-    const entry = history[newIndex];
-    if (!entry) return;
-    setHistoryIndex(newIndex);
-    setResult(entry.result);
-    setText(entry.text);
-    setShowRaw(false);
-  };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [WORDS_KEY, UILANG_KEY, THEME_KEY, LASTTEXT_KEY]);
 
-  const canGoPrev = historyIndex > 0;
-  const canGoNext = historyIndex >= 0 && historyIndex < history.length - 1;
-
-  // 單字庫 normalize
-  const normalizeWordLibrary = (raw) => {
-    if (!raw) return [];
-    let list = [];
-    if (Array.isArray(raw)) list = raw;
-    else if (typeof raw === "object") list = Object.values(raw);
-    else return [];
-
-    const cleaned = list
-      .map((x) => {
-        if (!x || typeof x !== "object") return null;
-        const headword = (x.headword || x.word || x.text || "").trim();
-        const canonicalPos = (
-          x.canonicalPos ||
-          x.pos ||
-          x.partOfSpeech ||
-          ""
-        ).trim();
-        const createdAt = x.createdAt || x.created_at || x.created || null;
-        const userId = x.userId || x.user_id || "";
-        if (!headword) return null;
-        return { headword, canonicalPos, createdAt, userId };
-      })
-      .filter(Boolean);
-
-    cleaned.sort((a, b) => {
-      const ta = a.createdAt ? Date.parse(a.createdAt) : 0;
-      const tb = b.createdAt ? Date.parse(b.createdAt) : 0;
-      return tb - ta;
-    });
-
-    return cleaned;
-  };
-
-  // ✅✅✅ 本輪唯一修改：scoped 無資料時 fallback legacy，並把 legacy 補回 scoped
+  // ✅ 讀取單字庫（先 scoped，沒有就 fallback legacy）
   const readWordLibraryRaw = () => {
     try {
       // 1) scoped
@@ -519,11 +459,59 @@ function AppInner() {
     }
   };
 
-  // ✅ 讀取單字庫（scoped，若沒有就 fallback legacy），再 normalize 成陣列
+  // 單字庫 normalize
+  const normalizeWordLibrary = (raw) => {
+    if (!raw) return [];
+    let list = [];
+    if (Array.isArray(raw)) list = raw;
+    else if (typeof raw === "object") list = Object.values(raw);
+    else return [];
+
+    const cleaned = list
+      .map((x) => {
+        if (!x || typeof x !== "object") return null;
+        const headword = (x.headword || x.word || x.text || "").trim();
+        const canonicalPos = (
+          x.canonicalPos ||
+          x.pos ||
+          x.canonical_pos ||
+          x.canonicalPOS ||
+          ""
+        ).trim();
+        if (!headword) return null;
+
+        return {
+          headword,
+          canonicalPos,
+          createdAt: x.createdAt || x.created_at || x.time || "",
+          userId: x.userId || x.user_id || "",
+        };
+      })
+      .filter(Boolean);
+
+    // ✅ 去重（headword + canonicalPos）
+    const seen = new Set();
+    const uniq = [];
+    for (const it of cleaned) {
+      const key = `${it.headword}::${it.canonicalPos}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      uniq.push(it);
+    }
+    return uniq;
+  };
+
+  // ✅ loadLibrary：讀出 localStorage 並更新 state
   const loadLibrary = () => {
+    // Phase 4：若啟用 API 單字庫，避免 legacy localStorage 載入覆蓋 DB 結果（legacy code 仍保留供追溯）
+    if (USE_API_LIBRARY) return;
+
     const raw = readWordLibraryRaw();
     const list = normalizeWordLibrary(raw);
-    setLibraryItems(list);
+
+    // ✅ 清掉舊 userId（避免不同 bucket 汙染）
+    const sanitized = list.map((x) => ({ ...x, userId: authUserId }));
+    setLibraryItems(sanitized);
   };
 
   useEffect(() => {
@@ -538,6 +526,168 @@ function AppInner() {
     } catch {}
   };
 
+  /* =========================================================
+   * Phase 4：DB 單字庫（/api/library）並存模式
+   * - 保留 legacy localStorage function（不刪）
+   * - 新增 API 路徑，並由 wrapper（handleToggleFavorite）決定使用哪條路徑
+   * ========================================================= */
+
+  /**
+   * 功能：從 entry 取出收藏 key（headword + canonicalPos）
+   * - 只存原型（你已定義收藏只存原型）
+   */
+  const getFavoriteKey = (entry) => {
+    const headword = (entry?.headword || "").trim();
+    const canonicalPos = (entry?.canonicalPos || "").trim();
+    return { headword, canonicalPos };
+  };
+
+  /** 功能：讀取單字庫（分頁，Phase 2：limit 生效，不做全量） */
+  const loadLibraryFromApi = async ({ limit = 50, cursor = null } = {}) => {
+    if (!authUserId) return;
+
+    try {
+      const qs = new URLSearchParams();
+      qs.set("limit", String(limit));
+      if (cursor) qs.set("cursor", cursor);
+
+      setLibraryInitStatus((s) => ({
+        ...s,
+        lastAction: "loadLibraryFromApi",
+        lastError: null,
+      }));
+
+      const res = await apiFetch(`/api/library?${qs.toString()}`);
+
+      // ✅ Phase 4 修正：先確認 res.ok，再解析 JSON
+      await assertApiOk(res, { scope: "library", action: "GET /api/library" });
+      const data = await readApiJson(res, {
+        scope: "library",
+        action: "GET /api/library",
+      });
+
+      const items = Array.isArray(data?.items) ? data.items : [];
+      const nextCursor = data?.nextCursor ?? null;
+
+      setLibraryItems(items);
+      setLibraryCursor(nextCursor);
+
+      setLibraryInitStatus((s) => ({
+        ...s,
+        ready: true,
+        lastFetchAt: new Date().toISOString(),
+        lastError: null,
+      }));
+    } catch (e) {
+      setLibraryInitStatus((s) => ({
+        ...s,
+        lastError: String(e?.message || e),
+      }));
+    }
+  };
+
+  /** 功能：新增收藏（upsert） */
+  const addFavoriteViaApi = async ({ headword, canonicalPos }) => {
+    if (!authUserId) return;
+
+    setLibraryInitStatus((s) => ({
+      ...s,
+      lastAction: "addFavoriteViaApi",
+      lastError: null,
+    }));
+
+    const res = await apiFetch(`/api/library`, {
+      method: "POST",
+      body: JSON.stringify({ headword, canonicalPos }),
+    });
+
+    // ✅ Phase 4 修正：避免後端錯誤時靜默
+    await assertApiOk(res, { scope: "library", action: "POST /api/library" });
+    await readApiJson(res, { scope: "library", action: "POST /api/library" });
+  };
+
+  /** 功能：取消收藏 */
+  const removeFavoriteViaApi = async ({ headword, canonicalPos }) => {
+    if (!authUserId) return;
+
+    setLibraryInitStatus((s) => ({
+      ...s,
+      lastAction: "removeFavoriteViaApi",
+      lastError: null,
+    }));
+
+    const res = await apiFetch(`/api/library`, {
+      method: "DELETE",
+      body: JSON.stringify({ headword, canonicalPos }),
+    });
+
+    // ✅ Phase 4 修正：避免後端錯誤時靜默
+    await assertApiOk(res, { scope: "library", action: "DELETE /api/library" });
+    await readApiJson(res, {
+      scope: "library",
+      action: "DELETE /api/library",
+    });
+  };
+
+  /**
+   * 功能：API 版收藏切換（DB 唯一真相）
+   * - 行為：存在則 DELETE，不存在則 POST
+   * - 為了維持狀態一致，操作後直接 reload 第一頁（Phase 4 先用最穩的方式）
+   */
+  const toggleFavoriteViaApi = async (entry) => {
+    if (!authUserId) return;
+    const { headword, canonicalPos } = getFavoriteKey(entry);
+    if (!headword) return;
+
+    const exists = libraryItems.some((x) => {
+      return (
+        (x?.headword || "").trim() === headword &&
+        ((x?.canonical_pos ?? x?.canonicalPos) || "").trim() === canonicalPos
+      );
+    });
+
+    try {
+      if (exists) {
+        await removeFavoriteViaApi({ headword, canonicalPos });
+      } else {
+        await addFavoriteViaApi({ headword, canonicalPos });
+      }
+
+      // ✅ 以 DB 為準：操作後重新載入第一頁（limit 生效）
+      await loadLibraryFromApi({ limit: 50 });
+    } catch (e) {
+      setLibraryInitStatus((s) => ({
+        ...s,
+        lastError: String(e?.message || e),
+      }));
+    }
+  };
+
+  /**
+   * 功能：收藏切換 wrapper（並存模式）
+   * - USE_API_LIBRARY = true：走 DB（/api/library）
+   * - USE_API_LIBRARY = false：走 legacy localStorage（toggleFavorite）
+   */
+  const handleToggleFavorite = (entry) => {
+    if (!authUserId) return;
+    if (USE_API_LIBRARY) {
+      // 不 await：保持 UI 行為與 legacy 同步（異步更新由 API 自己 refresh）
+      toggleFavoriteViaApi(entry);
+      return;
+    }
+    toggleFavorite(entry);
+  };
+
+  // ✅ Phase 4：切到 library view 且已登入時，從 DB 載入單字庫（不動既有 legacy useEffect）
+  useEffect(() => {
+    if (!USE_API_LIBRARY) return;
+    if (!authUserId) return;
+    if (view !== "library") return;
+
+    loadLibraryFromApi({ limit: 50 });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [USE_API_LIBRARY, authUserId, view]);
+
   // ✅ isFavorited：WordCard 顯示用（以 lemma/headword 來對照）
   const isFavorited = (entry) => {
     const headword = (entry?.headword || "").trim();
@@ -547,12 +697,13 @@ function AppInner() {
     return libraryItems.some((x) => {
       return (
         (x?.headword || "").trim() === headword &&
-        (x?.canonicalPos || "").trim() === canonicalPos
+        ((x?.canonical_pos ?? x?.canonicalPos) || "").trim() === canonicalPos
       );
     });
   };
 
   // ✅ toggleFavorite：統一收藏/取消（只存原型）
+  // DEPRECATED (2025-12-17): Phase 4 啟用 USE_API_LIBRARY 時，UI 應改呼叫 handleToggleFavorite（wrapper），避免直接走 localStorage
   const toggleFavorite = (entry) => {
     if (!authUserId) return;
 
@@ -561,11 +712,12 @@ function AppInner() {
     if (!headword) return;
 
     setLibraryItems((prev) => {
-      const existsIndex = prev.findIndex(
-        (x) =>
+      const existsIndex = prev.findIndex((x) => {
+        return (
           (x?.headword || "").trim() === headword &&
-          (x?.canonicalPos || "").trim() === canonicalPos
-      );
+          ((x?.canonical_pos ?? x?.canonicalPos) || "").trim() === canonicalPos
+        );
+      });
 
       let next = [];
       if (existsIndex >= 0) {
@@ -597,23 +749,36 @@ function AppInner() {
       view={view}
       onViewChange={setView}
       uiText={currentUiText}
-      userBucket={userBucket}
+      t={t}
+      loading={loading}
+      history={history}
+      historyIndex={historyIndex}
+      onPrevHistory={goPrevHistory}
+      onNextHistory={goNextHistory}
+      canFavorite={!!authUserId}
     >
       {view === "library" ? (
         <WordLibraryPanel
           uiText={currentUiText}
-          uiLang={uiLang}
           items={libraryItems}
-          onRemove={(item) => toggleFavorite(item)}
-          canFavorite={!!authUserId}
+          onRemove={(item) => handleToggleFavorite(item)}
+          onReview={(item) => {
+            const hw = (item?.headword || "").trim();
+            if (hw) {
+              setText(hw);
+              setView("search");
+            }
+          }}
         />
       ) : view === "test" ? (
         <TestModePanel
           uiText={currentUiText}
+          apiBase={API_BASE}
+          userId={authUserId}
           uiLang={uiLang}
-          canFavorite={!!authUserId}
-          isFavorite={isFavorited}
-          onToggleFavorite={toggleFavorite}
+          isFavorited={isFavorited}
+          onToggleFavorite={handleToggleFavorite}
+          libraryItems={libraryItems}
           testCard={testCard}
           setTestCard={setTestCard}
           testMetaMap={testMetaMap}
@@ -642,16 +807,9 @@ function AppInner() {
             uiLang={uiLang}
             WordCard={WordCard}
             GrammarCard={GrammarCard}
-            onWordClick={handleWordClick}
-            canPrev={canGoPrev}
-            canNext={canGoNext}
-            onPrev={handlePrevResult}
-            onNext={handleNextResult}
-            historyIndex={historyIndex}
-            historyLength={history.length}
-            isFavorite={isFavorited}
+            isFavorited={isFavorited}
+            onToggleFavorite={handleToggleFavorite}
             canFavorite={!!authUserId}
-            onToggleFavorite={toggleFavorite}
           />
         </>
       )}

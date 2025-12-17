@@ -1,60 +1,120 @@
 // backend/src/clients/dictionaryClient.js
 
+/**
+ * 文件說明
+ * - 用途：封裝字典/例句/對話相關的 client 功能，供 routes/services 呼叫
+ * - 對外輸出：
+ *   1) lookupWord()：單字查詢（由 ./dictionaryLookup 提供）
+ *   2) generateExamples()：產生例句（由 ./dictionaryExamples 提供）
+ *   3) generateConversation()：連續對話產生器（本檔案實作）
+ *   4) getInitStatus()：回傳此模組的初始化狀態（Production 排障用）
+ *
+ * - 注意：
+ *   - 本模組不會輸出任何敏感金鑰內容（只回報「是否存在」與必要的設定值）
+ *   - 產生對話流程：
+ *     STEP 1：請 Groq 產生 4–6 句德文對話（每行一句，不要求 JSON）
+ *     STEP 2：再請 Groq 逐行產生對應母語翻譯（每行一句）
+ */
+
 const { lookupWord } = require("./dictionaryLookup");
 const { generateExamples } = require("./dictionaryExamples");
 const groqClient = require("./groqClient");
 const { logLLMUsage } = require("../utils/usageLogger");
 
+// =============================
+// 功能初始化狀態（Production 排障用）
+// =============================
+
 /**
- * 連續對話產生器
- * - STEP 1：請 Groq 產生 4–6 句德文對話（每行一句，不要求 JSON）
- * - STEP 2：再請 Groq 產生對應母語翻譯（每行一句）
- * - 前端使用格式：Array<{ de: string, translation: string }>
- *
- * ✅ 本輪只新增：把 Groq 回傳的 usage 寫入 logLLMUsage（真實 tokens）
- * ✅ 參數相容：新增 userId/email/requestId 不會影響既有呼叫
+ * 中文功能說明：取得 Groq 對話模型設定（有 fallback）
  */
-async function generateConversation({
-  sentence,
-  explainLang,
-
-  // ✅ 相容擴充：若 route 有傳就能做 user 切分；沒傳也不影響
-  userId = "",
-  email = "",
-  requestId = "",
-} = {}) {
-  console.log("\n[conversation] generateConversation START", {
-    sentence,
-    explainLang,
-  });
-
-  const baseSentence =
-    typeof sentence === "string" && sentence.trim()
-      ? sentence.trim()
-      : "Lass uns ein kurzes Beispielgespräch führen.";
-
-  const uiLang = explainLang || "zh-TW";
-
-  const model =
+function resolveConversationModel() {
+  return (
     process.env.GROQ_CONVERSATION_MODEL ||
     process.env.GROQ_DEFAULT_MODEL ||
-    "llama-3.1-8b-instant";
+    "llama-3.1-8b-instant"
+  );
+}
 
-  // ========= 小工具：拆行、清除編號 =========
-  const splitLines = (text) =>
-    String(text)
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean);
+/**
+ * 中文功能說明：建立此模組的初始化狀態快照（不包含敏感資訊）
+ */
+function buildInitState() {
+  const model = resolveConversationModel();
 
-  const stripLeadingNumber = (line) =>
-    line
-      // 去掉前面像「1. 」「1) 」「- 」「• 」這種東西
-      .replace(/^[-•*]?\s*\d+[\.\):]\s*/, "")
-      .replace(/^[-•*]\s+/, "")
-      .trim();
+  return {
+    module: "backend/src/clients/dictionaryClient.js",
+    provider: "groq",
+    model,
+    env: {
+      hasGroqApiKey: Boolean(process.env.GROQ_API_KEY),
+      hasGroqDefaultModel: Boolean(process.env.GROQ_DEFAULT_MODEL),
+      hasGroqConversationModel: Boolean(process.env.GROQ_CONVERSATION_MODEL),
+    },
+    runtime: {
+      nodeEnv: process.env.NODE_ENV || "",
+      hasGroqClient:
+        Boolean(groqClient) &&
+        Boolean(groqClient.chat) &&
+        Boolean(groqClient.chat.completions) &&
+        typeof groqClient.chat.completions.create === "function",
+      hasUsageLogger: typeof logLLMUsage === "function",
+    },
+    timestamp: new Date().toISOString(),
+  };
+}
 
-  // ========= STEP 1：產生德文對話 =========
+const __initState = buildInitState();
+
+/**
+ * 中文功能說明：讓外部可以讀取初始化狀態（排障用）
+ * - 不回傳任何 API key 內容
+ */
+function getInitStatus() {
+  // 每次呼叫回傳「最新時間戳」，其餘以初始化快照為主
+  return { ...__initState, timestamp: new Date().toISOString() };
+}
+
+// 若你想在 production 立即看到狀態，可用環境變數開啟（避免平常噪音）
+if (process.env.DEBUG_INIT_STATUS === "1") {
+  console.log("[dictionaryClient] initStatus =", getInitStatus());
+}
+
+// =============================
+// 小工具（模組化）
+// =============================
+
+/**
+ * 中文功能說明：安全 trim 字串，並提供 fallback
+ */
+function normalizeText(input, fallback) {
+  return typeof input === "string" && input.trim() ? input.trim() : fallback;
+}
+
+/**
+ * 中文功能說明：把文字拆成多行（去除空行）
+ */
+function splitLines(text) {
+  return String(text)
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+/**
+ * 中文功能說明：清掉模型可能回傳的行首編號/符號（例如 1. / 1) / - / •）
+ */
+function stripLeadingNumber(line) {
+  return String(line)
+    .replace(/^[-•*]?\s*\d+[\.\):]\s*/, "")
+    .replace(/^[-•*]\s+/, "")
+    .trim();
+}
+
+/**
+ * 中文功能說明：依 UI 語言取得 STEP 1（德文對話）的 system prompt
+ */
+function getDialogSystem(uiLang) {
   const dialogSystemByLang = {
     "zh-TW":
       "你是一位幫助德文學習者的助手。使用 A2 程度、自然口語的德文，根據給定句子，產生 4 到 6 句『連續對話』。請注意：\n" +
@@ -77,83 +137,16 @@ async function generateConversation({
       "Regeln:\n" +
       "1. Jeder Beitrag steht in einer eigenen Zeile.\n" +
       "2. Keine Sprechernamen.\n" +
-      "3. Keine Übersetzungen, keine Erklärungen, KEIN JSON – nur die deutschen Sätze.",
+      "3. Keine Übersetzungen, keine Erklärungen, KEIN JSON – nur die deutschen Sätze。",
   };
 
-  const dialogSystem = dialogSystemByLang[uiLang] || dialogSystemByLang.en;
+  return dialogSystemByLang[uiLang] || dialogSystemByLang.en;
+}
 
-  let germanTurns = [];
-
-  try {
-    const completion = await groqClient.chat.completions.create({
-      model,
-      temperature: 0.6,
-      max_tokens: 400,
-      messages: [
-        { role: "system", content: dialogSystem },
-        {
-          role: "user",
-          content:
-            "Ausgangssatz:\n" +
-            baseSentence +
-            "\n\nBitte gib NUR die 4–6 deutschen Sätze aus.",
-        },
-      ],
-    });
-
-    // ✅ 真實 tokens：STEP 1（德文對話）
-    if (completion && completion.usage) {
-      logLLMUsage({
-        endpoint: "/api/conversation/generate",
-        model,
-        provider: "groq",
-        usage: completion.usage,
-        kind: "llm",
-        userId,
-        email,
-        requestId,
-      });
-    }
-
-    const raw = completion?.choices?.[0]?.message?.content || "";
-    console.log("[conversation] RAW german response =", raw);
-
-    let lines = splitLines(raw).map(stripLeadingNumber);
-
-    // 過濾掉超奇怪的行（只剩一兩個字母之類）
-    lines = lines.filter((line) => line.split(/\s+/).length >= 3);
-
-    // 最多只保留 6 句，避免太肥
-    if (lines.length > 6) lines = lines.slice(0, 6);
-
-    if (lines.length === 0) {
-      lines = [
-        baseSentence,
-        "Echt? Erzähl mir ein bisschen mehr dazu.",
-        "Klingt interessant, so etwas habe ich noch nicht erlebt.",
-        "Lass uns später noch weiter darüber sprechen.",
-      ];
-    }
-
-    germanTurns = lines;
-  } catch (err) {
-    console.error("[conversation] Groq error on german dialog:", err);
-    germanTurns = [
-      baseSentence,
-      "Echt? Erzähl mir mehr.",
-      "Ja, das kenne ich gut.",
-      "Lass uns später noch darüber sprechen.",
-    ];
-  }
-
-  console.log("[conversation] germanTurns =", germanTurns);
-
-  let finalTurns = germanTurns.map((de) => ({
-    de,
-    translation: "",
-  }));
-
-  // ========= STEP 2：產生對應翻譯 =========
+/**
+ * 中文功能說明：依 UI 語言取得 STEP 2（翻譯）的 system prompt
+ */
+function getTranslationSystem(uiLang) {
   const translationSystemByLang = {
     "zh-TW":
       "你會收到多行德文對話。請逐行翻譯成『繁體中文』，輸出格式規則：\n" +
@@ -176,58 +169,204 @@ async function generateConversation({
       "Ausgaberichtlinien:\n" +
       "1. Eine Umschreibung pro Zeile, in derselben Reihenfolge.\n" +
       "2. Keine Nummerierung, keine Anführungszeichen.\n" +
-      "3. Keine zusätzlichen Erklärungen – nur diese Zeilen.",
+      "3. Keine zusätzlichen Erklärungen – nur diese Zeilen。",
   };
 
-  const translationSystem =
-    translationSystemByLang[uiLang] || translationSystemByLang.en;
+  return translationSystemByLang[uiLang] || translationSystemByLang.en;
+}
 
+/**
+ * 中文功能說明：呼叫 Groq chat completion（集中管理參數，方便排障）
+ */
+async function callGroqChat({
+  model,
+  temperature,
+  maxTokens,
+  systemPrompt,
+  userPrompt,
+}) {
+  return groqClient.chat.completions.create({
+    model,
+    temperature,
+    max_tokens: maxTokens,
+    messages: [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt },
+    ],
+  });
+}
+
+/**
+ * 中文功能說明：安全寫入 tokens 使用量（若 completion.usage 存在）
+ */
+function safeLogUsage({
+  completion,
+  endpoint,
+  model,
+  userId,
+  email,
+  requestId,
+}) {
+  if (!completion || !completion.usage) return;
+
+  logLLMUsage({
+    endpoint,
+    model,
+    provider: "groq",
+    usage: completion.usage,
+    kind: "llm",
+    userId,
+    email,
+    requestId,
+  });
+}
+
+/**
+ * 中文功能說明：把模型回傳整理成「最多 6 句」且看起來像句子的德文對話行
+ */
+function normalizeGermanTurns(raw, baseSentence) {
+  let lines = splitLines(raw).map(stripLeadingNumber);
+
+  // 過濾掉超奇怪的行（只剩一兩個字母之類）
+  lines = lines.filter((line) => line.split(/\s+/).length >= 3);
+
+  // 最多只保留 6 句，避免太肥
+  if (lines.length > 6) lines = lines.slice(0, 6);
+
+  // 兜底：模型回傳太爛或空的情況
+  if (lines.length === 0) {
+    lines = [
+      baseSentence,
+      "Echt? Erzähl mir ein bisschen mehr dazu.",
+      "Klingt interessant, so etwas habe ich noch nicht erlebt.",
+      "Lass uns später noch weiter darüber sprechen.",
+    ];
+  }
+
+  return lines;
+}
+
+/**
+ * 中文功能說明：把翻譯行數對齊德文行數（多就裁、少就補空字串）
+ */
+function alignTranslations(translations, targetLen) {
+  let lines = Array.isArray(translations) ? translations : [];
+  if (lines.length > targetLen) lines = lines.slice(0, targetLen);
+  while (lines.length < targetLen) lines.push("");
+  return lines;
+}
+
+// =============================
+// 主要功能：連續對話產生器
+// =============================
+
+/**
+ * 中文功能說明：產生 4–6 句德文對話 + 對應翻譯
+ * - 輸入：
+ *   - sentence：string（基礎句）
+ *   - explainLang：UI 語言（zh-TW / zh-CN / en / de）
+ *   - userId/email/requestId：可選，用於 tokens log 的切分（不影響既有呼叫）
+ * - 輸出：Array<{ de: string, translation: string }>
+ */
+async function generateConversation({
+  sentence,
+  explainLang,
+
+  // ✅ 相容擴充：若 route 有傳就能做 user 切分；沒傳也不影響
+  userId = "",
+  email = "",
+  requestId = "",
+} = {}) {
+  console.log("\n[conversation] generateConversation START", {
+    sentence,
+    explainLang,
+  });
+
+  const baseSentence = normalizeText(
+    sentence,
+    "Lass uns ein kurzes Beispielgespräch führen."
+  );
+
+  const uiLang = explainLang || "zh-TW";
+  const model = resolveConversationModel();
+
+  // ========= STEP 1：產生德文對話 =========
+  const dialogSystem = getDialogSystem(uiLang);
+  let germanTurns = [];
+
+  try {
+    const completion = await callGroqChat({
+      model,
+      temperature: 0.6,
+      maxTokens: 400,
+      systemPrompt: dialogSystem,
+      userPrompt:
+        "Ausgangssatz:\n" +
+        baseSentence +
+        "\n\nBitte gib NUR die 4–6 deutschen Sätze aus.",
+    });
+
+    // ✅ 真實 tokens：STEP 1（德文對話）
+    safeLogUsage({
+      completion,
+      endpoint: "/api/conversation/generate",
+      model,
+      userId,
+      email,
+      requestId,
+    });
+
+    const raw = completion?.choices?.[0]?.message?.content || "";
+    console.log("[conversation] RAW german response =", raw);
+
+    germanTurns = normalizeGermanTurns(raw, baseSentence);
+  } catch (err) {
+    console.error("[conversation] Groq error on german dialog:", err);
+    germanTurns = [
+      baseSentence,
+      "Echt? Erzähl mir mehr.",
+      "Ja, das kenne ich gut.",
+      "Lass uns später noch darüber sprechen.",
+    ];
+  }
+
+  console.log("[conversation] germanTurns =", germanTurns);
+
+  // 先建立預設輸出（避免翻譯失敗時沒有結構）
+  let finalTurns = germanTurns.map((de) => ({ de, translation: "" }));
+
+  // ========= STEP 2：產生對應翻譯 =========
+  const translationSystem = getTranslationSystem(uiLang);
   let translations = [];
 
   try {
-    const transCompletion = await groqClient.chat.completions.create({
+    const transCompletion = await callGroqChat({
       model,
       temperature: 0.3,
-      max_tokens: 400,
-      messages: [
-        { role: "system", content: translationSystem },
-        {
-          role: "user",
-          content:
-            "Bitte übersetze jede der folgenden Zeilen einzeln und gib NUR die Übersetzungen Zeile für Zeile aus:\n\n" +
-            germanTurns.join("\n"),
-        },
-      ],
+      maxTokens: 400,
+      systemPrompt: translationSystem,
+      userPrompt:
+        "Bitte übersetze jede der folgenden Zeilen einzeln und gib NUR die Übersetzungen Zeile für Zeile aus:\n\n" +
+        germanTurns.join("\n"),
     });
 
     // ✅ 真實 tokens：STEP 2（翻譯）
-    if (transCompletion && transCompletion.usage) {
-      logLLMUsage({
-        endpoint: "/api/conversation/translate",
-        model,
-        provider: "groq",
-        usage: transCompletion.usage,
-        kind: "llm",
-        userId,
-        email,
-        requestId,
-      });
-    }
+    safeLogUsage({
+      completion: transCompletion,
+      endpoint: "/api/conversation/translate",
+      model,
+      userId,
+      email,
+      requestId,
+    });
 
     const rawTrans = transCompletion?.choices?.[0]?.message?.content || "";
     console.log("[conversation] RAW translation response =", rawTrans);
 
-    let lines = splitLines(rawTrans).map(stripLeadingNumber);
-
-    // 如果行數比德文多，就裁掉；太少就以空字串補齊
-    if (lines.length > germanTurns.length) {
-      lines = lines.slice(0, germanTurns.length);
-    }
-    while (lines.length < germanTurns.length) {
-      lines.push("");
-    }
-
-    translations = lines;
+    translations = alignTranslations(
+      splitLines(rawTrans).map(stripLeadingNumber),
+      germanTurns.length
+    );
   } catch (err) {
     console.error("[conversation] Groq error on translation:", err);
     translations = [];
@@ -254,4 +393,7 @@ module.exports = {
   lookupWord,
   generateExamples,
   generateConversation,
+  getInitStatus,
 };
+
+// backend/src/clients/dictionaryClient.js
