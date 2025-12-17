@@ -1,4 +1,16 @@
 // frontend/src/components/word/WordCard.jsx
+/**
+ * 文件說明：
+ * - 本元件負責渲染「單字卡（WordCard）」：包含標題（WordHeader）、複數列、定義、例句、備註等區塊
+ * - 收藏（⭐）屬於 App 層狀態：WordCard 只負責組出「收藏 entry（headword + canonicalPos）」並往上回拋
+ *
+ * 異動紀錄（僅追加，不可刪除）：
+ * - 2025-12-17：
+ *   1) 修正收藏（⭐）點擊無反應：原本 FavoriteStar 直接呼叫 onToggleFavorite，未帶 entry，導致上層 handleToggleFavorite(entry) 收到 undefined 直接 return
+ *   2) 新增 favoriteInitStatus（Production 排查用）：提供目前 WordCard 收藏 entry 組裝結果與最後一次點擊紀錄
+ *   3) 保留既有收藏 props 與渲染結構，不改動其他未提及邏輯
+ */
+
 import { useMemo, useState } from "react";
 import WordHeader from "./header/WordHeader";
 import WordHeaderMainLinePlural from "./header/WordHeaderMainLinePlural";
@@ -28,6 +40,26 @@ function WordCard({
   const d = data.dictionary || {};
 
   const [senseIndex, setSenseIndex] = useState(0);
+
+  /**
+   * 功能：建立收藏初始化狀態（Production 排查用）
+   * - ready：是否已成功組出可用的 favoriteEntry
+   * - lastAction / lastClickAt / lastEntry：協助定位「點了沒反應」或 entry 組裝錯誤
+   */
+  const createFavoriteInitStatus = () => ({
+    module: "frontend/src/components/word/WordCard.jsx::favorite",
+    createdAt: new Date().toISOString(),
+    ready: false,
+    lastAction: null,
+    lastClickAt: null,
+    lastError: null,
+    lastEntry: null,
+  });
+
+  // ✅ 收藏初始化狀態（Production 排查用）
+  const [favoriteInitStatus, setFavoriteInitStatus] = useState(() =>
+    createFavoriteInitStatus()
+  );
 
   // ✅ WordCard 統一注入多國文字（唯一來源 uiText.js）
   const DEFAULT_LANG = "zh-TW";
@@ -293,6 +325,57 @@ function WordCard({
   const favDisabled =
     !!favoriteDisabled || typeof onToggleFavorite !== "function";
 
+  /**
+   * 功能：組裝收藏 entry（只存原型）
+   * - headword：優先採用 WordCard 當前顯示 headword（名詞已是原型）；若空則 fallback 到 lemmaFromDict 或 inputText
+   * - canonicalPos：使用 normalizePos 後的 canonicalPos（與 App.jsx handleToggleFavorite 對齊）
+   */
+  const buildFavoriteEntry = () => {
+    const hw = (headword || lemmaFromDict || inputText || "").trim();
+    const pos = (canonicalPos || "").trim();
+    return { headword: hw, canonicalPos: pos };
+  };
+
+  /**
+   * 功能：收藏點擊 handler（確保一定帶 entry 給上層）
+   * - 目的：修正「看得到星星但不能點」：上層 handleToggleFavorite(entry) 不再收到 undefined
+   * - 注意：這裡不做任何 auth/DB/localStorage 判斷，完全交由 App.jsx 管理
+   */
+  const handleFavoriteClick = () => {
+    const entry = buildFavoriteEntry();
+
+    // Production 排查：更新狀態
+    setFavoriteInitStatus((s) => ({
+      ...s,
+      lastAction: "handleFavoriteClick",
+      lastClickAt: new Date().toISOString(),
+      lastError: null,
+      lastEntry: entry,
+      ready: !!entry?.headword,
+    }));
+
+    // 若上層未提供 function，直接 return（保持既有 favDisabled 行為一致）
+    if (typeof onToggleFavorite !== "function") {
+      setFavoriteInitStatus((s) => ({
+        ...s,
+        lastError: "onToggleFavorite is not a function",
+      }));
+      return;
+    }
+
+    // 若 headword 空，不呼叫上層（避免上層直接 return，維持可追的 lastError）
+    if (!entry?.headword) {
+      setFavoriteInitStatus((s) => ({
+        ...s,
+        lastError: "favorite entry headword is empty",
+      }));
+      return;
+    }
+
+    // ✅ 關鍵修正：一定帶 entry
+    onToggleFavorite(entry);
+  };
+
   return (
     <div
       style={{
@@ -321,7 +404,7 @@ function WordCard({
         <FavoriteStar
           active={!!favoriteActive}
           disabled={favDisabled}
-          onClick={onToggleFavorite}
+          onClick={handleFavoriteClick}
           size={16}
           ariaLabel="-"
         />
