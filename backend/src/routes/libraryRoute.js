@@ -1,5 +1,4 @@
 // backend/src/routes/libraryRoute.js
-
 /**
  * 文件說明：
  * Library Route（收藏 / 單字庫）
@@ -10,8 +9,11 @@
  * 異動說明：
  * 1) 保留：GET /api/library（分頁，DB 唯一真相）
  * 2) 保留：POST /api/library（upsert 新增收藏）
- * 3) 新增：DELETE /api/library（取消收藏）
+ * 3) 保留：DELETE /api/library（取消收藏）
  * 4) 保留：/__init 初始化狀態（Production 問題排查）
+ * 5) 新增（2025-12-17）：
+ *    - 修正 decodeCursor 在「無 cursor」時誤判為 truthy，
+ *      導致第一頁資料被錯誤篩除的問題（僅新增防禦層，不改既有邏輯）
  *
  * 設計原則：
  * - DB 為唯一真相（source of truth）
@@ -85,6 +87,18 @@ function encodeCursor(createdAt, id) {
 }
 
 /**
+ * 【新增】功能：嚴格判斷 cursor 是否為「有效分頁游標」
+ * - 避免 {} / { createdAt: undefined } 被誤判為 truthy
+ * - 僅作防禦，不改既有 decodeCursor 與 buildPagedQuery
+ */
+function isValidCursor(cursor) {
+  if (!cursor) return false;
+  if (typeof cursor.createdAt !== "string") return false;
+  if (typeof cursor.id !== "number") return false;
+  return true;
+}
+
+/**
  * 功能：從 Authorization Bearer token 取得 userId
  * - guest 不允許
  */
@@ -114,7 +128,7 @@ function validateWordPayload(body) {
  * DB 操作封裝
  * ========================= */
 
-/** 功能：建立分頁查詢 */
+/** 功能：建立分頁查詢（既有邏輯，未修改） */
 function buildPagedQuery({ supabaseAdmin, userId, limit, cursor }) {
   let q = supabaseAdmin
     .from("user_words")
@@ -124,6 +138,7 @@ function buildPagedQuery({ supabaseAdmin, userId, limit, cursor }) {
     .order("id", { ascending: false })
     .limit(limit + 1);
 
+  // === 既有邏輯（保留）===
   if (cursor) {
     q = q.or(
       [
@@ -196,7 +211,12 @@ router.get("/", async (req, res, next) => {
     if (!userId) return res.status(401).json({ error: "Unauthorized" });
 
     const limit = parseLimit(req.query.limit);
-    const cursor = decodeCursor(req.query.cursor);
+
+    // === 原始 decode（保留）===
+    const rawCursor = decodeCursor(req.query.cursor);
+
+    // === 新增防禦層：僅在 cursor 完整時才視為有效 ===
+    const cursor = isValidCursor(rawCursor) ? rawCursor : null;
 
     const { data, error } = await buildPagedQuery({
       supabaseAdmin,

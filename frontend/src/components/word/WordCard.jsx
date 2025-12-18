@@ -32,7 +32,7 @@ function WordCard({
   onSpeak,
 
   // ✅ 收藏統一由 App.jsx 管理：WordCard 不再碰 auth/localStorage
-  favoriteActive = false,
+  favoriteActive,
   favoriteDisabled = false,
   onToggleFavorite,
 }) {

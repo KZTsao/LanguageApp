@@ -18,9 +18,7 @@ function ResultPanel({
   onNext,
   historyIndex,
   historyLength,
-
-  // ✅ NEW：由 App.jsx 傳入（ResultPanel 不解讀，只轉交）
-  isFavorite,        // (headword, canonicalPos) => boolean
+  isFavorited,        // (headword, canonicalPos) => boolean
   canFavorite,       // boolean（是否允許收藏，guest = false）
   onToggleFavorite,  // (headword, canonicalPos) => void
 }) {
@@ -88,7 +86,12 @@ function ResultPanel({
           }}
         >
           <div>
-            {historyIndex + 1} / {historyLength}
+            {historyLength > 0
+              ? historyIndex >= 0
+                ? historyLength - historyIndex
+                : historyLength
+              : 0}{" "}
+            / {historyLength}
           </div>
 
           <div style={{ display: "flex", gap: 8 }}>
@@ -197,7 +200,10 @@ function ResultPanel({
                 const headword =
                   d.baseForm || d.lemma || d.word || item.text || "";
                 const canonicalPos = d.partOfSpeech || "";
-
+                const entry = {
+                  headword,
+                  canonicalPos,
+                };
                 return (
                   <WordCard
                     key={idx}
@@ -209,8 +215,8 @@ function ResultPanel({
 
                     // ✅ 只轉交，不計算
                     favoriteActive={
-                      typeof isFavorite === "function"
-                        ? isFavorite(headword, canonicalPos)
+                      typeof isFavorited === "function"
+                        ? isFavorited(entry)
                         : false
                     }
                     favoriteDisabled={!canFavorite}
