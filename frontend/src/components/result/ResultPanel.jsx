@@ -1,4 +1,15 @@
 // frontend/src/components/result/ResultPanel.jsx
+/**
+ * 文件說明：
+ * - 本元件負責顯示查詢結果（WordCard/GrammarCard）與結果導覽（history 前後頁）
+ * - 本輪新增：在「前後頁箭頭旁邊」提供「清除當下回放紀錄」入口（由 App 傳入 handler）
+ *
+ * 異動紀錄（僅追加，不可刪除）：
+ * - 2025-12-18：
+ *   1) 新增 canClearHistory / onClearHistoryItem / clearHistoryLabel
+ *   2) 「點擊清除該筆紀錄」移到導覽列箭頭旁，低調樣式並支援多國
+ */
+
 import React from "react";
 import { callTTS } from "../../utils/ttsClient";
 
@@ -18,9 +29,17 @@ function ResultPanel({
   onNext,
   historyIndex,
   historyLength,
-  isFavorited,        // (headword, canonicalPos) => boolean
-  canFavorite,       // boolean（是否允許收藏，guest = false）
-  onToggleFavorite,  // (headword, canonicalPos) => void
+  isFavorited,
+  canFavorite,
+  onToggleFavorite,
+
+  // ✅ 新增：單字庫彈窗入口
+  onOpenLibrary,
+
+  // ✅ 新增：清除當下回放紀錄（由 App 管 state）
+  canClearHistory,
+  onClearHistoryItem,
+  clearHistoryLabel,
 }) {
   const t = uiText || {};
   const sections = t.sections || {};
@@ -66,6 +85,28 @@ function ResultPanel({
     }
   };
 
+  // ✅ 共用：導覽/工具按鈕樣式（比照既有 prev/next）
+  const navButtonStyle = {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    border: "1px solid var(--border-main)",
+    background: "var(--card-bg)",
+    color: "var(--text-main)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    cursor: "pointer",
+  };
+
+  // ✅ 低調清除文案（props > fallback）
+  const clearLabel =
+    (typeof clearHistoryLabel === "string" && clearHistoryLabel.trim()) ||
+    "點擊清除該筆紀錄";
+
+  const canClear =
+    !!canClearHistory && typeof onClearHistoryItem === "function";
+
   return (
     <div
       style={{
@@ -80,82 +121,138 @@ function ResultPanel({
           style={{
             display: "flex",
             alignItems: "center",
+            justifyContent: "space-between",
             fontSize: 12,
             color: "var(--text-muted)",
             gap: 12,
           }}
         >
-          <div>
-            {historyLength > 0
-              ? historyIndex >= 0
-                ? historyLength - historyIndex
-                : historyLength
-              : 0}{" "}
-            / {historyLength}
+          {/* 左側：頁碼 + 前後 */}
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <div>
+              {historyLength > 0
+                ? historyIndex >= 0
+                  ? historyLength - historyIndex
+                  : historyLength
+                : 0}{" "}
+              / {historyLength}
+            </div>
+
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <button
+                onClick={onPrev}
+                disabled={!canPrev}
+                aria-label="Previous result"
+                style={{
+                  ...navButtonStyle,
+                  cursor: canPrev ? "pointer" : "not-allowed",
+                  opacity: canPrev ? 1 : 0.4,
+                }}
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  width="16"
+                  height="16"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <polyline points="15 18 9 12 15 6" />
+                </svg>
+              </button>
+
+              <button
+                onClick={onNext}
+                disabled={!canNext}
+                aria-label="Next result"
+                style={{
+                  ...navButtonStyle,
+                  cursor: canNext ? "pointer" : "not-allowed",
+                  opacity: canNext ? 1 : 0.4,
+                }}
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  width="16"
+                  height="16"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <polyline points="9 6 15 12 9 18" />
+                </svg>
+              </button>
+
+              {/* ✅ 清除當下回放紀錄：放在箭頭旁邊（低調） */}
+              {canClear && (
+                <span
+                  role="button"
+                  tabIndex={0}
+                  onClick={onClearHistoryItem}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      onClearHistoryItem();
+                    }
+                  }}
+                  aria-label={clearLabel}
+                  title={clearLabel}
+                  style={{
+                    marginLeft: 6,
+                    opacity: 0.55,
+                    fontSize: 12,
+                    userSelect: "none",
+                    cursor: "pointer",
+                    textDecoration: "underline",
+                    textUnderlineOffset: 2,
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {clearLabel}
+                </span>
+              )}
+            </div>
           </div>
 
-          <div style={{ display: "flex", gap: 8 }}>
+          {/* 右側：單字庫 icon（最右邊） */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <button
-              onClick={onPrev}
-              disabled={!canPrev}
-              aria-label="Previous result"
+              onClick={() => {
+                if (typeof onOpenLibrary === "function") onOpenLibrary();
+              }}
+              aria-label="Open library"
+              title="單字庫"
+              // ✅ 比照播放聲音：橘色線條、透明底、亮暗版由 CSS 控制
+              className="icon-button sound-button"
               style={{
                 width: 28,
                 height: 28,
                 borderRadius: 8,
-                border: "1px solid var(--border-main)",
-                background: "var(--card-bg)",
-                color: "var(--text-main)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                cursor: canPrev ? "pointer" : "not-allowed",
-                opacity: canPrev ? 1 : 0.4,
               }}
             >
+              {/* ✅ 線條版字典 icon：stroke 用 currentColor，fill 透明 */}
               <svg
                 viewBox="0 0 24 24"
                 width="16"
                 height="16"
                 fill="none"
                 stroke="currentColor"
-                strokeWidth="2"
+                strokeWidth="1.8"
                 strokeLinecap="round"
                 strokeLinejoin="round"
+                xmlns="http://www.w3.org/2000/svg"
               >
-                <polyline points="15 18 9 12 15 6" />
-              </svg>
-            </button>
-
-            <button
-              onClick={onNext}
-              disabled={!canNext}
-              aria-label="Next result"
-              style={{
-                width: 28,
-                height: 28,
-                borderRadius: 8,
-                border: "1px solid var(--border-main)",
-                background: "var(--card-bg)",
-                color: "var(--text-main)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                cursor: canNext ? "pointer" : "not-allowed",
-                opacity: canNext ? 1 : 0.4,
-              }}
-            >
-              <svg
-                viewBox="0 0 24 24"
-                width="16"
-                height="16"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <polyline points="9 6 15 12 9 18" />
+                {/* 外圈圓形（比照播放按鈕的圓框感） */}
+                <circle cx="12" cy="12" r="10" fill="none" />
+                {/* 書本 */}
+                <path d="M9 7.5h7.2c.7 0 1.3.6 1.3 1.3v8.9" />
+                <path d="M9 7.5c-1.1 0-2 .9-2 2v9.2c0 .8.6 1.3 1.3 1.3H17.5" />
+                <path d="M9 10h6" />
+                <path d="M9 13h6" />
               </svg>
             </button>
           </div>
@@ -200,10 +297,8 @@ function ResultPanel({
                 const headword =
                   d.baseForm || d.lemma || d.word || item.text || "";
                 const canonicalPos = d.partOfSpeech || "";
-                const entry = {
-                  headword,
-                  canonicalPos,
-                };
+                const entry = { headword, canonicalPos };
+
                 return (
                   <WordCard
                     key={idx}
@@ -212,8 +307,6 @@ function ResultPanel({
                     onWordClick={onWordClick}
                     onSpeak={handleSpeak}
                     uiLang={uiLang}
-
-                    // ✅ 只轉交，不計算
                     favoriteActive={
                       typeof isFavorited === "function"
                         ? isFavorited(entry)

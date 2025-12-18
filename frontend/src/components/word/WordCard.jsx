@@ -9,6 +9,9 @@
  *   1) 修正收藏（⭐）點擊無反應：原本 FavoriteStar 直接呼叫 onToggleFavorite，未帶 entry，導致上層 handleToggleFavorite(entry) 收到 undefined 直接 return
  *   2) 新增 favoriteInitStatus（Production 排查用）：提供目前 WordCard 收藏 entry 組裝結果與最後一次點擊紀錄
  *   3) 保留既有收藏 props 與渲染結構，不改動其他未提及邏輯
+ * - 2025-12-18：
+ *   4) 新增防呆：canonicalPos 為空或 unknown（不分大小寫）時，收藏按鈕直接 disable，且不呼叫 onToggleFavorite
+ *      目的：避免 canonical_pos=unknown 這類資料異常寫入 DB，污染單字庫
  */
 
 import { useMemo, useState } from "react";
@@ -98,6 +101,10 @@ function WordCard({
 
   const rawPos = d.partOfSpeech || "";
   const canonicalPos = normalizePos(rawPos);
+
+  // ✅ 新增：canonicalPos 異常判斷（避免 unknown 寫入 DB）
+  const canonicalPosInvalid =
+    !canonicalPos || String(canonicalPos).toLowerCase() === "unknown";
 
   let posDisplay = "";
   if (canonicalPos) {
@@ -322,8 +329,11 @@ function WordCard({
     nounType === "common_noun" && canonicalPos === "Nomen";
 
   // ✅ 收藏 UI：完全由 App props 決定
+  // ✅ 新增：canonicalPosInvalid 時直接 disable（避免 unknown 寫入 DB）
   const favDisabled =
-    !!favoriteDisabled || typeof onToggleFavorite !== "function";
+    !!favoriteDisabled ||
+    canonicalPosInvalid ||
+    typeof onToggleFavorite !== "function";
 
   /**
    * 功能：組裝收藏 entry（只存原型）
@@ -353,6 +363,15 @@ function WordCard({
       lastEntry: entry,
       ready: !!entry?.headword,
     }));
+
+    // ✅ 新增防呆：canonicalPos 異常（空/unknown）直接拒絕，不呼叫上層
+    if (canonicalPosInvalid) {
+      setFavoriteInitStatus((s) => ({
+        ...s,
+        lastError: "canonicalPos is invalid (empty or unknown)",
+      }));
+      return;
+    }
 
     // 若上層未提供 function，直接 return（保持既有 favDisabled 行為一致）
     if (typeof onToggleFavorite !== "function") {

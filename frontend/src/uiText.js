@@ -52,7 +52,7 @@ const uiText = {
       labelNotes: "註解",
 
       // ★ 名詞格變化標題
-      caseTableTitle: "四格變化（單數・定冠詞）",
+      caseTableTitle: "四格變化",
 
       // ★ 四格名稱
       caseNom: "主格 (Nominativ)",
@@ -190,6 +190,9 @@ const uiText = {
         back: "返回",
         backTitle: "返回查詢頁",
       },
+      history: {
+        clearThis: "點擊清除該筆紀錄",
+      },
       errors: {
         backendUnavailable: "後端服務目前無法使用，請稍後再試",
         nonSentenceOnly: "目前只支援「單字 / 片語 / 慣用語」（非句子）。\n\n⚠️ 請勿輸入標點符號（.,!?、，。；：… 等）",
@@ -243,7 +246,7 @@ const uiText = {
       labelExample: "Example",
       labelNotes: "Notes",
 
-      caseTableTitle: "Cases – Singular (with definite article)",
+      caseTableTitle: "Cases – Singular",
 
       caseNom: "Nominative (Nominativ)",
       caseAkk: "Accusative (Akkusativ)",
@@ -377,6 +380,9 @@ const uiText = {
         back: "Back",
         backTitle: "Back to search",
       },
+      history: {
+        clearThis: "Click to clear this record",
+      },
       errors: {
         backendUnavailable: "Backend service is currently unavailable. Please try again later.",
         nonSentenceOnly: "Only single words / phrases / idioms are supported (not full sentences).\n\n⚠️ Please remove punctuation (.,!? etc.) and try again.",
@@ -429,7 +435,7 @@ const uiText = {
       labelExample: "例句",
       labelNotes: "注解",
 
-      caseTableTitle: "四格变化（单数・定冠词）",
+      caseTableTitle: "四格变化",
 
       caseNom: "主格 (Nominativ)",
       caseAkk: "宾格 (Akkusativ)",
@@ -563,6 +569,9 @@ const uiText = {
         back: "返回",
         backTitle: "返回查询页",
       },
+      history: {
+        clearThis: "点击清除该条记录",
+      },
       errors: {
         backendUnavailable: "后端服务暂时无法使用，请稍后再试",
         nonSentenceOnly: "目前只支持「单词 / 短语 / 习惯用语」（非句子）。\n\n⚠️ 请勿输入标点符号（.,!?、，。；：… 等）",
@@ -615,7 +624,7 @@ const uiText = {
       labelExample: "Beispiel",
       labelNotes: "Notizen",
 
-      caseTableTitle: "Fälle – Singular (mit bestimmtem Artikel)",
+      caseTableTitle: "Fälle – Singular",
 
       caseNom: "Nominativ",
       caseAkk: "Akkusativ",
@@ -749,6 +758,9 @@ const uiText = {
         back: "Zurück",
         backTitle: "Zur Suche zurückkehren",
       },
+      history: {
+        clearThis: "Klicken, um diesen Eintrag zu löschen",
+      },
       errors: {
         backendUnavailable: "Der Backend-Dienst ist derzeit nicht verfügbar. Bitte später erneut versuchen.",
         nonSentenceOnly: "Aktuell werden nur Wörter / Phrasen / Redewendungen unterstützt (keine Sätze).\n\n⚠️ Bitte ohne Satzzeichen eingeben (.,!? usw.).",
@@ -801,7 +813,7 @@ const uiText = {
       labelExample: "مثال",
       labelNotes: "ملاحظات",
 
-      caseTableTitle: "الحالات – المفرد (مع أداة التعريف)",
+      caseTableTitle: "الحالات – المفرد",
 
       caseNom: "مرفوع (Nominativ)",
       caseAkk: "منصوب (Akkusativ)",
@@ -934,6 +946,9 @@ const uiText = {
         libraryTitle: "فتح مكتبة الكلمات",
         back: "رجوع",
         backTitle: "العودة إلى البحث",
+      },
+      history: {
+        clearThis: "انقر لمسح هذا السجل",
       },
       errors: {
         backendUnavailable: "الخدمة الخلفية غير متوفرة حالياً، يرجى المحاولة لاحقاً",

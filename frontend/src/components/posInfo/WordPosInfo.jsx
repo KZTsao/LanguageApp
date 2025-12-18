@@ -29,6 +29,8 @@ export default function WordPosInfo({
   extraInfo = {},
   type,
   uiLang,
+  onSelectForm,
+  onWordClick
 }) {
   if (!partOfSpeech || !baseForm) return null;
 
@@ -168,6 +170,7 @@ export default function WordPosInfo({
           labels={uiLabels.verb}
           extraInfo={verbExtraInfo || {}}
           uiLang={uiLang}
+          onWordClick={onWordClick}
         />
       );
     }

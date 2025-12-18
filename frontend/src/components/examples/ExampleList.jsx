@@ -101,6 +101,7 @@ export default function ExampleList({
             conversationCloseLabel: tConversationClose,
             conversationLoadingLabel: tConversationLoading,
           }}
+          onWordClick={onWordClick}
         />
       )}
     </div>

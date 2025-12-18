@@ -1,3 +1,16 @@
+// frontend/src/components/result/ConversationBox.jsx
+/**
+ * 文件說明：
+ * - ConversationBox：顯示「連續對話」的德文/翻譯內容，支援上一句/下一句/播放/關閉。
+ * - 本次異動：讓「連續對話中的德文句子」也能逐字點擊，觸發外部 onWordClick 進行新查詢。
+ *
+ * 異動紀錄（僅追加，不可刪除）：
+ * - 2025-12-18：
+ *   1) 新增 onWordClick prop（從父層接線進來）
+ *   2) 新增 renderClickableGerman：把德文句子拆成可點 token（保留標點/空白）
+ *   3) 新增 conversationWordClickInitStatus（Production 排查）：記錄最後一次點擊字/時間
+ */
+
 import React, { useState } from "react";
 
 const MOSAIC_LINE = "----------------------------";
@@ -72,8 +85,10 @@ export default function ConversationBox({
   onNext,
   onClose,
   onSpeak,
+  onWordClick,
   labels,
 }) {
+  
   const {
     conversationTitle,
     conversationTurnLabel,
@@ -129,6 +144,64 @@ export default function ConversationBox({
   const [showConversationGerman, setShowConversationGerman] = useState(true);
   const [showConversationTranslation, setShowConversationTranslation] =
     useState(true);
+
+  /**
+   * 功能初始化狀態（Production 排查用）
+   * - 用途：確認「連續對話文字點擊」是否真的有觸發、最後點擊的字與時間
+   * - 注意：此狀態僅供排查，不參與任何業務邏輯
+   */
+  const [conversationWordClickInitStatus, setConversationWordClickInitStatus] =
+    useState({
+      ok: false,
+      lastWord: "",
+      at: "",
+      note: "init",
+    });
+
+  /**
+   * 功能：把德文句子拆成可點的 token（連續對話用）
+   * - 只讓「字母/變音/ß/連字號/撇號」組成的 token 可點
+   * - 其他標點與空白原樣保留
+   * - onWordClick 不是 function 時直接退回純文字（避免 TypeError）
+   */
+  const renderClickableGerman = (text) => {
+    if (!text) return "";
+    if (!onWordClick || typeof onWordClick !== "function") return text;
+
+    // 保留空白與標點：把「可點字串」切出來，其餘片段原樣保留
+    const parts = String(text).split(
+      /([A-Za-zÄÖÜäöüß]+(?:[-'][A-Za-zÄÖÜäöüß]+)*)/g
+    );
+
+    return parts.map((part, idx) => {
+      const isWord = /^[A-Za-zÄÖÜäöüß]+(?:[-'][A-Za-zÄÖÜäöüß]+)*$/.test(part);
+      if (!isWord) {
+        return <React.Fragment key={`cpt-${idx}`}>{part}</React.Fragment>;
+      }
+
+      return (
+        <span
+          key={`cpt-${idx}`}
+          onClick={() => {
+            // ✅ Production 排查：記錄點擊（不影響任何業務邏輯）
+            setConversationWordClickInitStatus({
+              ok: true,
+              lastWord: part,
+              at: new Date().toISOString(),
+              note: "clicked-conversation-word",
+            });
+
+            // ✅ 交給外層 App：觸發新查詢
+            onWordClick(part);
+          }}
+          style={{ cursor: "pointer" }}
+          title="點一下查這個字"
+        >
+          {part}
+        </span>
+      );
+    });
+  };
 
   return (
     <div
@@ -233,7 +306,7 @@ export default function ConversationBox({
 
             <div style={{ lineHeight: 1.6 }}>
               {showConversationGerman ? (
-                currentTurnDe
+                renderClickableGerman(currentTurnDe)
               ) : (
                 <span style={{ whiteSpace: "nowrap" }}>{MOSAIC_LINE}</span>
               )}
@@ -374,3 +447,4 @@ export default function ConversationBox({
     </div>
   );
 }
+// frontend/src/components/result/ConversationBox.jsx

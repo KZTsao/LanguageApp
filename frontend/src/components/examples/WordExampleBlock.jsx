@@ -136,6 +136,7 @@ export default function WordExampleBlock({
           uiLang={uiLang}
           // ✅ 方案 M：保留接線（noun/verb 都可用），但不顯示任何 debug UI
           onSelectForm={setSelectedForm}
+          onWordClick={onWordClick}
         />
       )}
 

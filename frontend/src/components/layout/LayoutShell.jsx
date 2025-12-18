@@ -3,10 +3,18 @@
  * 文件說明（LayoutShell）
  * - 目的：提供全站外層版面（置中容器 + Header 區），並把「語言切換 / 亮暗切換」的 UI 事件
  *   正確回傳給上層（App.jsx）管理的狀態（uiLang / theme）。
- * - 本次修改重點（不改業務邏輯）：
+ * - 其他：保留既有 UI 結構與資料抓取（usage/debug key/menu），不改動行為。
+ *
+ * 異動紀錄（請保留舊紀錄）
+ * - 2025/12/18：加入「單字庫入口」導覽按鈕（最小插入）
+ *   1) 接收 App.jsx 傳入的 view / onViewChange（不改既有 theme/uiLang 流程）
+ *   2) Header 左側新增「🔎 查詢」「⭐ 單字庫」切換（只觸發 onViewChange，不自行持有 view 狀態）
+ *   3) 加入 Production 排查用初始化狀態（window.__layoutShellDebug.nav）
+ * - 2025/12/18：dbg（Groq key varName）從帳號左上方移到「整個畫面最右下方」固定顯示（最小插入）
+ *
+ * 既有修改重點（保留原說明，不改業務邏輯）：
  *   1) props 介面對齊 App.jsx：使用 onThemeChange / onUiLangChange（原本 LayoutShell 用錯名字）
  *   2) 亮暗切換採全站等級：App.jsx 已負責將 theme 寫入 localStorage 並套用 <html>.classList.dark
- * - 其他：保留既有 UI 結構與資料抓取（usage/debug key/menu），不改動行為。
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -88,6 +96,30 @@ function getDebugKeyMenuStyle() {
   };
 }
 
+/** 模組：dbg 固定顯示在整個畫面右下角（Production 排查） */
+function getDebugKeyFloatingStyle() {
+  return {
+    position: "fixed",
+    right: 10,
+    bottom: 10,
+    zIndex: 9999,
+    fontSize: 11,
+    fontWeight: 700,
+    lineHeight: "14px",
+    letterSpacing: 0.2,
+    padding: "6px 8px",
+    borderRadius: 10,
+    border: "1px solid var(--border-subtle)",
+    background: "var(--card-bg)",
+    color: "var(--text-muted)",
+    opacity: 0.85,
+    userSelect: "none",
+    pointerEvents: "none",
+    whiteSpace: "nowrap",
+    boxShadow: "0 6px 18px rgba(0,0,0,0.14)",
+  };
+}
+
 /** 模組：從 localStorage 取得 supabase access token（不引入新 client） */
 function getAccessTokenFromLocalStorage() {
   try {
@@ -100,6 +132,36 @@ function getAccessTokenFromLocalStorage() {
   }
 }
 
+/** 模組：Header 導覽區外框（查詢 / 單字庫） */
+function getNavPillWrapStyle() {
+  return {
+    display: "inline-flex",
+    alignItems: "center",
+    borderRadius: 999,
+    border: "1px solid var(--border-subtle)",
+    background: "var(--card-bg)",
+    overflow: "hidden",
+  };
+}
+
+/** 模組：Header 導覽按鈕樣式（active / inactive） */
+function getNavButtonStyle(active) {
+  return {
+    padding: "6px 10px",
+    border: "none",
+    outline: "none",
+    background: active ? "var(--accent-soft, #e0f2fe)" : "transparent",
+    color: active ? "var(--accent, #0369a1)" : "var(--text-main)",
+    fontSize: 12,
+    fontWeight: 700,
+    cursor: "pointer",
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 6,
+    whiteSpace: "nowrap",
+  };
+}
+
 /**
  * LayoutShell（外層版面）
  * - 注意：App.jsx 會傳入 uiLang / onUiLangChange / theme / onThemeChange
@@ -110,6 +172,9 @@ function LayoutShell({
   onThemeChange,
   uiLang,
   onUiLangChange,
+  // ====== 2025/12/18 新增：接收 view / onViewChange（由 App.jsx 控制頁面狀態） ======
+  view,
+  onViewChange,
   children,
 }) {
   const { user, profile, signOut } = useAuth();
@@ -124,6 +189,15 @@ function LayoutShell({
   /** 模組：debug: groq key var（只有指定帳號看得到） */
   const [groqKeyDebug, setGroqKeyDebug] = useState(null);
 
+  /** 模組：Production 排查用初始化狀態（不影響業務邏輯） */
+  const [navInit] = useState(() => {
+    return {
+      ts: Date.now(),
+      enabled: true,
+      note: "Header nav (search/library) wired via onViewChange",
+    };
+  });
+
   // 保留你的設定（目前固定顯示）
   const showDebugKey = "1";
   //String(import.meta?.env?.VITE_SHOW_DEBUG_KEY || "").trim() === "1";
@@ -133,7 +207,18 @@ function LayoutShell({
     window.__layoutShellDebug = window.__layoutShellDebug || {};
     window.__layoutShellDebug.showDebugKey = showDebugKey;
     window.__layoutShellDebug.userId = user?.id || null;
-  }, [showDebugKey, user?.id]);
+
+    // ====== 2025/12/18 新增：導覽初始化狀態 ======
+    window.__layoutShellDebug.nav = {
+      init: navInit,
+      view: typeof view === "string" ? view : null,
+      canChangeView: typeof onViewChange === "function",
+    };
+
+    // ====== 2025/12/18 新增：dbg 顯示位置（Production 排查） ======
+    window.__layoutShellDebug.dbg = window.__layoutShellDebug.dbg || {};
+    window.__layoutShellDebug.dbg.position = "fixed-bottom-right";
+  }, [showDebugKey, user?.id, navInit, view, onViewChange]);
 
   /** 模組：plan 文字 */
   const planText = useMemo(() => {
@@ -247,6 +332,16 @@ function LayoutShell({
   /** 模組：語言切換（只回傳上層 onUiLangChange） */
   const handleUiLangChange = (nextLang) => {
     if (typeof onUiLangChange === "function") onUiLangChange(nextLang);
+  };
+
+  /** 模組：頁面切換（只呼叫上層 onViewChange；不自行持有 view 狀態） */
+  const handleGoSearch = () => {
+    if (typeof onViewChange === "function") onViewChange("search");
+  };
+
+  /** 模組：頁面切換（單字庫入口） */
+  const handleGoLibrary = () => {
+    if (typeof onViewChange === "function") onViewChange("library");
   };
 
   // ====== 未登入 UI ======
@@ -383,50 +478,52 @@ function LayoutShell({
             gap: 12,
           }}
         >
-          {/* 模組：語言選擇（同一個匡 pill） */}
-          <div
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              borderRadius: 999,
-              border: "1px solid var(--border-subtle)",
-              background: "var(--card-bg)",
-              overflow: "hidden",
-            }}
-          >
-            <span
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            {/* 模組：語言選擇（同一個匡 pill） */}
+            <div
               style={{
-                padding: "6px 0px 6px 10px",
-                color: "var(--text-muted)",
-                fontSize: 12,
-                fontWeight: 600,
                 display: "inline-flex",
                 alignItems: "center",
-                whiteSpace: "nowrap",
+                borderRadius: 999,
+                border: "1px solid var(--border-subtle)",
+                background: "var(--card-bg)",
+                overflow: "hidden",
               }}
             >
-              🌐 Muttersprache:
-            </span>
+              <span
+                style={{
+                  padding: "6px 0px 6px 10px",
+                  color: "var(--text-muted)",
+                  fontSize: 12,
+                  fontWeight: 600,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                🌐 Muttersprache:
+              </span>
 
-            <select
-              value={uiLang}
-              onChange={(e) => handleUiLangChange(e.target.value)}
-              style={{
-                padding: "6px 10px 6px 0px",
-                border: "none",
-                outline: "none",
-                background: "transparent",
-                color: "var(--text-main)",
-                fontSize: 12,
-                cursor: "pointer",
-              }}
-            >
-              <option value="zh-TW">繁體中文</option>
-              <option value="de">Deutsch</option>
-              <option value="en">English</option>
-              <option value="fr">Français</option>
-              <option value="zh-CN">简体中文</option>
-            </select>
+              <select
+                value={uiLang}
+                onChange={(e) => handleUiLangChange(e.target.value)}
+                style={{
+                  padding: "6px 10px 6px 0px",
+                  border: "none",
+                  outline: "none",
+                  background: "transparent",
+                  color: "var(--text-main)",
+                  fontSize: 12,
+                  cursor: "pointer",
+                }}
+              >
+                <option value="zh-TW">繁體中文</option>
+                <option value="de">Deutsch</option>
+                <option value="en">English</option>
+                <option value="fr">Français</option>
+                <option value="zh-CN">简体中文</option>
+              </select>
+            </div>
           </div>
 
           <div
@@ -445,8 +542,11 @@ function LayoutShell({
               <span style={getPlanPillStyle()}>{planText}</span>
 
               {/* 模組：淡淡顯示目前 key 變數名（不顯示實際值） */}
+              {/* deprecated（2025/12/18）：原本顯示在帳號左上方，需求改為固定顯示在整個畫面右下角 */}
               {debugKeyText ? (
-                <span style={getDebugKeyPillStyle()}>{debugKeyText}</span>
+                <span style={{ display: "none" }}>
+                  <span style={getDebugKeyPillStyle()}>{debugKeyText}</span>
+                </span>
               ) : null}
 
               <button
@@ -577,6 +677,13 @@ function LayoutShell({
 
         {children}
       </div>
+
+      {/* ====== 2025/12/18 新增：dbg 固定顯示在整個畫面最右下方（Production 排查） ====== */}
+      {debugKeyText ? (
+        <div aria-hidden="true" style={getDebugKeyFloatingStyle()}>
+          {debugKeyText}
+        </div>
+      ) : null}
     </div>
   );
 }

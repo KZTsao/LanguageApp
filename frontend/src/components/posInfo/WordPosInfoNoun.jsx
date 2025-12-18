@@ -519,7 +519,7 @@ export default function WordPosInfoNoun({
   const numLabel = numberMode === "pl" ? pluralLabel : singularLabel;
   const refLabelShort = referenceDet === "ein" ? refShortIndef : refShortDef;
 
-  const headerText = `${posLabel}｜${caseTableTitle}（${numLabel}・${refLabelShort}）`;
+  const headerText = `${posLabel}｜${caseTableTitle}  `;
 
   const ARROW_SIZE = 30;
   const HEADER_FONT_SIZE = 12;
