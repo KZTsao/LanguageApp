@@ -121,8 +121,8 @@ export default function WordLibraryPanel({
           style={{
             fontSize: 13,
             opacity: 0.68,
-            lineHeight: 1.35,
-            paddingTop: 2,
+            lineHeight: 1.15,
+            paddingTop: 0,
           }}
         >
           {t.subtitle}
@@ -162,13 +162,13 @@ export default function WordLibraryPanel({
           style={{
             display: "flex",
             flexDirection: "column",
-            gap: 12, // ✅ 更有呼吸感
-            maxHeight: "65vh",
+            gap: 10, // ✅ 更有呼吸感
+            maxHeight: "calc(72vh - 32px)",
             overflowY: "auto",
             overscrollBehavior: "contain",
             paddingRight: 2,
-            paddingTop: 2,
-            paddingBottom: 2,
+            paddingTop: 0,
+            paddingBottom: 0,
           }}
         >
           {libraryItems.map((it, idx) => (
@@ -226,7 +226,7 @@ export default function WordLibraryPanel({
                     style={{
                       fontSize: 12,
                       opacity: 0.72,
-                      padding: "6px 10px", // ✅ 變厚
+                      padding: "4px 8px", // ✅ 變厚
                       borderRadius: 999,
                       border: "1px solid rgba(255,255,255,0.10)",
                       background: "rgba(255,255,255,0.03)",

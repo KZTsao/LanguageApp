@@ -1,5 +1,8 @@
-// groqClient.js (FULL FILE REPLACE)
+// backend/src/clients/groqClient.js
 const Groq = require("groq-sdk");
+
+// ✅ DB cursor（Supabase RPC）
+const { getNextGroqKeyIndex } = require("../db/groqKeyCursor");
 
 /**
  * Supported env formats:
@@ -57,6 +60,18 @@ function isRateLimitLikeError(err) {
   );
 }
 
+// ✅ NEW: 判斷 Groq org 被限制（400 organization_restricted）
+function isOrgRestrictedError(err) {
+  const status = err?.status ?? err?.response?.status;
+  if (status !== 400) return false;
+
+  const code = String(err?.code || "").toLowerCase();
+  if (code === "organization_restricted") return true;
+
+  const msg = String(err?.message || "").toLowerCase();
+  return msg.includes("organization has been restricted") || msg.includes("organization_restricted");
+}
+
 function createRotatingGroqClient() {
   const keys = parseKeysFromEnv();
 
@@ -75,6 +90,27 @@ function createRotatingGroqClient() {
   }
 
   let index = 0;
+
+  // ✅ DB cursor 起始 index（只影響起點）
+  if (keys.length > 1) {
+    getNextGroqKeyIndex(keys.length)
+      .then((dbIndex) => {
+        const safeIndex =
+          Number.isInteger(dbIndex) && dbIndex >= 0 ? dbIndex % keys.length : 0;
+        index = safeIndex;
+
+        console.log(
+          `[groqClient] ▶ start from DB cursor: ${index + 1}/${keys.length} ${maskKey(
+            keys[index]
+          )}`
+        );
+      })
+      .catch((err) => {
+        console.warn("[groqClient] ⚠️ Failed to load DB cursor, fallback to 1/..", {
+          message: String(err?.message || err),
+        });
+      });
+  }
 
   function currentKey() {
     return keys[index] || "";
@@ -113,7 +149,6 @@ function createRotatingGroqClient() {
   }
 
   const rotatingClient = {
-    // for backend debug / frontend pass-through later
     getCurrentKeyInfo: () => currentKeyInfo(),
 
     chat: {
@@ -127,6 +162,34 @@ function createRotatingGroqClient() {
           try {
             return await clients[index].chat.completions.create(params);
           } catch (err) {
+            // ✅ NEW: organization_restricted → 依序換 key 試到成功或試完一輪
+            if (isOrgRestrictedError(err) && keys.length > 1) {
+              const maxTries = keys.length;
+              for (let t = 0; t < maxTries; t++) {
+                const didRotate = rotate("org-restricted", err);
+                if (!didRotate) break;
+
+                const info2 = currentKeyInfo();
+                console.log(
+                  `[groqClient] ▶ retry (org-restricted) using key ${info2.index + 1}/${info2.total}: ${info2.masked}`
+                );
+
+                try {
+                  return await clients[index].chat.completions.create(params);
+                } catch (err2) {
+                  // 若下一把也 org restricted，就繼續 rotate；其他錯誤交回下面處理
+                  if (isOrgRestrictedError(err2)) {
+                    err = err2;
+                    continue;
+                  }
+                  // 不是 org restricted：交回原本流程（例如 rate limit）
+                  err = err2;
+                  break;
+                }
+              }
+            }
+
+            // 原本：rate limit 才 rotate + retry（保留）
             if (isRateLimitLikeError(err) && keys.length > 1) {
               const didRotate = rotate("rate-limit", err);
               if (didRotate) {
@@ -137,6 +200,7 @@ function createRotatingGroqClient() {
                 return await clients[index].chat.completions.create(params);
               }
             }
+
             throw err;
           }
         },
@@ -148,3 +212,5 @@ function createRotatingGroqClient() {
 }
 
 module.exports = createRotatingGroqClient();
+
+// backend/src/clients/groqClient.js

@@ -1122,7 +1122,7 @@ function AppInner() {
                   </button>
                 </div>
 
-                <div style={{ padding: 12 }}>
+                <div style={{ padding: 8 }}>
                   {/* ✅ 關鍵：用 WordLibraryPanel 期待的 props，避免不顯示 */}
                   <WordLibraryPanel
                     libraryItems={libraryItems}
