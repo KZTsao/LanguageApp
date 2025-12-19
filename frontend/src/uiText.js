@@ -197,6 +197,20 @@ const uiText = {
         backendUnavailable: "後端服務目前無法使用，請稍後再試",
         nonSentenceOnly: "目前只支援「單字 / 片語 / 慣用語」（非句子）。\n\n⚠️ 請勿輸入標點符號（.,!?、，。；：… 等）",
       },
+
+      // ✅ WordLibraryPanel（新增：集中管理）
+      libraryPanel: {
+        subtitle: "只顯示原型（Lemma），不包含變化形",
+        countSuffix: "筆",
+        emptyLine1: "尚未收藏任何單字",
+        emptyLine2: "請到查詢頁點擊星號加入收藏",
+        cancelFavoriteTitle: "取消收藏",
+        cannotOperateTitle: "未登入時不可操作收藏",
+        lemmaLabel: "原型（Lemma）",
+        ariaFavorite: "我的最愛",
+        reviewTitle: "點選以原型回到查詢頁複習",
+        senseStatusTitle: "義項狀態（僅顯示；操作於後續 D 版接入）",
+      },
     },
   },
 
@@ -212,17 +226,14 @@ const uiText = {
     signOut: "Sign out",
     authTesting: "Test Auth",
 
-    // ★ Layout（新增）
     layout: {
       mutterspracheLabel: "Native language:",
     },
 
-    // ★ Auth（新增）
     auth: {
       logout: "Sign out",
     },
 
-    // ★ 使用量顯示（新增）
     usage: {
       today: "Today",
       month: "This month",
@@ -257,16 +268,13 @@ const uiText = {
       headerIndefinite: "Indefinite article",
       headerPossessive: "Possessive",
 
-      // ★ Noun card: control buttons
       btnPlural: "Plural",
       btnClear: "Clear",
 
-      // ★ Noun card: Active / Reference headers (tab types)
       headerNegation: "Negation (kein)",
       headerQuestionWord: "Question word",
       headerDemonstrative: "Demonstrative",
 
-      // ★ Noun card: collapsed header line
       nounPosLabel: "Noun",
       singularLabel: "Singular",
       pluralLabel: "Plural",
@@ -343,14 +351,12 @@ const uiText = {
 
       noFormText: "(no data)",
 
-      // ★ WordCard badge 需要（新增：不刪減，只補齊）
       phraseLabel: "Phrase",
       irregularPrefix: "Irregular:",
       irregularStrong: "strong",
       irregularMixed: "mixed",
       irregularSuppletive: "suppletive",
 
-      // ✅ WordPosInfoVerb 需要（新增：不刪減，只補齊）
       posLabel: "Verb",
       colon: ":",
 
@@ -387,7 +393,21 @@ const uiText = {
         backendUnavailable: "Backend service is currently unavailable. Please try again later.",
         nonSentenceOnly: "Only single words / phrases / idioms are supported (not full sentences).\n\n⚠️ Please remove punctuation (.,!? etc.) and try again.",
       },
-    },    
+
+      // ✅ WordLibraryPanel（新增：集中管理）
+      libraryPanel: {
+        subtitle: "Only lemmas are shown (no inflections)",
+        countSuffix: "items",
+        emptyLine1: "No saved words yet",
+        emptyLine2: "Tap the star on the search page to save words",
+        cancelFavoriteTitle: "Remove from favorites",
+        cannotOperateTitle: "Sign in to manage favorites",
+        lemmaLabel: "Lemma",
+        ariaFavorite: "Favorite",
+        reviewTitle: "Click to review this lemma in search",
+        senseStatusTitle: "Sense status (display only; actions will be added later)",
+      },
+    },
   },
 
   // ----------------------------
@@ -402,12 +422,10 @@ const uiText = {
     signOut: "登出",
     authTesting: "测试 Auth",
 
-    // ★ Layout（新增）
     layout: {
       mutterspracheLabel: "母语：",
     },
 
-    // ★ Auth（新增）
     auth: {
       logout: "登出",
     },
@@ -446,16 +464,13 @@ const uiText = {
       headerIndefinite: "不定冠词",
       headerPossessive: "所有格",
 
-      // ★ 名词卡：控制按钮
       btnPlural: "复数",
       btnClear: "清除",
 
-      // ★ 名词卡：Active / Reference 标题（tabs 类型）
       headerNegation: "否定冠词",
       headerQuestionWord: "疑问词",
       headerDemonstrative: "指示冠词",
 
-      // ★ 名词卡：折叠列标题用
       nounPosLabel: "名词",
       singularLabel: "单数",
       pluralLabel: "复数",
@@ -532,14 +547,12 @@ const uiText = {
 
       noFormText: "（无资料）",
 
-      // ★ WordCard badge 需要（新增：不刪減，只補齊）
       phraseLabel: "短语",
       irregularPrefix: "不规则：",
       irregularStrong: "强变化",
       irregularMixed: "混合变化",
       irregularSuppletive: "完全不规则",
 
-      // ✅ WordPosInfoVerb 需要（新增：不刪減，只補齊）
       posLabel: "Verb",
       colon: "：",
 
@@ -576,7 +589,21 @@ const uiText = {
         backendUnavailable: "后端服务暂时无法使用，请稍后再试",
         nonSentenceOnly: "目前只支持「单词 / 短语 / 习惯用语」（非句子）。\n\n⚠️ 请勿输入标点符号（.,!?、，。；：… 等）",
       },
-    },    
+
+      // ✅ WordLibraryPanel（新增：集中管理）
+      libraryPanel: {
+        subtitle: "只显示原型（Lemma），不包含变位/变化形",
+        countSuffix: "条",
+        emptyLine1: "还没有收藏任何单词",
+        emptyLine2: "请到查询页点击星号加入收藏",
+        cancelFavoriteTitle: "取消收藏",
+        cannotOperateTitle: "未登录时不可操作收藏",
+        lemmaLabel: "原型（Lemma）",
+        ariaFavorite: "收藏",
+        reviewTitle: "点击以原型回到查询页复习",
+        senseStatusTitle: "义项状态（仅显示；操作将在后续加入）",
+      },
+    },
   },
 
   // ----------------------------
@@ -591,12 +618,10 @@ const uiText = {
     signOut: "Abmelden",
     authTesting: "Auth testen",
 
-    // ★ Layout（新增）
     layout: {
       mutterspracheLabel: "Muttersprache:",
     },
 
-    // ★ Auth（新增）
     auth: {
       logout: "Abmelden",
     },
@@ -635,16 +660,13 @@ const uiText = {
       headerIndefinite: "Unbestimmter Artikel",
       headerPossessive: "Possessiv",
 
-      // ★ Nomen-Karte: Steuerknöpfe
       btnPlural: "Plural",
       btnClear: "Zurück",
 
-      // ★ Nomen-Karte: Active / Reference Überschriften (Tab-Typen)
       headerNegation: "Negation (kein)",
       headerQuestionWord: "Fragewort",
       headerDemonstrative: "Demonstrativ",
 
-      // ★ Nomen-Karte: Kopfzeile im eingeklappten Zustand
       nounPosLabel: "Nomen",
       singularLabel: "Singular",
       pluralLabel: "Plural",
@@ -721,14 +743,12 @@ const uiText = {
 
       noFormText: "(keine Daten)",
 
-      // ★ WordCard badge 需要（新增：不刪減，只補齊）
       phraseLabel: "Phrase",
       irregularPrefix: "Unregelmäßig:",
       irregularStrong: "stark",
       irregularMixed: "gemischt",
       irregularSuppletive: "suppletiv",
 
-      // ✅ WordPosInfoVerb 需要（新增：不刪減，只補齊）
       posLabel: "Verb",
       colon: ":",
 
@@ -765,7 +785,21 @@ const uiText = {
         backendUnavailable: "Der Backend-Dienst ist derzeit nicht verfügbar. Bitte später erneut versuchen.",
         nonSentenceOnly: "Aktuell werden nur Wörter / Phrasen / Redewendungen unterstützt (keine Sätze).\n\n⚠️ Bitte ohne Satzzeichen eingeben (.,!? usw.).",
       },
-    },    
+
+      // ✅ WordLibraryPanel（新增：集中管理）
+      libraryPanel: {
+        subtitle: "Nur Grundformen (Lemma), keine Beugungsformen",
+        countSuffix: "Einträge",
+        emptyLine1: "Noch keine gespeicherten Wörter",
+        emptyLine2: "Auf der Suchseite den Stern antippen, um zu speichern",
+        cancelFavoriteTitle: "Aus Favoriten entfernen",
+        cannotOperateTitle: "Zum Verwalten bitte anmelden",
+        lemmaLabel: "Lemma",
+        ariaFavorite: "Favorit",
+        reviewTitle: "Klicken, um dieses Lemma in der Suche zu wiederholen",
+        senseStatusTitle: "Bedeutungsstatus (nur Anzeige; Aktionen folgen später)",
+      },
+    },
   },
 
   // ----------------------------
@@ -780,12 +814,10 @@ const uiText = {
     signOut: "تسجيل الخروج",
     authTesting: "اختبار Auth",
 
-    // ★ Layout（新增）
     layout: {
       mutterspracheLabel: "اللغة الأم:",
     },
 
-    // ★ Auth（新增）
     auth: {
       logout: "تسجيل الخروج",
     },
@@ -824,16 +856,13 @@ const uiText = {
       headerIndefinite: "نكرة",
       headerPossessive: "ملكيّة",
 
-      // ★ بطاقة الاسم: أزرار التحكم
       btnPlural: "جمع",
       btnClear: "مسح",
 
-      // ★ بطاقة الاسم: عناوين Active / Reference (أنواع التبويبات)
       headerNegation: "نفي (kein)",
       headerQuestionWord: "أداة استفهام",
       headerDemonstrative: "اسم إشارة",
 
-      // ★ بطاقة الاسم: سطر العنوان عند الطي
       nounPosLabel: "اسم",
       singularLabel: "مفرد",
       pluralLabel: "جمع",
@@ -910,14 +939,12 @@ const uiText = {
 
       noFormText: "(لا توجد بيانات)",
 
-      // ★ WordCard badge 需要（新增：不刪減，只補齊）
       phraseLabel: "عبارة",
       irregularPrefix: "غير منتظم:",
       irregularStrong: "قوي",
       irregularMixed: "مختلط",
       irregularSuppletive: "تعويضي",
 
-      // ✅ WordPosInfoVerb 需要（新增：不刪減，只補齊）
       posLabel: "فعل",
       colon: ":",
 
@@ -954,7 +981,21 @@ const uiText = {
         backendUnavailable: "الخدمة الخلفية غير متوفرة حالياً، يرجى المحاولة لاحقاً",
         nonSentenceOnly: "حالياً ندعم الكلمات / العبارات / التعابير فقط (ليست جُملاً).\n\n⚠️ الرجاء إزالة علامات الترقيم (.,!? إلخ) ثم المحاولة مرة أخرى.",
       },
-    },    
+
+      // ✅ WordLibraryPanel（新增：集中管理）
+      libraryPanel: {
+        subtitle: "عرض الصيغة الأساسية فقط (Lemma) بدون تصريف",
+        countSuffix: "عنصر",
+        emptyLine1: "لا توجد كلمات محفوظة بعد",
+        emptyLine2: "اضغط على النجمة في صفحة البحث للحفظ",
+        cancelFavoriteTitle: "إزالة من المفضلة",
+        cannotOperateTitle: "سجّل الدخول لإدارة المفضلة",
+        lemmaLabel: "Lemma",
+        ariaFavorite: "مفضلة",
+        reviewTitle: "انقر لمراجعة هذه الصيغة في البحث",
+        senseStatusTitle: "حالة المعنى (عرض فقط؛ ستُضاف الإجراءات لاحقًا)",
+      },
+    },
   },
 };
 

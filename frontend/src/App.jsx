@@ -1099,7 +1099,9 @@ function AppInner() {
                     borderBottom: "1px solid var(--border-subtle)",
                   }}
                 >
-                  <div style={{ fontSize: 14, fontWeight: 800 }}>單字庫</div>
+                <div style={{ fontSize: 14, fontWeight: 800 }}>
+                  {t("app.topbar.library")}
+                </div>
 
                   <button
                     type="button"
