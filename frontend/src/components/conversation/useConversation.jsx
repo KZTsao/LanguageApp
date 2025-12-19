@@ -1,7 +1,43 @@
+// frontend/src/components/conversation/useConversation.jsx
+/**
+ * useConversation Hook
+ * --------------------------------------------------
+ * 功能說明：
+ * - 負責「例句對話 / 會話」的取得、狀態管理與操作
+ * - 支援後端對話 API 與前端 fallback 範例對話
+ *
+ * 初始化狀態（Production 排查用）：
+ * - conversation = null
+ * - conversationLoading = false
+ * - conversationError = ""
+ *
+ * 異動紀錄：
+ * - 2025-12-19
+ *   - 修正 API 呼叫在 Vercel 環境打到錯誤網域的問題
+ *   - 新增 API_BASE_URL，與 analyze / examples / tts 行為一致
+ *   - 保留原本相對路徑 fetch，標示為 deprecated（不移除）
+ */
+
 import { useState, useCallback } from "react";
 
 const MOSAIC_LINE = "----------------------------";
 
+/**
+ * API_BASE_URL
+ * --------------------------------------------------
+ * 說明：
+ * - 正式環境（Vercel）必須使用完整 backend URL
+ * - 本機環境可由 Vite proxy 或 .env 控制
+ */
+const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL || "";
+
+/**
+ * buildFakeConversation
+ * --------------------------------------------------
+ * 功能：
+ * - 當後端失敗或尚未實作時，提供前端可用的範例對話
+ */
 const buildFakeConversation = (sentence) => {
   const s =
     typeof sentence === "string" && sentence.trim().length > 0
@@ -21,6 +57,12 @@ const buildFakeConversation = (sentence) => {
   ];
 };
 
+/**
+ * normalizeTurns
+ * --------------------------------------------------
+ * 功能：
+ * - 統一後端回傳的對話格式
+ */
 const normalizeTurns = (rawTurns) => {
   if (!Array.isArray(rawTurns)) return [];
   return rawTurns
@@ -56,6 +98,33 @@ export default function useConversation({ mainSentence, explainLang }) {
   const [conversationLoading, setConversationLoading] = useState(false);
   const [conversationError, setConversationError] = useState("");
 
+  /**
+   * fetchConversationFromBackend_DEPRECATED
+   * --------------------------------------------------
+   * ⚠️ 已淘汰（但保留）
+   * 原因：
+   * - 使用相對路徑 /api/...，在 Vercel 會打到前端網域造成 404
+   * - 僅保留作為歷史紀錄與回溯用途
+   */
+  const fetchConversationFromBackend_DEPRECATED = async () => {
+    return fetch("/api/dictionary/conversation", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        sentence: mainSentence,
+        explainLang: explainLang || "zh-TW",
+      }),
+    });
+  };
+
+  /**
+   * fetchConversationFromBackend
+   * --------------------------------------------------
+   * 正式使用版本
+   * - 使用 API_BASE_URL，與 analyze / examples / tts 行為一致
+   */
   const fetchConversationFromBackend = useCallback(async () => {
     if (!mainSentence) return buildFakeConversation(mainSentence);
 
@@ -63,16 +132,19 @@ export default function useConversation({ mainSentence, explainLang }) {
       setConversationLoading(true);
       setConversationError("");
 
-      const res = await fetch("/api/dictionary/conversation", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          sentence: mainSentence,
-          explainLang: explainLang || "zh-TW",
-        }),
-      });
+      const res = await fetch(
+        `${API_BASE_URL}/api/dictionary/conversation`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            sentence: mainSentence,
+            explainLang: explainLang || "zh-TW",
+          }),
+        }
+      );
 
       if (!res.ok) {
         throw new Error(`HTTP ${res.status}`);
@@ -168,3 +240,5 @@ export default function useConversation({ mainSentence, explainLang }) {
     MOSAIC_LINE,
   };
 }
+
+// frontend/src/components/conversation/useConversation.jsx

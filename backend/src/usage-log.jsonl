@@ -3213,3 +3213,6 @@
 {"ts":"2025-12-19T08:24:10.518Z","date":"2025-12-19","endpoint":"/api/dictionary/examples","charCount":4,"estTokens":1,"kind":"llm","ip":"::1","userId":"364f16a0-131f-490e-b2a0-efab06453da3","email":"koie1219@gmail.com"}
 {"ts":"2025-12-19T08:26:42.513Z","date":"2025-12-19","endpoint":"/api/analyze","charCount":4,"estTokens":1,"kind":"llm","ip":"::1","userId":"364f16a0-131f-490e-b2a0-efab06453da3","email":"koie1219@gmail.com"}
 {"ts":"2025-12-19T08:26:43.784Z","date":"2025-12-19","endpoint":"/api/dictionary/examples","charCount":4,"estTokens":1,"kind":"llm","ip":"::1","userId":"364f16a0-131f-490e-b2a0-efab06453da3","email":"koie1219@gmail.com"}
+{"ts":"2025-12-19T08:35:31.707Z","date":"2025-12-19","endpoint":"/api/dictionary/conversation","charCount":79,"estTokens":20,"kind":"llm","ip":"::1","userId":"","email":""}
+{"ts":"2025-12-19T08:35:32.208Z","date":"2025-12-19","endpoint":"/api/conversation/generate","kind":"llm","ip":"","userId":"","email":"","provider":"groq","model":"llama-3.1-8b-instant","requestId":"","promptTokens":187,"completionTokens":73,"totalTokens":260}
+{"ts":"2025-12-19T08:35:32.514Z","date":"2025-12-19","endpoint":"/api/conversation/translate","kind":"llm","ip":"","userId":"","email":"","provider":"groq","model":"llama-3.1-8b-instant","requestId":"","promptTokens":205,"completionTokens":52,"totalTokens":257}
