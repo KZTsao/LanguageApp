@@ -458,7 +458,7 @@ function AppInner() {
     try {
       const res = await apiFetch(`/api/analyze`, {
         method: "POST",
-        body: JSON.stringify({ text: q, uiLang }),
+        body: JSON.stringify({ text: q, uiLang, explainLang: uiLang }),
       });
 
       if (!res) throw new Error("[analyze] response is null");
@@ -524,7 +524,7 @@ function AppInner() {
     try {
       const res = await apiFetch(`/api/analyze`, {
         method: "POST",
-        body: JSON.stringify({ text: q, uiLang }),
+        body: JSON.stringify({ text: q, uiLang, explainLang: uiLang }),
       });
 
       if (!res) throw new Error("[analyze] response is null");
