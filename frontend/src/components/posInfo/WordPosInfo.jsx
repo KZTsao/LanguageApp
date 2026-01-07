@@ -176,8 +176,14 @@ export default function WordPosInfo({
     }
 
     case "Adjektiv":
-      return <WordPosInfoAdjektiv baseForm={baseForm} labels={uiLabels.adj} />;
-
+    return (
+      <WordPosInfoAdjektiv
+        baseForm={baseForm}
+        labels={uiLabels.adj}
+        uiLang={uiLang}
+      />
+    );
+    
     case "Pronomen":
       return <WordPosInfoPronomen baseForm={baseForm} labels={uiLabels.pron} />;
 

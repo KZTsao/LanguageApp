@@ -31,6 +31,10 @@
  *   1) App.jsx 新增 handleWordClick（點字 → setText + 直接以該字觸發 analyze）
  *   2) ResultPanel 補回 onWordClick={handleWordClick} 接線，避免下游收到非 function
  *   3) 新增 wordClickInitStatus（Production 排查用）：記錄是否曾觸發、最後點擊字串與時間
+ * - 2026-01-06：
+ *   1) ✅ 詞性切換（pos switch）：handleAnalyzeByText 支援 options（targetPosKey/queryMode）
+ *   2) ✅ App 接線：新增 handleSelectPosKey，接收 ResultPanel/WordCard 的詞性點擊事件並重新查詢
+ *
  * - 2025-12-18：Phase 4 UI 調整（單字庫改彈窗，不再換 view）
  *   1) 移除 view === "library" 的換頁顯示，改用 showLibraryModal 彈窗顯示
  *   2) 單字庫入口改放到 ResultPanel 歷史導覽列最右側（字典 icon），風格比照導覽按鈕
@@ -42,6 +46,57 @@
  * - 2025-12-18：Phase 4 UI 調整（清除當下回放紀錄移到箭頭旁邊）
  *   1) 移除 App.jsx 內的「點擊清除該筆紀錄」顯示區塊
  *   2) 改由 ResultPanel 在歷史導覽列（箭頭旁）顯示清除入口
+ * - 2025-12-26：Phase 1（補寫入釋義）
+ *   1) addFavoriteViaApi 支援 senseIndex/headwordGloss/headwordGlossLang，POST /api/library 時一併送出
+ *   2) toggleFavoriteViaApi 新增收藏時，若 entry 帶上述欄位則透傳
+ * - 2025-12-26：Phase 1 修正（補寫入釋義：payload keys）
+ *   1) addFavoriteViaApi 永遠帶 headwordGloss/headwordGlossLang（即使 gloss 為空字串也送出 key，利於後端 log 追查）
+ *   2) toggleFavoriteViaApi 增加保守 fallback 取 gloss（僅從 entry 既有欄位挑第一個非空字串，不生成新資料）
+ *   3) 加入少量 console：觀察前端送出 payload 的 runtime 狀態
+ * - 2025-12-26：Phase 1 擴充（多釋義：一次寫入多筆 senseIndex）
+ *   1) toggleFavoriteViaApi：若 entry.senses 為陣列且長度 > 0，則逐一 upsert (senseIndex 0..n-1)
+ *   2) 追加 console：觀察本次新增將送出幾筆 sense payload、每筆 gloss 長度
+ * - 2025-12-29：Phase 1 修正（多釋義 payload 來源唯一化：支援 headwordSenses）
+ *   1) buildFavoritePayloadsFromEntry：除了 entry.senses，也接受 entry.headwordSenses（WordCard 封裝的全釋義快照）
+ *   2) toggleFavoriteViaApi 的 plan console 補印 headwordSenses 狀態，避免誤判只會送單筆
+ * - 2026-01-01：Phase 1 擴充（義項狀態：familiarity/isHidden 沿用 POST /api/library）
+ *   1) 新增 postLibraryUpsertViaApi（共用底層 upsert，不強制帶 gloss keys）
+ *   2) addFavoriteViaApi 擴充支援 familiarity/isHidden（收藏當下可一併寫入狀態）
+ *   3) 新增 updateSenseStatusViaApi/handleUpdateSenseStatus，供單字庫義項狀態 UI 直接寫 DB
+ *   4) WordLibraryPanel 透過 onUpdateSenseStatus 接線（避免 UI disabled）
+ * - 2026-01-03：Phase 1 修正（DB 寫入驗證與可控除錯）
+ *   1) postLibraryUpsertViaApi：補上回應 JSON 解析與基本 sanity check（避免前端自以為 ok 但 DB 未寫入）
+ *   2) 新增 libraryWriteInitStatus（Production 排查用）：記錄最近一次 upsert 的回應摘要與時間
+ *   3) 新增可控 debug 開關（localStorage.DEBUG 包含 'library' 時才印出詳細回應）
+ *
+ * - 2026-01-04：Phase X（隨堂考入口：從單字庫彈窗進入）
+ *   1) 單字庫彈窗 Header 左側新增「🧪 測驗」按鈕（入口更顯眼、可達）
+ *   2) 點擊後：先 closeLibraryModal() 再 setView("test")，避免 UI 疊層造成誤判
+ *   3) 加入少量 console 以便 Production 排查（確認入口點擊路徑是否有觸發）
+ * - 2026-01-05：Phase X 修正（SearchBox/點字查詢：送後端前先做前處理）
+ *   1) 新增 normalizeSearchQuery（去除頭尾常見標點/括號/引號 + trim，不動中間），避免 sehr. 要點多次才查
+ *   2) handleWordClick/handleAnalyzeByText/handleAnalyze/handleLibraryReview 統一套用 normalizeSearchQuery（確保點字一次到位）
+ *   3) 嚴格不以 text 變動觸發查詢，避免切換歷史紀錄造成重新查詢
+ *   4) 新增 searchNormalizeInitStatus + 可控 debug（localStorage.DEBUG 包含 'search' 才印 log），供 Production 排查
+ *
+ * - 2026-01-05：Phase X 修正（查詢命中歷史：不重打 /api/analyze）
+ *   1) handleAnalyze/handleAnalyzeByText：送出 API 前先比對 history（text/headword）
+ *   2) 命中則直接 applyHistoryItemToUI（回放 resultSnapshot），並把該筆移到最前面（視為最新查詢）
+ *   3) 追加少量可控 console（localStorage.DEBUG 包含 'search' 才印），供 Production 排查
+ *
+ * - 2026-01-05：Phase X 修正（歷史切換不影響 SearchBox）
+ *   1) applyHistoryItemToUI 新增 options.syncInput（預設 true）
+ *   2) goPrevHistory/goNextHistory 以 syncInput:false 回放 resultSnapshot，不回寫輸入框
+ *   3) 保留既有 setText 行為（僅限非歷史導覽路徑），避免影響點字查詢/命中歷史回放
+ *
+ * - 2026-01-05：Phase 1｜Visit（訪問紀錄：前端最小導入）
+ *   1) 新增 postVisitViaApi（POST /api/visit）與 visitInitStatus（Production 排查用）
+ *   2) 新增 useEffect：登入成功（authUserId 有值）後在「同一個 user / 同一個 tab」只打一次 visit（避免狂加）
+ *   3) 新增可控 debug：localStorage.DEBUG 包含 'visit' 才印 log
+ * - 2026-01-06：App.jsx 刪減（使用者允許行數減少）
+ *   1) 移除未被讀取的 Production 排查用 initStatus state（僅 set、不參與任何業務邏輯）
+ *   2) 移除未被使用的 libraryCursor state（cursor 尚未在本檔參與任何流程）
+ *   3) 移除已註解且無引用的 legacyPayload 殘留註解
  */
 
 // App 只管狀態與邏輯，畫面交給 LayoutShell / SearchBox / ResultPanel
@@ -79,6 +134,54 @@ function AppInner() {
   // ✅ Phase 4（並存模式）開關：true = 單字庫收藏走 DB（/api/library）；false = 使用 legacy localStorage
   const USE_API_LIBRARY = true;
 
+  /**
+   * 功能：取得 debug 開關（localStorage.DEBUG）
+   * - 目的：避免 console 噪音過多；只有在你需要排查時才打開詳細 log
+   * - 使用方式：
+   *   - 開：localStorage.setItem("DEBUG", "library")（或包含 library 的字串）
+   *   - 關：localStorage.removeItem("DEBUG") 或設成不含 library
+   */
+  const isLibraryDebugEnabled = () => {
+    try {
+      const v = window.localStorage.getItem("DEBUG") || "";
+      return String(v).includes("library");
+    } catch {
+      return false;
+    }
+  };
+
+  /**
+   * 功能：取得 debug 開關（localStorage.DEBUG）
+   * - 目的：Search normalize 排查用（避免 console 噪音過多）
+   * - 使用方式：
+   *   - 開：localStorage.setItem("DEBUG", "search")（或包含 search 的字串）
+   *   - 關：localStorage.removeItem("DEBUG") 或設成不含 search
+   */
+  const isSearchDebugEnabled = () => {
+    try {
+      const v = window.localStorage.getItem("DEBUG") || "";
+      return String(v).includes("search");
+    } catch {
+      return false;
+    }
+  };
+
+  /**
+   * 功能：取得 debug 開關（localStorage.DEBUG）
+   * - 目的：Visit（/api/visit）排查用（避免 console 噪音過多）
+   * - 使用方式：
+   *   - 開：localStorage.setItem("DEBUG", "visit")（或包含 visit 的字串）
+   *   - 關：localStorage.removeItem("DEBUG") 或設成不含 visit
+   */
+  const isVisitDebugEnabled = () => {
+    try {
+      const v = window.localStorage.getItem("DEBUG") || "";
+      return String(v).includes("visit");
+    } catch {
+      return false;
+    }
+  };
+
   const [showRaw, setShowRaw] = useState(false);
 
   // ✅ view 切換：search / test（library 改彈窗，不再佔 view）
@@ -91,6 +194,110 @@ function AppInner() {
   // ✅ 解法 A：App 的 authUserId 以 AuthProvider.user 為唯一真相（避免兩份 auth state 不同步）
   const { user } = useAuth();
   const authUserId = user?.id || "";
+
+
+  /**
+   * 功能：同一個 user / 同一個 tab 只送一次 visit（避免狂加）
+   * - 規則：
+   *   1) authUserId 變成有值（登入完成）才送
+   *   2) 同一個 userId 在同一個 tab 只送一次
+   * - 注意：這是前端節流；真正是否要「每次刷新都算一次」後續可再調整策略
+   */
+  const visitOnceRef = useRef({ userId: "", done: false });
+
+  /**
+   * 功能：POST /api/visit（最小）
+   * - 目的：更新 profiles.visit_count / last_visit_at
+   * - 注意：apiFetch 會自動帶 Authorization（你已統一在 apiClient 做）
+   */
+  const postVisitViaApi = async ({ reason = "" } = {}) => {
+    if (!authUserId) return;
+
+    // Production 排查：開始送出
+    try {
+    } catch {}
+
+    // ✅ 可控 debug
+    if (isVisitDebugEnabled()) {
+      try {
+        console.debug("[visit][postVisitViaApi] start", {
+          reason: reason || "",
+          userId: authUserId,
+        });
+      } catch {}
+    }
+
+    try {
+      const res = await apiFetch(`/api/visit`, { method: "POST" });
+      if (!res) throw new Error("[visit] response is null");
+
+      if (!res.ok) {
+        let detail = "";
+        try {
+          detail = await res.text();
+        } catch {}
+        throw new Error(
+          `[visit] POST /api/visit failed: ${res.status} ${res.statusText}${detail ? " | " + detail : ""}`
+        );
+      }
+
+      let data = null;
+      try {
+        data = await res.json();
+      } catch {
+        data = null;
+      }
+
+      // Production 排查：成功
+      try {
+      } catch {}
+
+      if (isVisitDebugEnabled()) {
+        try {
+          console.debug("[visit][postVisitViaApi] ok", {
+            mode: data?.mode || "",
+            visit_count: data?.visit_count,
+            last_visit_at: data?.last_visit_at,
+          });
+        } catch {}
+      }
+    } catch (e) {
+      // Production 排查：失敗
+      try {
+      } catch {}
+
+      if (isVisitDebugEnabled()) {
+        try {
+          console.warn("[visit][postVisitViaApi] failed", e);
+        } catch {}
+      }
+    }
+  };
+
+  /**
+   * Phase 1｜Visit：登入後送出一次（同 user / 同 tab 只一次）
+   * - 注意：不合併既有 useEffect；僅新增一個最小 useEffect
+   */
+  useEffect(() => {
+    if (!authUserId) return;
+
+    // 同一個 userId 在同一個 tab 已送出就不再送
+    if (
+      visitOnceRef.current &&
+      visitOnceRef.current.userId === authUserId &&
+      visitOnceRef.current.done
+    ) {
+      return;
+    }
+
+    // 標記為已送（先標記，避免重複觸發造成多次）
+    visitOnceRef.current = { userId: authUserId, done: true };
+
+    // 送出 visit（最小：不阻斷 UI）
+    postVisitViaApi({ reason: "authUserId-ready" });
+
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authUserId]);
 
   // ✅ user bucket（登入者用 userId；未登入用 guest）
   const userBucket = authUserId || "guest";
@@ -111,8 +318,6 @@ function AppInner() {
 
   const [libraryItems, setLibraryItems] = useState([]);
 
-  // ✅ 單字庫分頁游標（Phase 2/4：後端已支援 cursor，本輪先保留狀態欄位）
-  const [libraryCursor, setLibraryCursor] = useState(null);
 
   // ✅ 測試模式：隨機單字卡 + 收藏狀態
   const [testCard, setTestCard] = useState(null); // { headword, canonicalPos, userId? }
@@ -126,56 +331,11 @@ function AppInner() {
   const [history, setHistory] = useState([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
 
-  /**
-   * 功能初始化狀態（Production 排查用）
-   * - 用途：快速確認「歷史資料是否成功從 localStorage 載入」、目前筆數、最後一次更新時間
-   * - 注意：此狀態僅供排查，不參與任何業務邏輯
-   */
-  const [historyNavInitStatus, setHistoryNavInitStatus] = useState({
-    ok: false,
-    count: 0,
-    at: "",
-    note: "init",
-  });
 
-  /**
-   * 功能初始化狀態（Production 排查用）
-   * - 用途：確認 history 中是否含有 resultSnapshot（用於前後頁不重新訪問即可切換字卡內容）
-   * - 規格：snapshotCoverage = 有 snapshot 的筆數 / 總筆數
-   * - 注意：此狀態僅供排查，不參與任何業務邏輯
-   */
-  const [historySnapshotInitStatus, setHistorySnapshotInitStatus] = useState({
-    ok: false,
-    count: 0,
-    withSnapshot: 0,
-    snapshotCoverage: 0,
-    at: "",
-    note: "init",
-  });
 
-  /**
-   * 功能初始化狀態（Production 排查用）
-   * - 用途：確認「點擊德文字觸發新查詢」接線是否成功、最後一次點擊的字串
-   * - 注意：此狀態僅供排查，不參與任何業務邏輯
-   */
-  const [wordClickInitStatus, setWordClickInitStatus] = useState({
-    ok: false,
-    lastWord: "",
-    at: "",
-    note: "init",
-  });
 
-  /**
-   * 功能初始化狀態（Production 排查用）
-   * - 用途：確認「清除當下回放紀錄」是否觸發成功
-   * - 注意：此狀態僅供排查，不參與任何業務邏輯
-   */
-  const [historyClearInitStatus, setHistoryClearInitStatus] = useState({
-    ok: false,
-    lastClearedIndex: -1,
-    at: "",
-    note: "init",
-  });
+
+
 
   // 深淺色主題（分桶，但初始仍可用 legacy 當 fallback）
   const [theme, setTheme] = useState(() => {
@@ -262,69 +422,14 @@ function AppInner() {
           const next = parsed.slice(0, HISTORY_LIMIT);
           setHistory(next);
 
-          // ✅ Production 排查：記錄成功載入（不影響任何業務邏輯）
-          setHistoryNavInitStatus({
-            ok: true,
-            count: next.length,
-            at: new Date().toISOString(),
-            note: "loaded-from-localStorage",
-          });
-
           // ✅ Production 排查：記錄 snapshot 覆蓋率（不影響任何業務邏輯）
           const withSnapshot = next.filter((x) => !!x?.resultSnapshot).length;
           const count = next.length;
           const snapshotCoverage = count > 0 ? withSnapshot / count : 0;
-          setHistorySnapshotInitStatus({
-            ok: true,
-            count,
-            withSnapshot,
-            snapshotCoverage,
-            at: new Date().toISOString(),
-            note:
-              withSnapshot === count
-                ? "all-have-snapshot"
-                : withSnapshot === 0
-                  ? "no-snapshot-legacy-history"
-                  : "partial-snapshot-legacy-history",
-          });
         }
       } else {
-        // ✅ Production 排查：本 bucket 沒有歷史資料（不影響任何業務邏輯）
-        setHistoryNavInitStatus({
-          ok: true,
-          count: 0,
-          at: new Date().toISOString(),
-          note: "no-history-key",
-        });
-
-        // ✅ Production 排查：本 bucket 沒有歷史資料（不影響任何業務邏輯）
-        setHistorySnapshotInitStatus({
-          ok: true,
-          count: 0,
-          withSnapshot: 0,
-          snapshotCoverage: 0,
-          at: new Date().toISOString(),
-          note: "no-history-key",
-        });
       }
     } catch {
-      // ✅ Production 排查：解析失敗（不影響任何業務邏輯）
-      setHistoryNavInitStatus({
-        ok: false,
-        count: 0,
-        at: new Date().toISOString(),
-        note: "parse-failed",
-      });
-
-      // ✅ Production 排查：解析失敗（不影響任何業務邏輯）
-      setHistorySnapshotInitStatus({
-        ok: false,
-        count: 0,
-        withSnapshot: 0,
-        snapshotCoverage: 0,
-        at: new Date().toISOString(),
-        note: "parse-failed",
-      });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [HISTORY_KEY]);
@@ -337,17 +442,6 @@ function AppInner() {
         JSON.stringify(history.slice(0, HISTORY_LIMIT))
       );
 
-      // ✅ Production 排查：記錄最後寫回狀態（不影響任何業務邏輯）
-      setHistoryNavInitStatus((prev) => ({
-        ...prev,
-        count: Array.isArray(history) ? history.slice(0, HISTORY_LIMIT).length : 0,
-        at: new Date().toISOString(),
-        note:
-          prev?.note === "parse-failed"
-            ? "write-after-parse-failed"
-            : "written-to-localStorage",
-      }));
-
       // ✅ Production 排查：寫回時同步更新 snapshot 覆蓋率（不影響任何業務邏輯）
       const sliced = Array.isArray(history)
         ? history.slice(0, HISTORY_LIMIT)
@@ -355,20 +449,6 @@ function AppInner() {
       const withSnapshot = sliced.filter((x) => !!x?.resultSnapshot).length;
       const count = sliced.length;
       const snapshotCoverage = count > 0 ? withSnapshot / count : 0;
-      setHistorySnapshotInitStatus((prev) => ({
-        ...prev,
-        ok: true,
-        count,
-        withSnapshot,
-        snapshotCoverage,
-        at: new Date().toISOString(),
-        note:
-          withSnapshot === count
-            ? "written-all-have-snapshot"
-            : withSnapshot === 0
-              ? "written-no-snapshot"
-              : "written-partial-snapshot",
-      }));
     } catch {}
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [history, HISTORY_KEY]);
@@ -387,11 +467,22 @@ function AppInner() {
    * - 若該筆缺少 resultSnapshot（舊資料），則清空 result（避免顯示上一筆結果造成誤會）
    * - 注意：此函式只做 UI 狀態同步，不做任何 network 行為
    */
-  const applyHistoryItemToUI = (item) => {
+  const applyHistoryItemToUI = (item, options = {}) => {
     if (!item) return;
 
+    /**
+     * ✅ 2026-01-05：Phase X 修正（SearchBox 不跟著歷史切換改變）
+     * - 背景：SearchBox 是 controlled input（value 綁定 text），若歷史翻頁時 setText(item.text) 會導致輸入框跟著變
+     * - 規格：歷史導覽（Prev/Next）只回放 resultSnapshot，不回寫輸入框
+     * - 作法：新增 options.syncInput（預設 true）；歷史導覽呼叫時傳 syncInput:false
+     */
+    const syncInput = options && options.syncInput === false ? false : true;
+
     // 1) 同步輸入框
-    if (item?.text) setText(item.text);
+    // ✅ 注意：歷史導覽（Prev/Next）不應回寫 SearchBox，因此當 syncInput=false 時略過 setText
+    if (syncInput) {
+      if (item?.text) setText(item.text);
+    }
 
     // 2) 同步字卡結果（真正翻頁的關鍵）
     if (item?.resultSnapshot) {
@@ -400,6 +491,82 @@ function AppInner() {
       // 舊 history 沒有 snapshot：避免顯示錯的結果，直接清掉
       setResult(null);
     }
+  };
+
+  /**
+   * 功能：查詢命中歷史（不重打 /api/analyze）
+   * - 目的：同一個字再次查詢時，不再訪問後端；直接切到對應的歷史結果（或視為最新、移到最前面）
+   * - 命中規則（保守）：
+   *   1) q === historyItem.text（忽略大小寫，de-DE）
+   *   2) q === historyItem.headword（忽略大小寫，de-DE）
+   * - 注意：此處的 normalize 僅用於「比對」，不更新 searchNormalizeInitStatus，避免影響排查狀態與造成 console 噪音
+   */
+  const normalizeForHistoryCompare = (v) => {
+    return (v ?? "").toString().trim().toLocaleLowerCase("de-DE");
+  };
+
+  /**
+   * 功能：尋找 history 命中 index
+   * - 回傳：找到則回 index；找不到回 -1
+   */
+  const findHistoryHitIndex = (q) => {
+    const nq = normalizeForHistoryCompare(q);
+    if (!nq) return -1;
+    if (!Array.isArray(history) || history.length === 0) return -1;
+
+    // 先比 text，再比 headword（保持最直覺：你搜尋什麼就回放什麼）
+    const byText = history.findIndex((h) => normalizeForHistoryCompare(h?.text) === nq);
+    if (byText !== -1) return byText;
+
+    const byHeadword = history.findIndex(
+      (h) => normalizeForHistoryCompare(h?.headword) === nq
+    );
+    if (byHeadword !== -1) return byHeadword;
+
+    return -1;
+  };
+
+  /**
+   * 功能：命中 history 後的回放（不重打 API）
+   * - 行為：
+   *   1) 直接回放 resultSnapshot（applyHistoryItemToUI）
+   *   2) 把該筆移到最前面（視為最新查詢）
+   *   3) historyIndex 設為 0
+   */
+  const replayHistoryHit = (hitIndex, q, source = "") => {
+    if (!Array.isArray(history) || hitIndex < 0 || hitIndex >= history.length) return false;
+
+    const hitItem = history[hitIndex];
+
+    // ✅ 可控 debug：只有開 DEBUG=search 才印（避免噪音）
+    if (isSearchDebugEnabled()) {
+      try {
+        console.debug("[search][history-hit][replay]", {
+          source,
+          q,
+          hitIndex,
+          hitText: hitItem?.text || "",
+          hitHeadword: hitItem?.headword || "",
+          hasSnapshot: !!hitItem?.resultSnapshot,
+        });
+      } catch {}
+    }
+
+    // 先回放 UI（不做任何 network）
+    applyHistoryItemToUI(hitItem);
+
+    // 再把該筆移到最前面（視為最新查詢）
+    setHistory((prev) => {
+      if (!Array.isArray(prev) || prev.length === 0) return prev;
+      if (hitIndex < 0 || hitIndex >= prev.length) return prev;
+
+      const item = prev[hitIndex];
+      const rest = prev.filter((_, i) => i !== hitIndex);
+      return [item, ...rest].slice(0, HISTORY_LIMIT);
+    });
+
+    setHistoryIndex(0);
+    return true;
   };
 
   /**
@@ -413,12 +580,6 @@ function AppInner() {
     if (historyIndex < 0) return;
     if (historyIndex >= history.length) return;
 
-    setHistoryClearInitStatus({
-      ok: true,
-      lastClearedIndex: historyIndex,
-      at: new Date().toISOString(),
-      note: "cleared-current-history-item",
-    });
 
     // 使用函式式更新避免 stale state
     setHistory((prev) => {
@@ -447,78 +608,210 @@ function AppInner() {
   };
 
   /**
+   * 功能：查詢文字前處理（normalize）
+   * - 目的：在送後端之前，先把「頭尾多餘標點/括號/引號」去掉，避免 sehr. 要點多次才查
+   * - 規則：
+   *   1) 只動「頭尾」：不動中間（例如 z.B. / e-mail / C++ 不會被破壞）
+   *   2) 先 trim，再去頭尾常見符號，最後再 trim 一次
+   *   3) 若 clean 後為空字串，回傳空字串（上游會直接 return）
+   * - 注意：
+   *   - 不依賴任何外部 library（使用原生 JS）
+   *   - 不以 text 變動觸發查詢（避免 history 切換誤觸發）
+   */
+  const normalizeSearchQuery = (raw, source = "") => {
+    const rawStr = (raw ?? "").toString();
+    let s = rawStr.trim();
+
+    // ✅ 去除頭尾標點（僅動頭尾，不動中間）
+    // - 覆蓋：英文常見標點 + 中文全形標點 + 引號/括號
+    // - 例：sehr. / „sehr.“ / (sehr) / [sehr] / sehr... / sehr;  → sehr
+    // - 注意：不要在這裡動中間字元（例如 z.B. 保留）
+    s = s.replace(
+      /^[\s\u00A0"'“”‘’\(\)\[\]\{\}<>.,!?;:。！？；：…，．、]+|[\s\u00A0"'“”‘’\(\)\[\]\{\}<>.,!?;:。！？；：…，．、]+$/g,
+      ""
+    );
+    s = s.trim();
+
+    const cleaned = s;
+
+    // ✅ Production 排查：記錄最後一次 normalize 狀態（不影響任何業務邏輯）
+    try {
+    } catch {}
+
+    // ✅ 可控 debug：只有開 DEBUG=search 才印（避免噪音）
+    if (isSearchDebugEnabled()) {
+      try {
+        const changed = rawStr !== cleaned;
+        if (changed) {
+          console.debug("[search][normalizeSearchQuery]", {
+            source: source || "",
+            raw: rawStr,
+            cleaned,
+          });
+        }
+      } catch {}
+    }
+
+    return cleaned;
+  };
+
+    /**
    * 功能：Analyze（字典）- 以指定文字觸發查詢（供點字觸發使用）
    * - 注意：保留既有 handleAnalyze() 不改其介面（避免影響 SearchBox 既有呼叫）
    */
-  const handleAnalyzeByText = async (rawText) => {
-    const q = (rawText || "").trim();
-    if (!q) return;
-
-    setLoading(true);
-    try {
-      const res = await apiFetch(`/api/analyze`, {
-        method: "POST",
-        body: JSON.stringify({ text: q, uiLang, explainLang: uiLang }),
-      });
-
-      if (!res) throw new Error("[analyze] response is null");
-      if (!res.ok) {
-        let detail = "";
-        try {
-          detail = await res.text();
-        } catch {}
-        throw new Error(
-          `[analyze] POST /api/analyze failed: ${res.status} ${res.statusText}${
-            detail ? ` | ${detail}` : ""
-          }`
-        );
-      }
-
-      let data = null;
+    const handleAnalyzeByText = async (rawText, options = {}) => {
+      const q = normalizeSearchQuery(rawText, "handleAnalyzeByText");
+      if (!q) return;
+  
+      /**
+       * ✅ 2026-01-06：詞性切換必須「強制重查」
+       * 中文功能說明：
+       * - 背景：既有 Phase X 有「命中 history 就回放、不打 API」的優化
+       * - 但詞性切換（targetPosKey）同一個 q 需要打 API 才會回不同詞性結果
+       * - 因此：只要 options.targetPosKey 存在 → 跳過 history 命中回放，直接打 /api/analyze
+       */
+      const hasTargetPosKey =
+        options && typeof options?.targetPosKey === "string" && options.targetPosKey.trim();
+  
+      // ✅ 可控 runtime 觀察（你現在排查用）：確認是否被 history-hit 擋掉
       try {
-        data = await res.json();
-      } catch {
-        data = null;
+        console.log("[App][posSwitch][handleAnalyzeByText] precheck", {
+          q,
+          hasTargetPosKey: !!hasTargetPosKey,
+          targetPosKey: hasTargetPosKey ? options.targetPosKey : "",
+        });
+      } catch {}
+  
+      // ✅ Phase X：若命中 history，直接回放（不重打 /api/analyze）
+      // ⚠️ 但詞性切換必須重查，所以 hasTargetPosKey=true 時跳過
+      if (!hasTargetPosKey) {
+        const hitIndex = findHistoryHitIndex(q);
+        if (hitIndex !== -1) {
+          const replayed = replayHistoryHit(hitIndex, q, "handleAnalyzeByText");
+          if (replayed) return;
+        }
       }
+  
+      setLoading(true);
+      try {
+        const res = await apiFetch(`/api/analyze`, {
+          method: "POST",
+          body: JSON.stringify({ text: q, uiLang, explainLang: uiLang, ...(options || {}) }),
+        });
+  
+        if (!res) throw new Error("[analyze] response is null");
+        if (!res.ok) {
+          let detail = "";
+          try {
+            detail = await res.text();
+          } catch {}
+          throw new Error(
+            `[analyze] POST /api/analyze failed: ${res.status} ${res.statusText}${
+              detail ? ` | ${detail}` : ""
+            }`
+          );
+        }
+  
+        let data = null;
+        try {
+          data = await res.json();
+        } catch {
+          data = null;
+        }
+  
+        setResult(data);
+  
+        const headword = (
+          data?.dictionary?.baseForm ||
+          data?.dictionary?.word ||
+          q
+        ).trim();
+        const canonicalPos = (
+          data?.dictionary?.canonicalPos ||
+          data?.dictionary?.partOfSpeech ||
+          ""
+        ).trim();
+  
+        const key = `${headword}::${canonicalPos}`;
+        setHistory((prev) => {
+          const next = prev.filter((x) => (x?.key || "") !== key);
+          return [
+            {
+              key,
+              text: q,
+              headword,
+              canonicalPos,
+              createdAt: new Date().toISOString(),
+              resultSnapshot: data,
+            },
+            ...next,
+          ].slice(0, HISTORY_LIMIT);
+        });
+        setHistoryIndex(0);
+      } finally {
+        setLoading(false);
+      }
+    };
+  
 
-      setResult(data);
+  /**
+   * 功能：詞性切換（Adjektiv / Adverb ...）
+   * 中文功能說明：
+   * - 由 WordCard → ResultPanel 回拋 clickedPosKey，App 再觸發 /api/analyze 並帶 targetPosKey
+   * - 目的：同一個字可在不同詞性間切換，並且視為不同歷史紀錄（key 由後端 canonicalPos 決定）
+   *
+   * 功能初始化狀態（Production 排查）：
+   * - 若 clickedPosKey 缺失：直接 return，不拋錯
+   * - 若點擊的詞性等於目前 activePosKey：不重查（避免重複查詢）
+   */
+  const handleSelectPosKey = (payload) => {
+    try {
+      const clickedPosKey = (payload?.clickedPosKey || payload?.posKey || "").trim();
+      const word =
+        (payload?.word || payload?.text || payload?.headword || "").toString().trim();
 
-      const headword = (
-        data?.dictionary?.baseForm ||
-        data?.dictionary?.word ||
-        q
-      ).trim();
-      const canonicalPos = (
-        data?.dictionary?.canonicalPos ||
-        data?.dictionary?.partOfSpeech ||
-        ""
-      ).trim();
+      const activePosKey =
+        (payload?.activePosKey ||
+          result?.dictionary?.posKey ||
+          result?.dictionary?.partOfSpeech ||
+          result?.dictionary?.canonicalPos ||
+          "")
+          .toString()
+          .trim();
 
-      const key = `${headword}::${canonicalPos}`;
-      setHistory((prev) => {
-        const next = prev.filter((x) => (x?.key || "") !== key);
-        return [
-          {
-            key,
-            text: q,
-            headword,
-            canonicalPos,
-            createdAt: new Date().toISOString(),
-            resultSnapshot: data,
-          },
-          ...next,
-        ].slice(0, HISTORY_LIMIT);
+      console.log("[App][posSwitch] handleSelectPosKey", {
+        clickedPosKey,
+        activePosKey,
+        word,
+        hasClickedPosKey: !!clickedPosKey,
+        hasWord: !!word,
       });
-      setHistoryIndex(0);
-    } finally {
-      setLoading(false);
+
+      if (!clickedPosKey || !word) return;
+      if (clickedPosKey === activePosKey) return;
+
+      // ✅ 詞性切換屬於「新的查詢」，不應該覆蓋歷史回放
+      setHistoryIndex(-1);
+
+      // ✅ 注意：後端 analyzeRoute 以 targetPosKey 觸發特定詞性分析
+      handleAnalyzeByText(word, { queryMode: "word", targetPosKey: clickedPosKey });
+    } catch (err) {
+      console.warn("[App][posSwitch] handleSelectPosKey error", err);
     }
   };
 
+
   // ✅ 查詢：Analyze（字典）
   const handleAnalyze = async () => {
-    const q = (text || "").trim();
+    const q = normalizeSearchQuery(text, "handleAnalyze");
     if (!q) return;
+
+    // ✅ Phase X：若命中 history，直接回放（不重打 /api/analyze）
+    const hitIndex = findHistoryHitIndex(q);
+    if (hitIndex !== -1) {
+      const replayed = replayHistoryHit(hitIndex, q, "handleAnalyze");
+      if (replayed) return;
+    }
 
     setLoading(true);
     try {
@@ -586,15 +879,9 @@ function AppInner() {
    * - 注意：library 改彈窗後，不再需要切回 view=search 才看得到結果
    */
   const handleWordClick = (rawWord) => {
-    const q = (rawWord || "").trim();
+    const q = normalizeSearchQuery(rawWord, "handleWordClick");
     if (!q) return;
 
-    setWordClickInitStatus({
-      ok: true,
-      lastWord: q,
-      at: new Date().toISOString(),
-      note: "clicked-word-triggered",
-    });
 
     setText(q);
     setHistoryIndex(-1);
@@ -607,21 +894,24 @@ function AppInner() {
     const nextIndex = clamp(historyIndex + 1, 0, history.length - 1);
     setHistoryIndex(nextIndex);
     const item = history[nextIndex];
-    applyHistoryItemToUI(item);
+    applyHistoryItemToUI(item, { syncInput: false, source: "history-nav-prev" });
 
     // DEPRECATED (2025-12-18): 已由 applyHistoryItemToUI 統一處理
-    if (item?.text) setText(item.text);
+    // ✅ 2026-01-05：歷史導覽不回寫輸入框（SearchBox 不跟著變）
+    // if (item?.text) setText(item.text);
   };
+
   const goNextHistory = () => {
     if (!history.length) return;
     const nextIndex = clamp(historyIndex - 1, -1, history.length - 1);
     setHistoryIndex(nextIndex);
     if (nextIndex === -1) return;
     const item = history[nextIndex];
-    applyHistoryItemToUI(item);
+    applyHistoryItemToUI(item, { syncInput: false, source: "history-nav-next" });
 
     // DEPRECATED (2025-12-18): 已由 applyHistoryItemToUI 統一處理
-    if (item?.text) setText(item.text);
+    // ✅ 2026-01-05：歷史導覽不回寫輸入框（SearchBox 不跟著變）
+    // if (item?.text) setText(item.text);
   };
 
   const canPrevHistory = history.length > 0 && historyIndex < history.length - 1;
@@ -766,6 +1056,113 @@ function AppInner() {
     return { headword, canonicalPos, headwordKey, canonicalPosKey };
   };
 
+  /**
+   * 功能：從 entry 取出 gloss snapshot（保守 fallback）
+   * - 只挑 entry 既有欄位的「第一個非空字串」
+   * - 不做任何推論、不生成新資料
+   */
+  const pickFirstNonEmptyString = (candidates) => {
+    if (!Array.isArray(candidates)) return "";
+    for (const v of candidates) {
+      if (typeof v === "string" && v.trim()) return v.trim();
+    }
+    return "";
+  };
+
+  const getGlossSnapshotFromEntry = (entry) => {
+    const senseIndex = Number.isInteger(entry?.senseIndex) ? entry.senseIndex : 0;
+
+    // ✅ Phase 1（多釋義）：senses 來源以 entry.senses 為主；若不存在則嘗試 entry.headwordSenses
+    const senses = Array.isArray(entry?.senses)
+      ? entry.senses
+      : Array.isArray(entry?.headwordSenses)
+      ? entry.headwordSenses
+      : null;
+    const senseGloss =
+      senses && senses[senseIndex] && typeof senses[senseIndex]?.gloss === "string"
+        ? senses[senseIndex].gloss
+        : "";
+
+    const sense0Gloss =
+      senses && senses[0] && typeof senses[0]?.gloss === "string" ? senses[0].gloss : "";
+
+    return pickFirstNonEmptyString([
+      entry?.headwordGloss,
+      entry?.headword_gloss,
+      entry?.gloss,
+      entry?.meaning,
+      entry?.definition,
+      senseGloss,
+      sense0Gloss,
+    ]);
+  };
+
+  /**
+   * 功能：由 entry 產生「要寫入 DB 的收藏 payload 清單」
+   * - 單筆：回傳 1 筆（維持既有行為）
+   * - 多釋義：若 entry.senses 為陣列且長度 > 0，回傳 N 筆（senseIndex 0..N-1）
+   * - 注意：本函式只做「資料整形」，不做 network
+   */
+  const buildFavoritePayloadsFromEntry = (entry, { headword, canonicalPos }) => {
+    // ✅ Phase 1（多釋義）：senses 來源以 entry.senses 為主；若不存在則嘗試 entry.headwordSenses（WordCard 全釋義快照）
+    const senses = Array.isArray(entry?.senses)
+      ? entry.senses
+      : Array.isArray(entry?.headwordSenses)
+      ? entry.headwordSenses
+      : null;
+
+    const defaultLang =
+      typeof entry?.headwordGlossLang === "string" && entry.headwordGlossLang.trim()
+        ? entry.headwordGlossLang.trim()
+        : uiLang;
+
+    // 多釋義：逐一寫入
+    if (senses && senses.length > 0) {
+      const payloads = senses.map((s, idx) => {
+        const senseGloss =
+          s && typeof s?.gloss === "string" && s.gloss.trim() ? s.gloss : "";
+
+        const headwordGloss = pickFirstNonEmptyString([
+          // 若上游已給 headwordGloss，仍以 sense gloss 優先（更精準對應 senseIndex）
+          senseGloss,
+          // 保守 fallback：同一 entry 的其他欄位（避免空字串）
+          entry?.headwordGloss,
+          entry?.headword_gloss,
+          entry?.gloss,
+          entry?.meaning,
+          entry?.definition,
+        ]);
+
+        return {
+          headword,
+          canonicalPos,
+          senseIndex: idx,
+          headwordGloss,
+          headwordGlossLang: defaultLang,
+        };
+      });
+
+      return payloads;
+    }
+
+    // 單筆（既有行為）
+    const senseIndex = Number.isInteger(entry?.senseIndex) ? entry.senseIndex : 0;
+    const headwordGloss =
+      typeof entry?.headwordGloss === "string" && entry.headwordGloss.trim()
+        ? entry.headwordGloss
+        : getGlossSnapshotFromEntry(entry);
+
+    return [
+      {
+        headword,
+        canonicalPos,
+        senseIndex,
+        headwordGloss,
+        headwordGlossLang: defaultLang,
+      },
+    ];
+  };
+
   /** 功能：讀取單字庫（分頁） */
   const loadLibraryFromApi = async ({ limit = 50, cursor = null } = {}) => {
     if (!authUserId) return;
@@ -801,18 +1198,163 @@ function AppInner() {
 
       setLibraryItems(items);
       setLibraryCursor(nextCursor);
+
+      // ✅ 回傳最新資料，供上層做「寫入驗證」與除錯（不影響既有 UI 流程）
+      return { items, nextCursor };
     } catch (e) {
       // 保留 try/catch 結構避免 throw 影響 UI
+
+      // ✅ 回傳錯誤狀態（供上層「寫入驗證」判斷）
+      return { items: null, nextCursor: null, error: e };
+    }
+  };
+
+  /**
+   * 功能：POST /api/library（upsert）共用底層
+   * - 用途：統一處理 res.ok 檢查與錯誤訊息，避免各處重複拼字串
+   * - 注意：本函式不強制帶 gloss keys（gloss 僅在收藏當下由 addFavoriteViaApi 處理）
+   */
+  const postLibraryUpsertViaApi = async (payload) => {
+    if (!authUserId) return;
+
+    /**
+     * ✅ 重要修正（2026-01-03）
+     * - 原本這裡誤寫成遞迴呼叫自己，會導致「看起來有送出、但實際上根本沒打到後端」
+     * - 依照既有設計：本函式應該統一呼叫後端 POST /api/library 做 upsert
+     */
+    // DEPRECATED (2026-01-03): 避免遞迴呼叫自己造成 Maximum call stack size exceeded
+    // await postLibraryUpsertViaApi(payload);
+
+    const safePayload = payload || {};
+    const actionHeadword = (safePayload?.headword || "").toString().trim();
+    const actionCanonicalPos = (safePayload?.canonicalPos || "").toString().trim();
+    const actionSenseIndex = Number.isInteger(safePayload?.senseIndex)
+      ? safePayload.senseIndex
+      : null;
+
+    // Production 排查：記錄開始寫入（不影響任何業務邏輯）
+    try {
+    } catch {}
+
+    const res = await apiFetch(`/api/library`, {
+      method: "POST",
+      body: JSON.stringify(safePayload),
+    });
+
+    if (!res) {
+      try {
+      } catch {}
+      throw new Error("[library] response is null");
+    }
+
+    if (!res.ok) {
+      let detail = "";
+      try {
+        detail = await res.text();
+      } catch {}
+
+      try {
+      } catch {}
+
+      throw new Error(
+        `[library] POST /api/library failed: ${res.status} ${res.statusText}${
+          detail ? " | " + detail : ""
+        }`
+      );
+    }
+
+    // ✅ DB 寫入驗證：嘗試解析回應 JSON（不影響既有流程；解析失敗也不阻斷）
+    let respJson = null;
+    try {
+      respJson = await res.clone().json();
+    } catch {
+      respJson = null;
+    }
+
+    // Production 排查：記錄回應摘要（不影響任何業務邏輯）
+    try {
+      const hasError = !!respJson?.error;
+    } catch {}
+
+    // ✅ 可控 debug：避免 console 噪音，只有開 DEBUG=library 才印詳細回應
+    if (isLibraryDebugEnabled()) {
+      try {
+        console.debug("[library][postLibraryUpsertViaApi][verify]", {
+          payload: {
+            headword: actionHeadword,
+            canonicalPos: actionCanonicalPos,
+            senseIndex: actionSenseIndex,
+            familiarity: Number.isInteger(safePayload?.familiarity)
+              ? safePayload.familiarity
+              : null,
+            isHidden: typeof safePayload?.isHidden === "boolean" ? safePayload.isHidden : null,
+          },
+          responseJson: respJson,
+        });
+      } catch {}
+    }
+
+    // ✅ 保守提醒：res.ok 但回應帶 error（不拋錯避免 UI 中斷；你可以用 console filter 看到）
+    if (respJson?.error) {
+      try {
+        console.warn("[library][postLibraryUpsertViaApi][warn] res.ok but response.error exists", {
+          error: respJson.error,
+        });
+      } catch {}
     }
   };
 
   /** 功能：新增收藏（upsert） */
-  const addFavoriteViaApi = async ({ headword, canonicalPos }) => {
+  const addFavoriteViaApi = async ({
+    headword,
+    canonicalPos,
+    senseIndex,
+    headwordGloss,
+    headwordGlossLang,
+    familiarity,
+    isHidden,
+  }) => {
     if (!authUserId) return;
+
+    /**
+     * Phase 1：補寫入釋義（gloss snapshot）
+     * - 永遠帶 headwordGloss/headwordGlossLang（即使 gloss 為空字串，也送出 key 方便後端 log 追查）
+     * - senseIndex 仍維持「有整數才送」的行為
+     */
+    const safeGloss = typeof headwordGloss === "string" ? headwordGloss : "";
+    const safeGlossLang =
+      typeof headwordGlossLang === "string" && headwordGlossLang.trim()
+        ? headwordGlossLang.trim()
+        : uiLang;
+
+    const payload = {
+      headword,
+      canonicalPos,
+      ...(Number.isInteger(senseIndex) ? { senseIndex } : {}),
+      headwordGloss: safeGloss,
+      headwordGlossLang: safeGlossLang,
+      ...(Number.isInteger(familiarity) ? { familiarity } : {}),
+      ...(typeof isHidden === "boolean" ? { isHidden } : {}),
+    };
+
+    // ✅ runtime 觀察：確認前端送出的 payload 是否包含 gloss key/值
+    try {
+      console.log("[favorite][addFavoriteViaApi][payload]", {
+        headword,
+        canonicalPos,
+        senseIndex: Number.isInteger(senseIndex) ? senseIndex : null,
+        headwordGlossLen: typeof safeGloss === "string" ? safeGloss.length : -1,
+        headwordGlossPreview:
+          typeof safeGloss === "string" ? safeGloss.slice(0, 60) : "",
+        headwordGlossLang: safeGlossLang,
+      });
+    } catch {}
+
+    // DEPRECATED (2025-12-26): legacy payload（不含 gloss），保留作為歷史參考
 
     const res = await apiFetch(`/api/library`, {
       method: "POST",
-      body: JSON.stringify({ headword, canonicalPos }),
+      body: JSON.stringify(payload),
     });
 
     if (!res) throw new Error("[library] response is null");
@@ -822,11 +1364,111 @@ function AppInner() {
         detail = await res.text();
       } catch {}
       throw new Error(
-        `[library] POST /api/library failed: ${res.status} ${res.statusText}${
-          detail ? ` | ${detail}` : ""
-        }`
+        `[library] POST /api/library failed: ${res.status} ${res.statusText}${detail ? " | " + detail : ""}`
       );
     }
+  };
+
+  /**
+   * 功能：更新「義項狀態」到 DB（沿用 POST /api/library）
+   * - 目的：讓 WordLibraryPanel 的熟悉度/禁止顯示 UI 可以直接寫入 user_words
+   * - 注意：此路徑不應覆寫收藏當下的 gloss snapshot，因此不帶 headwordGloss/headwordGlossLang
+   */
+  const updateSenseStatusViaApi = async ({
+    headword,
+    canonicalPos,
+    senseIndex,
+    familiarity,
+    isHidden,
+  }) => {
+    if (!authUserId) return;
+    if (!headword) return;
+
+    const payload = {
+      headword,
+      canonicalPos,
+      ...(Number.isInteger(senseIndex) ? { senseIndex } : {}),
+      ...(Number.isInteger(familiarity) ? { familiarity } : {}),
+      ...(typeof isHidden === "boolean" ? { isHidden } : {}),
+    };
+
+    // ✅ runtime 觀察：確認義項狀態是否真的送出（不影響業務邏輯）
+    try {
+      console.log("[library][updateSenseStatusViaApi][payload]", {
+        headword,
+        canonicalPos,
+        senseIndex: Number.isInteger(senseIndex) ? senseIndex : null,
+        familiarity: Number.isInteger(familiarity) ? familiarity : null,
+        isHidden: typeof isHidden === "boolean" ? isHidden : null,
+      });
+    } catch {}
+
+    await postLibraryUpsertViaApi(payload);
+
+    // ✅ 重新拉一次 library（維持既有行為）
+    const after = await loadLibraryFromApi({ limit: 50 });
+
+    // ✅ 寫入驗證：避免「API 回 200 但 DB/RLS 未寫入」或「list endpoint 查不到」卻不自知
+    // - 正常情況下：不印 log（降低噪音）
+    // - 異常情況下：印 warn，方便你用 Console Filter 抓「[library][verify]」
+    try {
+      const afterItems = after?.items || null;
+
+      const match = Array.isArray(afterItems)
+        ? afterItems.find((x) => {
+            return (
+              x &&
+              x.headword === headword &&
+              x.canonicalPos === canonicalPos &&
+              Number(x.senseIndex) === Number(senseIndex)
+            );
+          })
+        : null;
+
+      const wantedF = Number.isInteger(familiarity) ? familiarity : null;
+      const wantedH = typeof isHidden === "boolean" ? isHidden : null;
+
+      const gotF =
+        match && Object.prototype.hasOwnProperty.call(match, "familiarity")
+          ? match.familiarity ?? null
+          : null;
+      const gotH =
+        match && Object.prototype.hasOwnProperty.call(match, "isHidden")
+          ? match.isHidden ?? null
+          : null;
+
+      const mismatch = !match || gotF !== wantedF || gotH !== wantedH;
+
+      if (mismatch) {
+        console.warn("[library][verify] write seems NOT reflected in list result", {
+          headword,
+          canonicalPos,
+          senseIndex,
+          wanted: { familiarity: wantedF, isHidden: wantedH },
+          got: match ? { familiarity: gotF, isHidden: gotH } : null,
+        });
+      }
+    } catch (e) {
+      console.warn("[library][verify] verification error", e);
+    }
+  };
+
+  /**
+   * 功能：義項狀態更新 wrapper（並存模式）
+   * - USE_API_LIBRARY=true：寫 DB
+   * - USE_API_LIBRARY=false：僅 log（目前 legacy localStorage 未實作義項顆粒度狀態）
+   */
+  const handleUpdateSenseStatus = (payload) => {
+    if (!authUserId) return;
+    if (USE_API_LIBRARY) {
+      updateSenseStatusViaApi(payload);
+      return;
+    }
+
+    // DEPRECATED (2026-01-01): legacy localStorage 尚未支援義項顆粒度狀態，先保留 log 方便排查
+    try {
+      console.log("[library][handleUpdateSenseStatus][legacy][noop]", payload);
+    } catch {}
   };
 
   /** 功能：取消收藏 */
@@ -871,7 +1513,57 @@ function AppInner() {
       if (exists) {
         await removeFavoriteViaApi({ headword, canonicalPos });
       } else {
-        await addFavoriteViaApi({ headword, canonicalPos });
+        // Phase 1：多釋義 → 逐一 upsert（senseIndex 0..n-1）
+        const payloads = buildFavoritePayloadsFromEntry(entry, {
+          headword,
+          canonicalPos,
+        });
+
+        // ✅ runtime 觀察：本次要送出幾筆 sense payload
+        try {
+          console.log("[favorite][toggleFavoriteViaApi][multi-sense][plan]", {
+            headword,
+            canonicalPos,
+            payloadCount: Array.isArray(payloads) ? payloads.length : 0,
+            hasSensesArray: Array.isArray(entry?.senses),
+            sensesLen: Array.isArray(entry?.senses) ? entry.senses.length : 0,
+            hasHeadwordSensesArray: Array.isArray(entry?.headwordSenses),
+            headwordSensesLen: Array.isArray(entry?.headwordSenses)
+              ? entry.headwordSenses.length
+              : 0,
+          });
+        } catch {}
+
+        if (Array.isArray(payloads) && payloads.length > 0) {
+          for (const p of payloads) {
+            // ✅ runtime 觀察：每筆 payload 的 gloss 狀態
+            try {
+              console.log("[favorite][toggleFavoriteViaApi][multi-sense][one]", {
+                headword: p?.headword,
+                canonicalPos: p?.canonicalPos,
+                senseIndex: Number.isInteger(p?.senseIndex) ? p.senseIndex : null,
+                headwordGlossLen:
+                  typeof p?.headwordGloss === "string" ? p.headwordGloss.length : -1,
+                headwordGlossPreview:
+                  typeof p?.headwordGloss === "string"
+                    ? p.headwordGloss.slice(0, 60)
+                    : "",
+                headwordGlossLang: p?.headwordGlossLang,
+              });
+            } catch {}
+
+            await addFavoriteViaApi(p);
+          }
+        } else {
+          // DEPRECATED (2025-12-26): 理論上不會走到（payloads 最少回 1），保留以便排查
+          await addFavoriteViaApi({
+            headword,
+            canonicalPos,
+            senseIndex: 0,
+            headwordGloss: "",
+            headwordGlossLang: uiLang,
+          });
+        }
       }
       await loadLibraryFromApi({ limit: 50 });
     } catch (e) {}
@@ -977,7 +1669,7 @@ function AppInner() {
    * - 行為：把 headword 帶回輸入框並觸發查詢
    */
   const handleLibraryReview = (headword) => {
-    const hw = (headword || "").trim();
+    const hw = normalizeSearchQuery(headword, "handleLibraryReview");
     if (!hw) return;
     setText(hw);
     closeLibraryModal();
@@ -1055,6 +1747,8 @@ function AppInner() {
             canClearHistory={historyIndex >= 0 && historyIndex < history.length}
             onClearHistoryItem={clearCurrentHistoryItem}
             clearHistoryLabel={t("app.history.clearThis")}
+            // ✅ 詞性切換：由 ResultPanel → App
+            onSelectPosKey={handleSelectPosKey}
           />
 
           {/* ✅ 單字庫彈窗（不換 view） */}
@@ -1099,9 +1793,57 @@ function AppInner() {
                     borderBottom: "1px solid var(--border-subtle)",
                   }}
                 >
-                <div style={{ fontSize: 14, fontWeight: 800 }}>
-                  {t("app.topbar.library")}
-                </div>
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 10,
+                    }}
+                  >
+                    {/* ✅ 2026-01-04：隨堂考入口（從單字庫彈窗直接進入測試模式） */}
+                    {/* 功能說明：
+                       - 目的：讓使用者在「單字庫」能直接進入「測驗」模式（入口可達、可發現）
+                       - 行為：先關閉單字庫彈窗，再切換 view="test"，避免 UI 疊層造成誤判
+                       - 注意：此入口只負責切換模式，不處理出題邏輯（後續 Step 再做）
+                     */}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        // ✅ Production 排查：確認入口點擊是否觸發（不影響業務邏輯）
+                        try {
+                          console.log("[library->test] enter test mode");
+                        } catch {}
+
+                        // ✅ 先關閉單字庫彈窗，再切換到測試模式（避免疊層）
+                        closeLibraryModal();
+                        setView("test");
+                      }}
+                      style={{
+                        height: 28,
+                        padding: "0 10px",
+                        borderRadius: 10,
+                        border: "1px solid var(--accent)",
+                        background: "transparent",
+                        color: "var(--accent)",
+                        boxShadow: "0 0 0 1px rgba(0,0,0,0.04) inset",
+                        cursor: "pointer",
+                        fontSize: 12,
+                        fontWeight: 800,
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 6,
+                      }}
+                      title="測驗（隨堂考）"
+                      aria-label="測驗（隨堂考）"
+                    >
+                      <span aria-hidden="true">🧪</span>
+                      <span>測驗</span>
+                    </button>
+
+                    <div style={{ fontSize: 14, fontWeight: 800 }}>
+                      {t("app.topbar.library")}
+                    </div>
+                  </div>
 
                   <button
                     type="button"
@@ -1130,7 +1872,10 @@ function AppInner() {
                     libraryItems={libraryItems}
                     onReview={handleLibraryReview}
                     onToggleFavorite={handleToggleFavorite}
+                    onUpdateSenseStatus={handleUpdateSenseStatus}
                     favoriteDisabled={!authUserId}
+                    uiText={uiText}
+                    uiLang={uiLang}
                   />
                 </div>
               </div>

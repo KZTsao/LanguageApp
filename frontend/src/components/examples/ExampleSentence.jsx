@@ -1,4 +1,26 @@
-import React, { useState, useEffect } from "react";
+// frontend/src/components/examples/ExampleSentence.jsx
+/**
+ * 文件說明
+ * - 用途：渲染「例句」標題列 + 主例句（德文）+ 翻譯切換（眼睛）
+ * - Phase 2-UX（Option A）：
+ *   - 將「多重參考」toggle 放到「例句」標題旁邊（同一列）
+ *   - 不影響 Phase 1 查詢規則：仍然只有 Refresh 才會呼叫 /api/dictionary/examples
+ * - Phase 2-UX（RefControls Slot）：
+ *   - ✅ 提供一個 refControls slot，讓「新增參考 / pills / 提示」不要卡在例句與對話之間
+ *   - ✅ refControls 由上層（ExampleList/WordExampleBlock）決定內容與狀態，本檔只負責位置
+ *
+ * 異動紀錄（保留舊紀錄，新增於下）
+ * - 2026-01-06：Option A：Example 標題列加入 multiRef toggle（由上層透過 ExampleList 傳入），亮/暗模式可見；不改任何查詢流程
+ * - 2026-01-06：RefControls Slot：新增 refControls prop，並固定 render 在翻譯區塊之後，避免卡在例句與對話之間
+ * - 2026-01-06：UI 微調：三個按鈕維持左側，僅將 multiRef toggle 推到同一行最右側（透過 margin-left:auto）
+ *
+ * 初始化狀態（Production 排查）
+ * - component: ExampleSentence
+ * - phase: 2-UX
+ */
+
+// frontend/src/components/examples/ExampleSentence.jsx (file start)
+import React, { useState, useEffect, useMemo } from "react";
 
 const MOSAIC_LINE = "----------------------------";
 
@@ -64,6 +86,44 @@ const eyeButtonStyle = {
   flexShrink: 0,
 };
 
+// ✅ Phase 2-UX：Multi-ref toggle（亮/暗模式可見）
+// - OFF：淡底 + 邊框（看得到）
+// - ON：淡綠底 + 綠邊框 + dot 實心
+const getMultiRefToggleStyle = (enabled) => {
+  return {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 8,
+    padding: "2px 12px",
+    borderRadius: 999,
+    cursor: "pointer",
+    userSelect: "none",
+    border: enabled
+      ? "1px solid rgba(60, 180, 120, 0.92)"
+      : "1px solid rgba(0, 0, 0, 0.28)",
+    background: enabled ? "rgba(80, 200, 120, 0.18)" : "rgba(0, 0, 0, 0.04)",
+    color: "inherit",
+    fontSize: 13,
+    lineHeight: 1.2,
+    whiteSpace: "nowrap",
+  };
+};
+
+const getMultiRefToggleDotStyle = (enabled) => {
+  return {
+    width: 10,
+    height: 10,
+    borderRadius: 999,
+    display: "inline-block",
+    border: enabled
+      ? "1px solid rgba(60, 180, 120, 0.95)"
+      : "1px solid rgba(0, 0, 0, 0.25)",
+    background: enabled
+      ? "rgba(60, 180, 120, 0.95)"
+      : "rgba(0, 0, 0, 0.12)",
+  };
+};
+
 export default function ExampleSentence({
   hasExamples,
   mainSentence,
@@ -76,7 +136,29 @@ export default function ExampleSentence({
   onSpeak,
   onToggleConversation,
   conversationToggleTooltip,
+
+  // ✅ Phase 2-UX：由 ExampleList 轉傳（Option A：放在例句標題旁）
+  multiRefEnabled,
+  onToggleMultiRef,
+  multiRefToggleLabel,
+  multiRefToggleHint,
+
+  // ✅ Phase 2-UX：RefControls Slot（由上層提供內容：新增參考 input / pills / 提示）
+  // - 本檔只決定位置：固定放在翻譯區塊之後，避免卡在例句與對話中間
+  refControls,
 }) {
+  // =========================
+  // 初始化狀態（Production 排查）
+  // =========================
+  const __initState = useMemo(
+    () => ({
+      component: "ExampleSentence",
+      phase: "2-UX",
+      timestamp: new Date().toISOString(),
+    }),
+    []
+  );
+
   // 顯示狀態：從 localStorage 初始化
   const [showGerman, setShowGerman] = useState(() => {
     if (typeof window === "undefined") return true;
@@ -116,6 +198,13 @@ export default function ExampleSentence({
     }
   };
 
+  // ✅ Phase 2-UX：Multi-ref toggle 點擊（只改狀態，不觸發自動查詢）
+  const handleToggleMultiRefClick = () => {
+    if (onToggleMultiRef && typeof onToggleMultiRef === "function") {
+      onToggleMultiRef();
+    }
+  };
+
   const renderSentence = () => {
     if (!mainSentence) return null;
     const parts = mainSentence.split(/(\s+)/);
@@ -146,9 +235,15 @@ export default function ExampleSentence({
     return <span style={{ whiteSpace: "nowrap" }}>{MOSAIC_LINE}</span>;
   };
 
+  // ✅ Phase 2-UX：是否顯示 multiRef toggle（需上層有接線才顯示）
+  const showMultiRefToggle = !!multiRefToggleLabel && !!onToggleMultiRef;
+
+  // ✅ Phase 2-UX：是否顯示 refControls（需上層有提供內容才顯示）
+  const showRefControls = !!refControls;
+
   return (
     <>
-      {/* 標題列：例句 + 播放 + 重整 + 對話 */}
+      {/* 標題列：例句 + Multi-ref toggle（Option A） + 播放 + 重整 + 對話 */}
       <div
         style={{
           display: "flex",
@@ -158,6 +253,25 @@ export default function ExampleSentence({
         }}
       >
         <div style={{ fontWeight: 600 }}>{sectionExample || "例句"}</div>
+
+        {/* DEPRECATED 2026/01/06: multiRef toggle 原本放在標題旁，會讓後面的三個按鈕（播放/刷新/對話）位置跟著變動；
+            需求是「三個按鈕維持原本左側，只移動 multiRef toggle」，因此改為在本列最右側 render（見下方）。
+            這段原碼保留以利回溯（不執行）。
+
+        {/* ✅ Option A：toggle 放在例句旁邊（同一列） * /}
+        {showMultiRefToggle && (
+          <button
+            type="button"
+            onClick={handleToggleMultiRefClick}
+            aria-pressed={multiRefEnabled ? "true" : "false"}
+            title={multiRefToggleHint || ""}
+            style={getMultiRefToggleStyle(!!multiRefEnabled)}
+          >
+            <span>{multiRefToggleLabel}</span>
+            <span style={getMultiRefToggleDotStyle(!!multiRefEnabled)} />
+          </button>
+        )}
+        */}
 
         {hasExamples && onSpeak && (
           <button
@@ -255,6 +369,23 @@ export default function ExampleSentence({
             產生中…
           </span>
         )}
+
+        {/* ✅ 2026-01-06：僅移動 multiRef toggle 到同一行最右側（不影響其他按鈕維持左側） */}
+        {showMultiRefToggle && (
+          <button
+            type="button"
+            onClick={handleToggleMultiRefClick}
+            aria-pressed={multiRefEnabled ? "true" : "false"}
+            title={multiRefToggleHint || ""}
+            style={{
+              ...getMultiRefToggleStyle(!!multiRefEnabled),
+              marginLeft: "auto",
+            }}
+          >
+            <span>{multiRefToggleLabel}</span>
+            <span style={getMultiRefToggleDotStyle(!!multiRefEnabled)} />
+          </button>
+        )}
       </div>
 
       {/* 主例句（德文）＋ 眼睛切換 */}
@@ -319,6 +450,18 @@ export default function ExampleSentence({
           </div>
         </div>
       )}
+
+      {/* ✅ Phase 2-UX：RefControls Slot（固定放在翻譯之後，避免卡在例句與對話之間） */}
+      {showRefControls && (
+        <div
+          style={{
+            marginTop: 10,
+          }}
+        >
+          {refControls}
+        </div>
+      )}
     </>
   );
 }
+// frontend/src/components/examples/ExampleSentence.jsx (file end)

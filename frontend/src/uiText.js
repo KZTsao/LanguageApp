@@ -3,6 +3,28 @@
 // 多國語言文字（完整覆蓋版）
 // 注意：這個檔案只能放「純資料 / 字串」，不能放 JSX / React Component
 // -----------------------------------------------------------
+//
+// 異動紀錄（僅追加，不可刪除）：
+// - 2025-12-25：補齊 WordLibraryPanel 多國字串：title / glossEmpty / headwordButtonTitle
+// - 2026-01-04：補齊 WordLibraryPanel hover tooltip 多國字串：senseLikeTitle / senseDislikeTitle / senseStatusDisabledTitle
+// - 2026-01-04：新增 Adjektiv 多國字串 adjektivCard（嚴格多國模式；提供 nounPlaceholder；避免元件內寫死 Mann / 特定語言 fallback）
+// - 2026-01-05：新增 AI 免責聲明多國字串 aiDisclaimerLines（ResultPanel Raw JSON 上方提示）
+// - 2026-01-06：補齊 WordExampleBlock 多國字串：wordCard.exampleBlock（multi-ref / refs UI）
+// -----------------------------------------------------------
+
+// =====================================================
+// 功能初始化狀態（Production 排查）
+// -----------------------------------------------------
+// - 本檔案為「純資料」；初始化狀態僅提供 metadata 供需要時印 log
+// - 不會影響既有 default export（uiText）用法
+// =====================================================
+export const UI_TEXT_INIT_STATE = {
+  file: "frontend/src/uiText.js",
+  module: "uiText",
+  ts: "2026-01-06",
+  notes:
+    "Added wordCard.exampleBlock keys for WordExampleBlock strict i18n (multi-ref / refs UI). Kept existing i18n data unchanged; appended only.",
+};
 
 const uiText = {
   // ----------------------------
@@ -16,6 +38,12 @@ const uiText = {
     signInWithGoogle: "使用 Google 登入",
     signOut: "登出",
     authTesting: "測試 Auth",
+
+    // ✅ AI 免責聲明（新增：ResultPanel JSON 上方顯示）
+    aiDisclaimerLines: [
+      "⚠️ 本詞條內容由 AI 自動生成並整理，涵蓋多國語言釋義與用法。",
+      "AI 可能依語境調整釋義結構或順序，內容僅供學習參考，非傳統權威辭典。",
+    ],
 
     // ★ Layout（新增）
     layout: {
@@ -98,6 +126,19 @@ const uiText = {
 
       refreshExamplesTooltipLabel: "重新產生例句",
 
+      // ✅ WordExampleBlock（新增：refs/multi-ref 共用字串集中）
+      exampleBlock: {
+        multiRefLabel: "多重參考",
+        refPlaceholder: "新增參考（名詞/動詞/文法）...",
+        addRefBtn: "加入",
+        refsDirtyHint: "參考已變更，按重新產生才會套用",
+        multiRefHint: "使用多個參考點產生例句",
+        refInvalidHint: "不合理的參考（例如：xxx / ... / …），已阻擋加入",
+        refStatusUsed: "已使用",
+        refStatusMissing: "缺少",
+        missingRefsHint: "有參考未被使用，請再重新產生",
+      },
+
       // 連續對話（Conversation）
       conversationTitle: "連續對話",
       conversationCloseLabel: "關閉",
@@ -119,6 +160,31 @@ const uiText = {
         Reflexivpronomen: "反身代名詞",
         Possessivpronomen: "所有格代名詞",
       },
+    },
+
+    // =====================================================
+    // ✅ Adjektiv（新增：嚴格多國模式用）
+    // -----------------------------------------------------
+    // - WordPosInfoAdjektiv 只吃 uiLang 對應語系，不允許 fallback 到特定語言
+    // - nounPlaceholder 用來避免示例句寫死 Mann（不應在元件內硬寫）
+    // =====================================================
+    adjektivCard: {
+      posLabel: "Adjektiv",
+      title: "形容詞變化",
+      colon: "：",
+
+      degreeTitle: "程度",
+      positiveLabel: "原級",
+      comparativeLabel: "比較級",
+      superlativeLabel: "最高級",
+
+      declTitle: "詞尾變化（示例）",
+      declWeakLabel: "定冠詞（弱變化）",
+      declMixedLabel: "不定冠詞（混合變化）",
+      declStrongLabel: "無冠詞（強變化）",
+
+      nounPlaceholder: "名詞",
+      hintText: "形容詞詞尾會跟著「冠詞 / 性別 / 格位」變化",
     },
 
     verbCard: {
@@ -195,11 +261,14 @@ const uiText = {
       },
       errors: {
         backendUnavailable: "後端服務目前無法使用，請稍後再試",
-        nonSentenceOnly: "目前只支援「單字 / 片語 / 慣用語」（非句子）。\n\n⚠️ 請勿輸入標點符號（.,!?、，。；：… 等）",
+        nonSentenceOnly:
+          "目前只支援「單字 / 片語 / 慣用語」（非句子）。\n\n⚠️ 請勿輸入標點符號（.,!?、，。；：… 等）",
       },
 
       // ✅ WordLibraryPanel（新增：集中管理）
       libraryPanel: {
+        // ✅ 新增
+        title: "單字庫",
         subtitle: "只顯示原型（Lemma），不包含變化形",
         countSuffix: "筆",
         emptyLine1: "尚未收藏任何單字",
@@ -210,6 +279,14 @@ const uiText = {
         ariaFavorite: "我的最愛",
         reviewTitle: "點選以原型回到查詢頁複習",
         senseStatusTitle: "義項狀態（僅顯示；操作於後續 D 版接入）",
+        // ✅ 新增（2026-01-04）：hover tooltip 多國字串
+        senseStatusDisabledTitle: "尚未接入狀態更新（僅顯示）",
+        senseLikeTitle: "標記為熟悉",
+        senseDislikeTitle: "標記為不熟悉",
+        // ✅ 新增
+        glossEmpty: "—",
+        // ✅ 新增
+        headwordButtonTitle: "點此回到查詢頁複習",
       },
     },
   },
@@ -225,6 +302,12 @@ const uiText = {
     signInWithGoogle: "Sign in with Google",
     signOut: "Sign out",
     authTesting: "Test Auth",
+
+    // ✅ AI disclaimer (NEW: show above Raw JSON in ResultPanel)
+    aiDisclaimerLines: [
+      "⚠️ This entry is automatically generated and organized by AI, including multilingual meanings and usage.",
+      "AI may adjust the structure or order depending on context. For learning reference only, not an authoritative dictionary.",
+    ],
 
     layout: {
       mutterspracheLabel: "Native language:",
@@ -297,6 +380,19 @@ const uiText = {
 
       refreshExamplesTooltipLabel: "Regenerate examples",
 
+      // ✅ WordExampleBlock（NEW: shared strings for multi-ref/refs UI）
+      exampleBlock: {
+        multiRefLabel: "Multi-ref",
+        refPlaceholder: "Add reference (noun/verb/grammar)...",
+        addRefBtn: "Add",
+        refsDirtyHint: "Refs changed — refresh to regenerate",
+        multiRefHint: "Use multiple refs for examples",
+        refInvalidHint: "Invalid reference (e.g., 'xxx' / '...' / '…').",
+        refStatusUsed: "used",
+        refStatusMissing: "missing",
+        missingRefsHint: "Some references were not used. Please regenerate.",
+      },
+
       conversationTitle: "Conversation",
       conversationCloseLabel: "Close",
 
@@ -317,6 +413,28 @@ const uiText = {
         Reflexivpronomen: "Reflexive Pronoun",
         Possessivpronomen: "Possessive Pronoun",
       },
+    },
+
+    // =====================================================
+    // ✅ Adjective（新增：strict i18n for WordPosInfoAdjektiv）
+    // =====================================================
+    adjectiveCard: {
+      posLabel: "Adjective",
+      title: "Adjective forms",
+      colon: ":",
+
+      degreeTitle: "Degree",
+      positiveLabel: "Positive",
+      comparativeLabel: "Comparative",
+      superlativeLabel: "Superlative",
+
+      declTitle: "Endings (examples)",
+      declWeakLabel: "Definite article (weak)",
+      declMixedLabel: "Indefinite article (mixed)",
+      declStrongLabel: "No article (strong)",
+
+      nounPlaceholder: "noun",
+      hintText: "Adjective endings depend on article / gender / case.",
     },
 
     verbCard: {
@@ -390,12 +508,16 @@ const uiText = {
         clearThis: "Click to clear this record",
       },
       errors: {
-        backendUnavailable: "Backend service is currently unavailable. Please try again later.",
-        nonSentenceOnly: "Only single words / phrases / idioms are supported (not full sentences).\n\n⚠️ Please remove punctuation (.,!? etc.) and try again.",
+        backendUnavailable:
+          "Backend service is currently unavailable. Please try again later.",
+        nonSentenceOnly:
+          "Only single words / phrases / idioms are supported (not full sentences).\n\n⚠️ Please remove punctuation (.,!? etc.) and try again.",
       },
 
       // ✅ WordLibraryPanel（新增：集中管理）
       libraryPanel: {
+        // ✅ 新增
+        title: "Word Library",
         subtitle: "Only lemmas are shown (no inflections)",
         countSuffix: "items",
         emptyLine1: "No saved words yet",
@@ -405,7 +527,16 @@ const uiText = {
         lemmaLabel: "Lemma",
         ariaFavorite: "Favorite",
         reviewTitle: "Click to review this lemma in search",
-        senseStatusTitle: "Sense status (display only; actions will be added later)",
+        senseStatusTitle:
+          "Sense status (display only; actions will be added later)",
+        // ✅ 新增（2026-01-04）：hover tooltip 多國字串
+        senseStatusDisabledTitle: "Not connected yet (display only)",
+        senseLikeTitle: "Mark as familiar",
+        senseDislikeTitle: "Mark as unfamiliar",
+        // ✅ 新增
+        glossEmpty: "—",
+        // ✅ 新增
+        headwordButtonTitle: "Click to review in search",
       },
     },
   },
@@ -421,6 +552,12 @@ const uiText = {
     signInWithGoogle: "使用 Google 登录",
     signOut: "登出",
     authTesting: "测试 Auth",
+
+    // ✅ AI 免责声明（新增：ResultPanel JSON 上方显示）
+    aiDisclaimerLines: [
+      "⚠️ 本词条内容由 AI 自动生成并整理，涵盖多国语言释义与用法。",
+      "AI 可能随语境调整释义结构或顺序，内容仅供学习参考，非传统权威词典。",
+    ],
 
     layout: {
       mutterspracheLabel: "母语：",
@@ -493,6 +630,19 @@ const uiText = {
 
       refreshExamplesTooltipLabel: "重新生成例句",
 
+      // ✅ WordExampleBlock（新增：refs/multi-ref 共用字串集中）
+      exampleBlock: {
+        multiRefLabel: "多重参考",
+        refPlaceholder: "新增参考（名词/动词/文法）...",
+        addRefBtn: "加入",
+        refsDirtyHint: "参考已变更，按重新生成才会套用",
+        multiRefHint: "使用多个参考点生成例句",
+        refInvalidHint: "不合理的参考（例如：xxx / ... / …），已阻挡加入",
+        refStatusUsed: "已使用",
+        refStatusMissing: "缺少",
+        missingRefsHint: "有参考未被使用，请再重新生成",
+      },
+
       conversationTitle: "对话",
       conversationCloseLabel: "关闭",
 
@@ -513,6 +663,28 @@ const uiText = {
         Reflexivpronomen: "反身代词",
         Possessivpronomen: "所有格代词",
       },
+    },
+
+    // =====================================================
+    // ✅ Adjektiv（新增：嚴格多國模式用）
+    // =====================================================
+    adjektivCard: {
+      posLabel: "Adjektiv",
+      title: "形容词变化",
+      colon: "：",
+
+      degreeTitle: "程度",
+      positiveLabel: "原级",
+      comparativeLabel: "比较级",
+      superlativeLabel: "最高级",
+
+      declTitle: "词尾变化（示例）",
+      declWeakLabel: "定冠词（弱变化）",
+      declMixedLabel: "不定冠词（混合变化）",
+      declStrongLabel: "无冠词（强变化）",
+
+      nounPlaceholder: "名词",
+      hintText: "形容词词尾会随「冠词 / 性别 / 格位」变化",
     },
 
     verbCard: {
@@ -587,11 +759,14 @@ const uiText = {
       },
       errors: {
         backendUnavailable: "后端服务暂时无法使用，请稍后再试",
-        nonSentenceOnly: "目前只支持「单词 / 短语 / 习惯用语」（非句子）。\n\n⚠️ 请勿输入标点符号（.,!?、，。；：… 等）",
+        nonSentenceOnly:
+          "目前只支持「单词 / 短语 / 习惯用语」（非句子）。\n\n⚠️ 请勿输入标点符号（.,!?、，。；：… 等）",
       },
 
       // ✅ WordLibraryPanel（新增：集中管理）
       libraryPanel: {
+        // ✅ 新增
+        title: "单字库",
         subtitle: "只显示原型（Lemma），不包含变位/变化形",
         countSuffix: "条",
         emptyLine1: "还没有收藏任何单词",
@@ -602,6 +777,14 @@ const uiText = {
         ariaFavorite: "收藏",
         reviewTitle: "点击以原型回到查询页复习",
         senseStatusTitle: "义项状态（仅显示；操作将在后续加入）",
+        // ✅ 新增（2026-01-04）：hover tooltip 多國字串
+        senseStatusDisabledTitle: "尚未接入状态更新（仅显示）",
+        senseLikeTitle: "标记为熟悉",
+        senseDislikeTitle: "标记为不熟悉",
+        // ✅ 新增
+        glossEmpty: "—",
+        // ✅ 新增
+        headwordButtonTitle: "点击返回查询页复习",
       },
     },
   },
@@ -617,6 +800,12 @@ const uiText = {
     signInWithGoogle: "Mit Google anmelden",
     signOut: "Abmelden",
     authTesting: "Auth testen",
+
+    // ✅ KI-Hinweis (NEU: oberhalb von Raw JSON im ResultPanel)
+    aiDisclaimerLines: [
+      "⚠️ Dieser Eintrag wurde automatisch von einer KI erstellt und strukturiert (mehrsprachige Bedeutungen und Gebrauch).",
+      "Die KI kann Struktur oder Reihenfolge je nach Kontext anpassen. Nur zum Lernen, kein maßgebliches Wörterbuch.",
+    ],
 
     layout: {
       mutterspracheLabel: "Muttersprache:",
@@ -689,6 +878,19 @@ const uiText = {
 
       refreshExamplesTooltipLabel: "Beispiele neu erzeugen",
 
+      // ✅ WordExampleBlock（NEU: gemeinsame Strings für Multi-ref/Refs UI）
+      exampleBlock: {
+        multiRefLabel: "Multi-ref",
+        refPlaceholder: "Referenz hinzufügen (Nomen/Verb/Grammatik)...",
+        addRefBtn: "Hinzufügen",
+        refsDirtyHint: "Referenzen geändert — bitte neu erzeugen",
+        multiRefHint: "Mehrere Referenzen für Beispiele nutzen",
+        refInvalidHint: "Ungültige Referenz (z.B. 'xxx' / '...' / '…').",
+        refStatusUsed: "verwendet",
+        refStatusMissing: "fehlt",
+        missingRefsHint: "Einige Referenzen wurden nicht verwendet. Bitte neu erzeugen.",
+      },
+
       conversationTitle: "Konversation",
       conversationCloseLabel: "Schließen",
 
@@ -709,6 +911,28 @@ const uiText = {
         Reflexivpronomen: "Reflexivpronomen",
         Possessivpronomen: "Possessivpronomen",
       },
+    },
+
+    // =====================================================
+    // ✅ Adjektiv（新增：strict i18n for WordPosInfoAdjektiv）
+    // =====================================================
+    adjektivCard: {
+      posLabel: "Adjektiv",
+      title: "Adjektivformen",
+      colon: ":",
+
+      degreeTitle: "Steigerung",
+      positiveLabel: "Positiv",
+      comparativeLabel: "Komparativ",
+      superlativeLabel: "Superlativ",
+
+      declTitle: "Endungen (Beispiele)",
+      declWeakLabel: "Bestimmter Artikel (schwach)",
+      declMixedLabel: "Unbestimmter Artikel (gemischt)",
+      declStrongLabel: "Kein Artikel (stark)",
+
+      nounPlaceholder: "Nomen",
+      hintText: "Endungen hängen von Artikel / Genus / Kasus ab.",
     },
 
     verbCard: {
@@ -782,12 +1006,16 @@ const uiText = {
         clearThis: "Klicken, um diesen Eintrag zu löschen",
       },
       errors: {
-        backendUnavailable: "Der Backend-Dienst ist derzeit nicht verfügbar. Bitte später erneut versuchen.",
-        nonSentenceOnly: "Aktuell werden nur Wörter / Phrasen / Redewendungen unterstützt (keine Sätze).\n\n⚠️ Bitte ohne Satzzeichen eingeben (.,!? usw.).",
+        backendUnavailable:
+          "Der Backend-Dienst ist derzeit nicht verfügbar. Bitte später erneut versuchen.",
+        nonSentenceOnly:
+          "Aktuell werden nur Wörter / Phrasen / Redewendungen unterstützt (keine Sätze).\n\n⚠️ Bitte ohne Satzzeichen eingeben (.,!? usw.).",
       },
 
       // ✅ WordLibraryPanel（新增：集中管理）
       libraryPanel: {
+        // ✅ 新增
+        title: "Wortliste",
         subtitle: "Nur Grundformen (Lemma), keine Beugungsformen",
         countSuffix: "Einträge",
         emptyLine1: "Noch keine gespeicherten Wörter",
@@ -797,7 +1025,16 @@ const uiText = {
         lemmaLabel: "Lemma",
         ariaFavorite: "Favorit",
         reviewTitle: "Klicken, um dieses Lemma in der Suche zu wiederholen",
-        senseStatusTitle: "Bedeutungsstatus (nur Anzeige; Aktionen folgen später)",
+        senseStatusTitle:
+          "Bedeutungsstatus (nur Anzeige; Aktionen folgen später)",
+        // ✅ 新增（2026-01-04）：hover tooltip 多國字串
+        senseStatusDisabledTitle: "Noch nicht verbunden (nur Anzeige)",
+        senseLikeTitle: "Als bekannt markieren",
+        senseDislikeTitle: "Als unbekannt markieren",
+        // ✅ 新增
+        glossEmpty: "—",
+        // ✅ 新增
+        headwordButtonTitle: "Klicken, um im Suchmodus zu üben",
       },
     },
   },
@@ -813,6 +1050,12 @@ const uiText = {
     signInWithGoogle: "تسجيل الدخول عبر Google",
     signOut: "تسجيل الخروج",
     authTesting: "اختبار Auth",
+
+    // ✅ تنبيه الذكاء الاصطناعي (جديد: يظهر أعلى Raw JSON في ResultPanel)
+    aiDisclaimerLines: [
+      "⚠️ تم إنشاء هذا المُدخل وتنظيمه تلقائيًا بواسطة الذكاء الاصطناعي، ويشمل معاني واستخدامات متعددة اللغات.",
+      "قد يغيّر الذكاء الاصطناعي البنية أو الترتيب حسب السياق. للمراجعة التعليمية فقط وليس قاموسًا موثوقًا.",
+    ],
 
     layout: {
       mutterspracheLabel: "اللغة الأم:",
@@ -885,6 +1128,19 @@ const uiText = {
 
       refreshExamplesTooltipLabel: "إعادة توليد الأمثلة",
 
+      // ✅ WordExampleBlock（جديد: نصوص مشتركة لواجهة multi-ref/refs）
+      exampleBlock: {
+        multiRefLabel: "Multi-ref",
+        refPlaceholder: "أضف مرجعًا (اسم/فعل/قواعد)...",
+        addRefBtn: "إضافة",
+        refsDirtyHint: "تم تغيير المراجع — حدّث لإعادة التوليد",
+        multiRefHint: "استخدم عدة مراجع لتوليد الأمثلة",
+        refInvalidHint: "مرجع غير صالح (مثل: 'xxx' / '...' / '…').",
+        refStatusUsed: "مستخدم",
+        refStatusMissing: "ناقص",
+        missingRefsHint: "لم تُستخدم بعض المراجع. الرجاء إعادة التوليد.",
+      },
+
       conversationTitle: "محادثة",
       conversationCloseLabel: "إغلاق",
 
@@ -905,6 +1161,28 @@ const uiText = {
         Reflexivpronomen: "ضمير انعكاسي",
         Possessivpronomen: "ضمير ملكية",
       },
+    },
+
+    // =====================================================
+    // ✅ Adjective / صفة（新增：strict i18n for WordPosInfoAdjektiv）
+    // =====================================================
+    adjectiveCard: {
+      posLabel: "صفة",
+      title: "صيغ الصفة",
+      colon: ":",
+
+      degreeTitle: "الدرجة",
+      positiveLabel: "أساسية",
+      comparativeLabel: "تفضيل",
+      superlativeLabel: "أعلى",
+
+      declTitle: "النهايات (أمثلة)",
+      declWeakLabel: "مع أداة تعريف (ضعيف)",
+      declMixedLabel: "مع نكرة (مختلط)",
+      declStrongLabel: "بدون أداة (قوي)",
+
+      nounPlaceholder: "اسم",
+      hintText: "نهاية الصفة تعتمد على الأداة / الجنس / الحالة.",
     },
 
     verbCard: {
@@ -978,12 +1256,16 @@ const uiText = {
         clearThis: "انقر لمسح هذا السجل",
       },
       errors: {
-        backendUnavailable: "الخدمة الخلفية غير متوفرة حالياً، يرجى المحاولة لاحقاً",
-        nonSentenceOnly: "حالياً ندعم الكلمات / العبارات / التعابير فقط (ليست جُملاً).\n\n⚠️ الرجاء إزالة علامات الترقيم (.,!? إلخ) ثم المحاولة مرة أخرى.",
+        backendUnavailable:
+          "الخدمة الخلفية غير متوفرة حالياً، يرجى المحاولة لاحقاً",
+        nonSentenceOnly:
+          "حالياً ندعم الكلمات / العبارات / التعابير فقط (ليست جُملاً).\n\n⚠️ الرجاء إزالة علامات الترقيم (.,!? إلخ) ثم المحاولة مرة أخرى.",
       },
 
       // ✅ WordLibraryPanel（新增：集中管理）
       libraryPanel: {
+        // ✅ 新增
+        title: "مكتبة الكلمات",
         subtitle: "عرض الصيغة الأساسية فقط (Lemma) بدون تصريف",
         countSuffix: "عنصر",
         emptyLine1: "لا توجد كلمات محفوظة بعد",
@@ -993,7 +1275,16 @@ const uiText = {
         lemmaLabel: "Lemma",
         ariaFavorite: "مفضلة",
         reviewTitle: "انقر لمراجعة هذه الصيغة في البحث",
-        senseStatusTitle: "حالة المعنى (عرض فقط؛ ستُضاف الإجراءات لاحقًا)",
+        senseStatusTitle:
+          "حالة المعنى (عرض فقط؛ ستُضاف الإجراءات لاحقًا)",
+        // ✅ 新增（2026-01-04）：hover tooltip 多國字串
+        senseStatusDisabledTitle: "غير متصل بعد (عرض فقط)",
+        senseLikeTitle: "وضع علامة: مألوف",
+        senseDislikeTitle: "وضع علامة: غير مألوف",
+        // ✅ 新增
+        glossEmpty: "—",
+        // ✅ 新增
+        headwordButtonTitle: "انقر للمراجعة في البحث",
       },
     },
   },

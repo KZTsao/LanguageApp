@@ -7,6 +7,7 @@
  *
  * 異動紀錄：
  * - 2025/12/18：改為以 TTS_PROVIDER 為唯一決策來源；cache key 納入 provider/voice；修正 audioBase64 未定義；回傳 provider 改為實際 provider；保留 legacy ELEVEN_* 但標示 deprecated；強化 log 方便排查
+ * - 2026/01/06：累加 TTS 使用量到 profiles.tts_chars_total（read → +add → update），失敗不擋 TTS 主流程；補齊 Service Role Supabase Admin Client；加入 [TTS_PROFILE] 關鍵 log
  *
  * 初始化狀態（Production 排查）：
  * - [/api/tts][init] 會輸出 provider / lang / voice 的「是否存在」與當前值（不輸出 key 內容）
@@ -16,6 +17,7 @@
 const express = require("express");
 const router = express.Router();
 const jwt = require("jsonwebtoken");
+const { createClient } = require("@supabase/supabase-js");
 const { synthesizeTTS } = require("../clients/ttsClient");
 
 const {
@@ -66,6 +68,124 @@ function tryGetAuthUser(req) {
   } catch {
     return null;
   }
+}
+
+/**
+ * ✅ 功能：建立 Supabase Admin Client（Service Role）
+ * - 只在後端使用，用來更新 profiles 的用量欄位
+ * - 若缺環境變數，回傳 null（並由呼叫端決定是否 fallback）
+ */
+function getAdminSupabase() {
+  const url = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  if (!url || !key) return null;
+
+  return createClient(url, key, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+}
+
+/**
+ * ✅ 功能：確保 profiles row 存在（若沒有就補一筆最小欄位）
+ */
+async function ensureProfileRowExists(supabase, userId, email, nowIso) {
+  if (!supabase || !userId) return { ok: false, reason: "missing supabase or userId" };
+
+  const { data: existing, error: selErr } = await supabase
+    .from("profiles")
+    .select("id")
+    .eq("id", userId)
+    .maybeSingle();
+
+  if (selErr) {
+    return { ok: false, error: selErr };
+  }
+
+  if (existing) {
+    return { ok: true, existed: true };
+  }
+
+  const { error: insErr } = await supabase.from("profiles").insert([
+    {
+      id: userId,
+      email: email || null,
+      last_visit_at: nowIso || new Date().toISOString(),
+      visit_count: 0,
+    },
+  ]);
+
+  if (insErr) {
+    return { ok: false, error: insErr };
+  }
+
+  return { ok: true, existed: false };
+}
+
+/**
+ * ✅ 功能：累加 profiles.tts_chars_total（不影響主流程：失敗只 log）
+ */
+async function addTtsCharsToProfile({ userId, email, addChars, traceId }) {
+  const tag = "[TTS_PROFILE]";
+
+  if (!userId) {
+    console.log(`${tag} skipped: missing userId`);
+    return { ok: false, skipped: true, reason: "missing userId" };
+  }
+
+  const supabase = getAdminSupabase();
+  if (!supabase) {
+    console.warn(`${tag} skipped: missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY`);
+    return { ok: false, skipped: true, reason: "missing supabase env" };
+  }
+
+  const nowIso = new Date().toISOString();
+
+  // 1) 確保 profiles row 存在
+  const ensureRes = await ensureProfileRowExists(supabase, userId, email, nowIso);
+  if (!ensureRes.ok) {
+    console.warn(`${tag} ensureProfileRowExists failed`, {
+      traceId,
+      detail: ensureRes.error?.message || String(ensureRes.error || ensureRes.reason),
+    });
+    return { ok: false, error: ensureRes.error || ensureRes.reason };
+  }
+
+  // 2) read → +add → update（最小可行，避免 RPC 依賴）
+  const { data: existing, error: selErr } = await supabase
+    .from("profiles")
+    .select("id, tts_chars_total")
+    .eq("id", userId)
+    .maybeSingle();
+
+  if (selErr) {
+    console.warn(`${tag} select failed`, { traceId, detail: selErr.message || String(selErr) });
+    return { ok: false, error: selErr };
+  }
+
+  const prev = Number(existing?.tts_chars_total || 0);
+  const inc = Number(addChars || 0);
+  const next = prev + (Number.isFinite(inc) ? inc : 0);
+
+  const { data: updated, error: updErr } = await supabase
+    .from("profiles")
+    .update({
+      email: email || null,
+      tts_chars_total: next,
+      // 可選：也順便刷新 last_visit_at，方便後台觀察活躍（不影響 visit_count）
+      last_visit_at: nowIso,
+    })
+    .eq("id", userId)
+    .select("id, tts_chars_total")
+    .single();
+
+  if (updErr) {
+    console.warn(`${tag} update failed`, { traceId, detail: updErr.message || String(updErr) });
+    return { ok: false, error: updErr };
+  }
+
+  console.log(`${tag} ok`, { traceId, userId, addChars: inc, tts_chars_total: updated.tts_chars_total });
+  return { ok: true, tts_chars_total: updated.tts_chars_total };
 }
 
 /**
@@ -140,6 +260,8 @@ function logInitOnce() {
       hasGoogleCredPath: !!process.env.GOOGLE_APPLICATION_CREDENTIALS,
       hasGoogleCredJson: !!process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON,
       voiceKeyPresent: !!voiceKey,
+      hasSupabaseUrl: !!process.env.SUPABASE_URL,
+      hasServiceRoleKey: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
     })
   );
 }
@@ -176,6 +298,23 @@ router.post("/", async (req, res) => {
       userId: authUser?.id || "",
       email: authUser?.email || "",
     });
+
+    // ★ 累加用量到 profiles.tts_chars_total（失敗不擋主流程）
+    // traceId：用來對照後端 log（不需要前端改動）
+    const traceId = `tts_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+    try {
+      await addTtsCharsToProfile({
+        userId: authUser?.id || "",
+        email: authUser?.email || "",
+        addChars: text.length,
+        traceId,
+      });
+    } catch (e) {
+      console.warn("[TTS_PROFILE] unexpected error", {
+        traceId,
+        detail: e?.message || String(e),
+      });
+    }
 
     // ✅ 目前 provider（唯一真相）
     const activeProvider = getActiveTtsProvider();

@@ -16,9 +16,14 @@
  *   - 修正 API 呼叫在 Vercel 環境打到錯誤網域的問題
  *   - 新增 API_BASE_URL，與 analyze / examples / tts 行為一致
  *   - 保留原本相對路徑 fetch，標示為 deprecated（不移除）
+ *
+ * - 2026-01-07
+ *   - 修正「對話翻譯不見」：支援後端直接回傳 Array（data 本身就是 turns）
+ *   - 加入 console probe（僅在偵測到 Array 直出時印一次 sample，方便 Production 排查）
  */
 
-import { useState, useCallback } from "react";
+// frontend/src/components/conversation/useConversation.jsx
+import { useState, useCallback, useRef } from "react";
 
 const MOSAIC_LINE = "----------------------------";
 
@@ -29,8 +34,7 @@ const MOSAIC_LINE = "----------------------------";
  * - 正式環境（Vercel）必須使用完整 backend URL
  * - 本機環境可由 Vite proxy 或 .env 控制
  */
-const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL || "";
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "";
 
 /**
  * buildFakeConversation
@@ -99,6 +103,12 @@ export default function useConversation({ mainSentence, explainLang }) {
   const [conversationError, setConversationError] = useState("");
 
   /**
+   * Production 排查：避免 console 洗版
+   * - 只在偵測到「後端直接回傳 Array」時印一次 sample
+   */
+  const hasLoggedArrayResponseRef = useRef(false);
+
+  /**
    * fetchConversationFromBackend_DEPRECATED
    * --------------------------------------------------
    * ⚠️ 已淘汰（但保留）
@@ -132,19 +142,16 @@ export default function useConversation({ mainSentence, explainLang }) {
       setConversationLoading(true);
       setConversationError("");
 
-      const res = await fetch(
-        `${API_BASE_URL}/api/dictionary/conversation`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            sentence: mainSentence,
-            explainLang: explainLang || "zh-TW",
-          }),
-        }
-      );
+      const res = await fetch(`${API_BASE_URL}/api/dictionary/conversation`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          sentence: mainSentence,
+          explainLang: explainLang || "zh-TW",
+        }),
+      });
 
       if (!res.ok) {
         throw new Error(`HTTP ${res.status}`);
@@ -157,6 +164,15 @@ export default function useConversation({ mainSentence, explainLang }) {
         turns = normalizeTurns(data.turns);
       } else if (Array.isArray(data.conversation)) {
         turns = normalizeTurns(data.conversation);
+      } else if (Array.isArray(data)) {
+        // ✅ 2026-01-07：後端直接回傳 Array（最常見：[{de, translation}, ...]）
+        turns = normalizeTurns(data);
+
+        if (!hasLoggedArrayResponseRef.current) {
+          hasLoggedArrayResponseRef.current = true;
+          // eslint-disable-next-line no-console
+          console.log("[conversation] backend returned Array directly (sample)", data && data[0]);
+        }
       }
 
       if (!turns || turns.length === 0) {
@@ -178,9 +194,7 @@ export default function useConversation({ mainSentence, explainLang }) {
 
     // 已經有對話 → 只切換開關
     if (conversation && conversation.turns && conversation.turns.length > 0) {
-      setConversation((prev) =>
-        prev ? { ...prev, isOpen: !prev.isOpen } : prev
-      );
+      setConversation((prev) => (prev ? { ...prev, isOpen: !prev.isOpen } : prev));
       return;
     }
 
@@ -211,10 +225,7 @@ export default function useConversation({ mainSentence, explainLang }) {
   const nextTurn = useCallback(() => {
     setConversation((prev) => {
       if (!prev) return prev;
-      const nextIndex = Math.min(
-        prev.turns.length - 1,
-        prev.currentIndex + 1
-      );
+      const nextIndex = Math.min(prev.turns.length - 1, prev.currentIndex + 1);
       return { ...prev, currentIndex: nextIndex };
     });
   }, []);

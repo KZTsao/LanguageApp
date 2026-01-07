@@ -1,6 +1,51 @@
 // backend/src/core/dictionaryNormalizer.js
 
 /**
+ * 文件說明：
+ * - 功能：清洗與補強模型輸出的字典 JSON，確保前端拿到穩定結構
+ * - 支援：單一釋義（單一物件）與多釋義（senses[] / array / 平行陣列）
+ * - 目標：為「收藏寫入多筆 senseIndex」提供上游資料形狀（dictionary.senses[]）
+ *
+ * 異動紀錄：
+ * - 2025-12-27：新增 multi-sense 正規化（dictionary.senses[]），並加入初始化狀態與 runtime log
+ * - 2025-12-27：補上「平行陣列」→ senses[] 正規化（例如 definition_de_translation 為 array 時）
+ * - 2025-12-27：補上 gloss/glossLang（收藏寫入 headword_gloss 用），不改動既有欄位結構
+ * - 2025-12-27：支援 analyze envelope 結構（{..., dictionary:{...}}），先正規化 envelope.dictionary（新增 runtime log）
+ */
+
+/**
+ * 功能初始化狀態（Production 排查）
+ * - 注意：這是 runtime 觀測用的狀態，不影響功能邏輯
+ */
+console.log('[dictionaryNormalizer] module loaded');
+const INIT_STATUS = {
+  module: "dictionaryNormalizer",
+  createdAt: new Date().toISOString(),
+  ready: true,
+  lastError: null,
+  features: {
+    multiSenseNormalize: true,
+    supportsParsedArray: true,
+    supportsParsedSensesField: true,
+    supportsParallelArrays: true, // ✅ 2025-12-27：支援平行陣列→senses[]
+    supportsGlossFields: true, // ✅ 2025-12-27：補 gloss/glossLang
+    supportsEnvelopeDictionary: true, // ✅ 2025-12-27：支援 analyze envelope.dictionary
+  },
+  runtime: {
+    lastCalledAt: null,
+    lastDurationMs: null,
+    lastSenseCount: null,
+    lastWord: null,
+    lastParallelSenseCount: null, // ✅ 2025-12-27：平行陣列推導出的 sense 數
+    lastParallelKeys: null, // ✅ 2025-12-27：哪些欄位被判定為平行陣列
+    lastGlossPreview: null, // ✅ 2025-12-27：最近一次推導的 gloss 預覽
+    lastGlossLang: null, // ✅ 2025-12-27：最近一次推導的 glossLang
+    lastEnvelopeDetectedAt: null, // ✅ 2025-12-27：最近一次偵測到 envelope 的時間
+    lastEnvelopeKeys: null, // ✅ 2025-12-27：envelope 的 key 快照（debug）
+  },
+};
+
+/**
  * 當 Groq 發生錯誤或無法解析時使用的安全預設值
  */
 function fallback(word) {
@@ -28,6 +73,9 @@ function fallback(word) {
       superlative: "",
     },
     notes: "",
+    // ✅ 2025-12-27：收藏用欄位（保持空）
+    gloss: "",
+    glossLang: "",
   };
 }
 
@@ -171,12 +219,151 @@ function isUnreliableVerbBaseForm(baseForm, safeWord) {
 }
 
 /**
+ * ✅ 2025-12-27：由既有欄位推導收藏用 gloss/glossLang
+ * - gloss 優先順序：
+ *   1) definition（通常是短字詞：城堡 / 鎖）
+ *   2) definition_de_translation（通常是完整句翻譯）
+ *   3) definition_de（最後才用德文定義）
+ * - glossLang 優先順序：
+ *   1) parsed.explainLang / parsed.explain_lang
+ *   2) parsed.glossLang / parsed.gloss_lang
+ *   3) ""（保持空）
+ */
+function deriveGlossFields({
+  definitionField,
+  definitionDeTransField,
+  definitionDeField,
+  parsed,
+}) {
+  const pickFirstNonEmptyFromArray = (arr) => {
+    if (!Array.isArray(arr)) return "";
+    for (const v of arr) {
+      const s = typeof v === "string" ? v.trim() : "";
+      if (s) return s;
+    }
+    return "";
+  };
+
+  let gloss = "";
+  if (Array.isArray(definitionField)) gloss = pickFirstNonEmptyFromArray(definitionField);
+  else if (typeof definitionField === "string") gloss = definitionField.trim();
+
+  if (!gloss) {
+    if (Array.isArray(definitionDeTransField)) gloss = pickFirstNonEmptyFromArray(definitionDeTransField);
+    else if (typeof definitionDeTransField === "string") gloss = definitionDeTransField.trim();
+  }
+
+  if (!gloss) {
+    if (Array.isArray(definitionDeField)) gloss = pickFirstNonEmptyFromArray(definitionDeField);
+    else if (typeof definitionDeField === "string") gloss = definitionDeField.trim();
+  }
+
+  const glossLang =
+    (parsed && (parsed.explainLang || parsed.explain_lang)) ||
+    (parsed && (parsed.glossLang || parsed.gloss_lang)) ||
+    "";
+
+  // runtime 觀測
+  INIT_STATUS.runtime.lastGlossPreview = gloss ? String(gloss).slice(0, 40) : "";
+  INIT_STATUS.runtime.lastGlossLang = glossLang || "";
+
+  return { gloss: gloss || "", glossLang: glossLang || "" };
+}
+
+/**
+ * ✅ 平行陣列→senses[] 推導
+ * - 常見情境：模型把「多個釋義」塞進同一個物件，但某些欄位是 array
+ *   例如：
+ *     definition_de_translation: ["城堡", "鎖"]
+ *     definition_de: ["ein großes Gebäude...", "ein Mechanismus..."] 或字串
+ * - 這裡會依 array 的最大長度，拆成多個 sense 物件
+ *
+ * 回傳：
+ * - { sensesParsed: Array<object>, baseParsed: object } 或 null
+ */
+function buildParallelSensesIfAny(parsed) {
+  if (!parsed || typeof parsed !== "object") return null;
+
+  // ✅ 只列入「可能代表釋義維度」的欄位
+  const parallelKeys = [
+    "definition_de_translation",
+    "definition_de",
+    "definition",
+    "exampleTranslation",
+    "example",
+    "notes",
+  ];
+
+  const arrays = [];
+  for (const k of parallelKeys) {
+    if (Array.isArray(parsed[k]) && parsed[k].length > 0) {
+      arrays.push({ key: k, len: parsed[k].length });
+    }
+  }
+
+  // 沒有任何陣列欄位 → 不是這條路徑
+  if (arrays.length === 0) return null;
+
+  // 只有 1 個元素的陣列，不視為多釋義（避免把單筆當多筆）
+  const maxLen = arrays.reduce((m, a) => Math.max(m, a.len), 0);
+  if (maxLen <= 1) return null;
+
+  const usedKeys = arrays.map((a) => a.key);
+
+  // base：以原始 parsed 為 base（相容既有前端顯示）
+  const baseParsed = parsed;
+
+  // senses：每個 idx 拆出一份 payload（只覆蓋平行欄位）
+  const sensesParsed = Array.from({ length: maxLen }).map((_, idx) => {
+    const one = { ...parsed };
+
+    for (const k of usedKeys) {
+      const v = parsed[k];
+      if (Array.isArray(v)) {
+        one[k] = typeof v[idx] === "string" ? String(v[idx]).trim() : v[idx];
+      }
+    }
+
+    // ✅ 補一個 senseIndex（後面 normalize 也會再保險一次）
+    one.senseIndex = idx;
+
+    return one;
+  });
+
+  // runtime 觀測
+  INIT_STATUS.runtime.lastParallelSenseCount = maxLen;
+  INIT_STATUS.runtime.lastParallelKeys = usedKeys;
+
+  console.log("[dictionaryNormalizer][parallel-arrays]", {
+    maxLen,
+    usedKeys,
+    sample: {
+      idx0: usedKeys.reduce((acc, k) => {
+        acc[k] = Array.isArray(parsed[k]) ? parsed[k][0] : undefined;
+        return acc;
+      }, {}),
+      idx1: usedKeys.reduce((acc, k) => {
+        acc[k] = Array.isArray(parsed[k]) ? parsed[k][1] : undefined;
+        return acc;
+      }, {}),
+    },
+  });
+
+  return { sensesParsed, baseParsed };
+}
+
+/**
  * 清洗與補強模型輸出的 JSON，確保前端拿到穩定結構
  * - definition / definition_de / definition_de_translation 都可能是「字串或陣列」
  * - 這裡只做基本 trim ＋安全檢查＋ type 處理
+ *
+ * ✅ 注意：此函式為「單一釋義」版本；多釋義容器由 normalizeDictionaryResult() 包裝
  */
-function normalizeDictionaryResult(parsed, word) {
+function normalizeDictionaryResultSingle(parsed, word) {
   const safeWord = String(word || "").trim();
+
+  // ✅ 防呆：避免 parsed 為 null/undefined 時直接存取屬性造成 crash
+  parsed = parsed || {};
 
   // 允許 definition 可能是字串或陣列
   let definitionField = parsed.definition;
@@ -267,6 +454,17 @@ function normalizeDictionaryResult(parsed, word) {
     notes: parsed.notes || "",
   };
 
+  // ✅ 2025-12-27：補 gloss / glossLang（收藏用）
+  // - 不改既有欄位，只新增
+  const derived = deriveGlossFields({
+    definitionField,
+    definitionDeTransField,
+    definitionDeField,
+    parsed,
+  });
+  result.gloss = derived.gloss;
+  result.glossLang = derived.glossLang;
+
   // 若是品牌 / 地名 / 人名 / 組織 / 產品名 → 一律不保留 gender / plural
   if (
     ["brand", "proper_place", "proper_person", "organization", "product_name"].includes(
@@ -309,6 +507,133 @@ function normalizeDictionaryResult(parsed, word) {
   }
 
   return result;
+}
+
+/**
+ * 多釋義容器正規化：
+ * - 支援三種輸入：
+ *   1) parsed.senses 為 array（推薦）
+ *   2) parsed 本身就是 array（相容）
+ *   3) parsed 是單一物件，但存在「平行陣列」欄位（例如 definition_de_translation 是 array）
+ * - 回傳格式：
+ *   - 保留原本單一物件欄位（相容既有前端）
+ *   - 新增 senses[]（每個元素是一份完整 normalized 結果）
+ */
+function normalizeDictionaryResult(parsed, word) {
+  const startedAt = Date.now();
+  INIT_STATUS.runtime.lastCalledAt = new Date().toISOString();
+  INIT_STATUS.runtime.lastWord = String(word || "").trim() || "";
+  INIT_STATUS.lastError = null;
+
+  try {
+    // ✅ 2025-12-27：支援 analyze envelope：{ mode,text,..., dictionary:{...} }
+    // - 若直接把 envelope 丟進來，原本的平行陣列拆解不會被觸發
+    // - 這裡先把 envelope.dictionary 正規化，再把 dictionary 放回去（其餘欄位不動）
+    if (
+      parsed &&
+      typeof parsed === "object" &&
+      parsed.dictionary &&
+      typeof parsed.dictionary === "object" &&
+      !Array.isArray(parsed) &&
+      !Array.isArray(parsed.senses) &&
+      !parsed.word // 避免把「已是 dictionary object」誤判成 envelope
+    ) {
+      const envelope = parsed;
+      const baseWord =
+        String(word || "").trim() ||
+        String(envelope.text || "").trim() ||
+        String((envelope.dictionary && envelope.dictionary.word) || "").trim();
+
+      INIT_STATUS.runtime.lastEnvelopeDetectedAt = new Date().toISOString();
+      INIT_STATUS.runtime.lastEnvelopeKeys = Object.keys(envelope || {}).slice(0, 40);
+
+      console.log("[dictionaryNormalizer][envelope]", {
+        baseWord,
+        envelopeKeys: INIT_STATUS.runtime.lastEnvelopeKeys,
+        dictKeys: Object.keys(envelope.dictionary || {}).slice(0, 40),
+      });
+
+      envelope.dictionary = normalizeDictionaryResult(envelope.dictionary, baseWord);
+      return envelope;
+    }
+
+    // 1) 擷取 senses array（若有）
+    let sensesParsed = null;
+    let baseParsed = parsed || null;
+
+    if (Array.isArray(parsed)) {
+      sensesParsed = parsed;
+      baseParsed = parsed[0] || {};
+    } else if (parsed && Array.isArray(parsed.senses)) {
+      sensesParsed = parsed.senses;
+      baseParsed = parsed;
+    }
+
+    // ✅ 2) 平行陣列→senses（例如 definition_de_translation 為 array）
+    // - 只有在 (1) 沒有 senses 的情況下才會走這條路徑
+    if (!Array.isArray(sensesParsed) || sensesParsed.length === 0) {
+      const parallel = buildParallelSensesIfAny(parsed || null);
+      if (parallel && Array.isArray(parallel.sensesParsed)) {
+        sensesParsed = parallel.sensesParsed;
+        baseParsed = parallel.baseParsed;
+      }
+    }
+
+    // 3) 若是多釋義：先 normalize 每個 sense，再組回 base + senses
+    if (Array.isArray(sensesParsed) && sensesParsed.length > 0) {
+      const senses = sensesParsed.map((s, idx) => {
+        const normalized = normalizeDictionaryResultSingle(s || {}, word);
+
+        // ✅ 只新增，不覆蓋既有欄位：讓前端可用 senseIndex 對齊
+        if (normalized && typeof normalized === "object") {
+          normalized.senseIndex = Number.isFinite(Number(normalized.senseIndex))
+            ? Number(normalized.senseIndex)
+            : idx;
+        }
+
+        return normalized;
+      });
+
+      // base：以 baseParsed 為主（相容既有 dictionary 欄位）
+      const base = normalizeDictionaryResultSingle(
+        baseParsed || sensesParsed[0] || {},
+        word
+      );
+
+      // ✅ 新增 senses（不破壞既有結構）
+      base.senses = senses;
+
+      INIT_STATUS.runtime.lastSenseCount = senses.length;
+
+      // ✅ runtime log（便於 Production 排查）
+      // - 注意：保持可讀、資訊量剛好
+      console.log("[dictionaryNormalizer][multi-sense]", {
+        word: base.word || String(word || "").trim(),
+        sensesLen: senses.length,
+        keys: Object.keys(base || {}).slice(0, 25),
+        glossPreview: base.gloss ? String(base.gloss).slice(0, 40) : "",
+        glossLang: base.glossLang || "",
+      });
+
+      return base;
+    }
+
+    // 4) 單一釋義：維持原本行為
+    INIT_STATUS.runtime.lastSenseCount = 0;
+    return normalizeDictionaryResultSingle(parsed || {}, word);
+  } catch (e) {
+    INIT_STATUS.lastError = String(
+      e && (e.stack || e.message) ? e.stack || e.message : e
+    );
+    INIT_STATUS.ready = true; // 不中斷服務
+    console.log("[dictionaryNormalizer][error]", {
+      word: String(word || "").trim(),
+      error: INIT_STATUS.lastError,
+    });
+    return fallback(word);
+  } finally {
+    INIT_STATUS.runtime.lastDurationMs = Date.now() - startedAt;
+  }
 }
 
 module.exports = {

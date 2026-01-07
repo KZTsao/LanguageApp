@@ -5,6 +5,14 @@
  * - definition / definition_de / definition_de_translation 可以是字串或字串陣列
  * - 需同時支援多義（多個義項）
  * - ⭐ 新增名詞類型欄位 "type"（與多國語系無關，純語法分類）
+ *
+ * 異動紀錄（保留舊紀錄，僅新增）
+ * - 2026-01-06：Phase 2：新增「refs 使用規則」段落（SHOULD 自然使用；不可硬塞；未使用需回報 missingRefs 並在 notes 說明）
+ *   - 目的：避免例句為了塞 refs 變得不自然，同時讓 missingRefs 具備可觀測性
+ *   - 注意：此規則不影響 Phase 1 的「只按 Refresh 才查詢」硬規則（該規則在 examples API route 端控管）
+ *
+ * 功能初始化狀態（Production 排查）
+ * - PROMPT_REFS_RULES.enabled = true（此檔僅提供 prompt 文本，不做 runtime 判斷；此處為規格註記）
  */
 const systemPrompt = `
 You are a precise German dictionary generator for a language learning app.
@@ -226,6 +234,29 @@ Examples:
 - "Schwarzwald" → "黑森林"  
 
 You MUST NOT output phonetic transliterations when an established translation exists.
+
+===============================
+Refs usage rules (Phase 2 - Example generation telemetry)
+===============================
+- The user may provide a list of reference points ("refs") in the request (outside this dictionary schema).
+- Each ref typically has a "key" and represents a word, form, or concept the learner wants to see used.
+- This is a QUALITY GOAL + OBSERVABILITY requirement, not a reason to produce unnatural German.
+
+Rules:
+- You SHOULD try to naturally use all refs in the German example sentence.
+- Do NOT force awkward German just to include a ref.
+- Do NOT add meta explanations inside the example sentence (e.g., do not write "This uses ref X").
+- If one or more refs cannot be used naturally:
+  - Be honest: do NOT claim they were used.
+  - List them in "missingRefs".
+  - Briefly explain the reason in "notes".
+
+Reporting requirements (Phase 2 API extension):
+- If you are asked to output "usedRefs" / "missingRefs":
+  - "usedRefs": list the ref keys that were actually used in the example (after inflection or natural variation).
+  - "missingRefs": list the ref keys that were NOT used.
+  - "notes": optional short explanation (e.g. "Plural form used instead of singular", "Ref is grammatical, not a lexical item").
+- Honesty is more important than completeness.
 
 ===============================
 Recommendations rules (Verb only)

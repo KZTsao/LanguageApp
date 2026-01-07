@@ -10,6 +10,15 @@
  * 2) 模組化：將初始化與掛載拆小函式，加入中文功能說明
  * 3) 加入「初始化狀態」輸出，便於 Production 階段排查（env、routes 掛載）
  * 4) 保留原本行為：新增並掛載 /api/library（GET 分頁）
+ *
+ * 異動日期：2026-01-05
+ * 異動說明：
+ * 1) 新增並掛載 /api/visit（POST 訪問紀錄）
+ *
+ * 異動日期：2026-01-05
+ * 異動說明：
+ * 1) 修正 admin usage 路徑：改回 /admin（避免前端誤打到 5173 /admin/usage 造成 404）
+ * 2) 保留原掛載行但標示為 deprecated（不減少行數）
  */
 
 require("dotenv").config();
@@ -24,6 +33,7 @@ const authTestRoute = require("./routes/authTestRoute");
 const adminUsageRoute = require("./routes/adminUsageRoute");
 const usageMeRoute = require("./routes/usageMeRoute");
 const libraryRoute = require("./routes/libraryRoute");
+const visitRoute = require("./routes/visitRoute");
 
 const { errorMiddleware } = require("./utils/errorHandler");
 const { logger } = require("./utils/logger");
@@ -52,6 +62,7 @@ const INIT_STATUS = {
     usageMe: false,
     library: false,
     adminUsage: false,
+    visit: false,
   },
 };
 
@@ -87,40 +98,44 @@ function mountRoutes(app) {
   app.use("/api/usage", usageMeRoute);
   INIT_STATUS.routes.usageMe = true;
 
-  // 收藏/單字庫：Phase 2（本輪只做 GET 分頁）
   app.use("/api/library", libraryRoute);
   INIT_STATUS.routes.library = true;
 
+  // DEPRECATED（2026-01-05）：此路徑會造成前端誤打到 5173 /admin/usage 時更難排查
+  // app.use("/api/admin/usage", adminUsageRoute);
+  // INIT_STATUS.routes.adminUsage = true;
+
+  // ✅ 正式路徑：與舊版一致（GET /admin/usage?days=7）
   app.use("/admin", adminUsageRoute);
   INIT_STATUS.routes.adminUsage = true;
+
+  app.use("/api", visitRoute);
+  INIT_STATUS.routes.visit = true;
+
+  // 初始化狀態補充（便於 runtime 排查）
+  logger.info(`[INIT] routes.adminUsage mounted at: /admin`);
 }
 
-/** 功能：掛載錯誤處理（最後一道） */
-function mountErrorHandler(app) {
+/** 功能：掛載錯誤處理（集中管理） */
+function mountErrorHandlers(app) {
   app.use(errorMiddleware);
-}
-
-/** 功能：輸出初始化狀態（Production 排查用） */
-function logInitStatus() {
-  logger.info("[INIT] Backend init status:");
-  logger.info(JSON.stringify(INIT_STATUS, null, 2));
 }
 
 /** 功能：啟動 Server */
 function startServer(app) {
   const port = process.env.PORT || 4000;
   app.listen(port, () => {
-    logger.info(`LanguageApp backend running on http://localhost:${port}`);
+    logger.info(`[server] listening on http://localhost:${port}`);
+    logger.info(`[server] INIT_STATUS: ${JSON.stringify(INIT_STATUS, null, 2)}`);
   });
 }
 
-/** 主流程：依序初始化 */
+/** 主程式 */
 function main() {
   const app = createApp();
   mountMiddlewares(app);
   mountRoutes(app);
-  mountErrorHandler(app);
-  logInitStatus();
+  mountErrorHandlers(app);
   startServer(app);
 }
 

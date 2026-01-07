@@ -5,14 +5,323 @@
 // - getUsageSummary() / getMonthlyUsage() / getUserUsageMe() 會從檔案讀取並彙總
 //
 // ✅ 相容舊資料：舊行只有 estTokens；新行可能有 totalTokens / promptTokens / completionTokens
+//
+// 文件說明：
+// - 本檔案負責「用量紀錄」與「用量彙總」
+// - 2026-01-05 起：新增將 LLM 真實 tokens 同步累加到 public.profiles（帳務用途）
+//
+// 異動紀錄：
+// - 2026-01-05：新增 logLLMUsage 寫入真實 tokens（既有）
+// - 2026-01-05：新增 profiles 累加（llm_tokens_in_total / out_total / total）【本次異動】
+// - 2026-01-06：新增 usage_monthly 彙總表回寫（RPC: usage_monthly_add）【本次異動】
+// - 2026-01-06：新增 usage_events 事件明細寫入（insert into usage_events）【本次異動】
+//
+// 功能初始化狀態（Production 排查）：
+// - 若缺 SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY：只寫檔、不回寫 profiles / usage_monthly / usage_events（不影響功能）
+// - 若 userId 缺失：只寫檔、不回寫 profiles / usage_monthly / usage_events（不影響功能）
 
 const fs = require("fs");
 const path = require("path");
+
+// ✅ 新增：用於回寫 profiles（service role）
+const { createClient } = require("@supabase/supabase-js");
 
 // log 檔案位置：backend/src/usage-log.jsonl
 const LOG_FILE = path.join(__dirname, "..", "usage-log.jsonl");
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * 中文功能說明：
+ * 建立 Supabase Admin Client（service role）
+ * - 用於回寫 profiles（計費用量累加）
+ * - 若環境變數不完整，回傳 null（維持只寫檔不報錯）
+ */
+function getAdminSupabaseClient() {
+  const url = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  if (!url || !key) return null;
+
+  return createClient(url, key, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+}
+
+/**
+ * 中文功能說明：
+ * 取得 UTC 月起始日（YYYY-MM-01）字串
+ * - 用於 usage_monthly 的 ym 欄位（建議用 UTC，避免跨時區造成歸戶錯月）
+ */
+function getMonthStartDateUTCString() {
+  const d = new Date();
+  const y = d.getUTCFullYear();
+  const m = d.getUTCMonth(); // 0-11
+  const first = new Date(Date.UTC(y, m, 1, 0, 0, 0));
+  return first.toISOString().slice(0, 10); // "YYYY-MM-DD"
+}
+
+/**
+ * 中文功能說明：
+ * ✅（新增）寫入 usage_events（事件明細）
+ * - best-effort：失敗只 warn，不影響主要流程
+ *
+ * 依照你現在的設計：
+ * - TTS：由 logUsage(kind=tts) 寫入（tts_chars）
+ * - LLM：由 logLLMUsage 寫入（prompt/completion/total tokens）
+ */
+async function addUsageEventToDb({
+  userId,
+  email = "",
+  ym = "",
+  kind = "",
+  endpoint = "",
+  provider = "",
+  model = "",
+  promptTokens = null,
+  completionTokens = null,
+  totalTokens = null,
+  ttsChars = null,
+  ip = "",
+  requestId = "",
+  source = "",
+}) {
+  const supabase = getAdminSupabaseClient();
+  if (!supabase) {
+    console.warn("[USAGE_EVENTS] skipped: missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY");
+    return;
+  }
+
+  if (!userId) {
+    console.warn("[USAGE_EVENTS] skipped: missing userId");
+    return;
+  }
+
+  const ymValue = ym || getMonthStartDateUTCString();
+
+  try {
+    const payload = {
+      user_id: userId,
+      email: email || null,
+      ym: ymValue,
+      kind: kind || null,
+      endpoint: endpoint || null,
+      provider: provider || null,
+      model: model || null,
+      prompt_tokens: typeof promptTokens === "number" ? promptTokens : null,
+      completion_tokens: typeof completionTokens === "number" ? completionTokens : null,
+      total_tokens: typeof totalTokens === "number" ? totalTokens : null,
+      tts_chars: typeof ttsChars === "number" ? ttsChars : null,
+      ip: ip || null,
+      request_id: requestId || null,
+      source: source || null,
+    };
+
+    const { error } = await supabase.from("usage_events").insert([payload]);
+    if (error) {
+      const rid = requestId ? ` requestId=${requestId}` : "";
+      console.warn("[USAGE_EVENTS] insert failed:", rid, error.message || String(error));
+      return;
+    }
+
+    const rid = requestId ? ` requestId=${requestId}` : "";
+    console.log(
+      `[USAGE_EVENTS] ok userId=${userId}${rid} ym=${ymValue} kind=${kind || "-"} endpoint=${endpoint || "-"} provider=${provider || "-"} model=${model || "-"} ttsChars=${typeof ttsChars === "number" ? ttsChars : "-"} totalTokens=${typeof totalTokens === "number" ? totalTokens : "-"}`
+    );
+  } catch (e) {
+    const rid = requestId ? ` requestId=${requestId}` : "";
+    console.warn("[USAGE_EVENTS] exception:", rid, e?.message || String(e));
+  }
+}
+
+/**
+ * 中文功能說明：
+ * 回寫 usage_monthly（每月彙總表）
+ * - 透過 RPC: public.usage_monthly_add 原子累加
+ * - best-effort：失敗只 warn，不影響主要流程
+ *
+ * RPC 參數：
+ * - p_user_id uuid
+ * - p_ym date（YYYY-MM-01）
+ * - p_llm_in bigint
+ * - p_llm_out bigint
+ * - p_tts_chars bigint
+ */
+async function addMonthlyUsageToDb({
+  userId,
+  email = "",
+  llmIn = 0,
+  llmOut = 0,
+  ttsChars = 0,
+  endpoint = "",
+  source = "",
+  requestId = "",
+}) {
+  const supabase = getAdminSupabaseClient();
+  if (!supabase) {
+    console.warn("[USAGE_MONTHLY] skipped: missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY");
+    return;
+  }
+
+  if (!userId) {
+    console.warn("[USAGE_MONTHLY] skipped: missing userId");
+    return;
+  }
+
+  const ym = getMonthStartDateUTCString();
+
+  try {
+    const payload = {
+      p_user_id: userId,
+      p_ym: ym,
+      p_llm_in: Number(llmIn || 0),
+      p_llm_out: Number(llmOut || 0),
+      p_tts_chars: Number(ttsChars || 0),
+    };
+
+    const { data, error } = await supabase.rpc("usage_monthly_add", payload);
+    if (error) {
+      const rid = requestId ? ` requestId=${requestId}` : "";
+      console.warn("[USAGE_MONTHLY] rpc failed:", rid, error.message || String(error));
+      return;
+    }
+
+    // RETURNS TABLE 可能回傳 array
+    const row = Array.isArray(data) ? data[0] : data;
+
+    const rid = requestId ? ` requestId=${requestId}` : "";
+    console.log(
+      `[USAGE_MONTHLY] ok userId=${userId}${rid} ym=${ym} source=${source || "-"} endpoint=${endpoint || "-"} +in=${payload.p_llm_in} +out=${payload.p_llm_out} +ttsChars=${payload.p_tts_chars} totals(llm=${row?.llm_tokens_total}, tts=${row?.tts_chars_total})`
+    );
+  } catch (e) {
+    const rid = requestId ? ` requestId=${requestId}` : "";
+    console.warn("[USAGE_MONTHLY] exception:", rid, e?.message || String(e));
+  }
+}
+
+/**
+ * 中文功能說明：
+ * 確保 profiles 有該 userId 的 row（若沒有就建立）
+ * - 避免「使用量回寫」因為找不到 row 而失敗
+ * - 注意：profiles.id 是 PK（uuid）
+ */
+async function ensureProfileRow({ supabase, userId, email = "" }) {
+  if (!supabase || !userId) return { ok: false, reason: "missing_supabase_or_userId" };
+
+  try {
+    const { data: existing, error: selErr } = await supabase
+      .from("profiles")
+      .select("id, email, llm_tokens_in_total, llm_tokens_out_total, llm_tokens_total, tts_chars_total")
+      .eq("id", userId)
+      .maybeSingle();
+
+    if (selErr) {
+      return { ok: false, reason: "select_failed", detail: selErr.message || String(selErr) };
+    }
+
+    if (existing) {
+      return { ok: true, existed: true, row: existing };
+    }
+
+    // 若不存在，建立最小 row（符合 table 定義：plan 有 default；created_at 有 default）
+    const payload = {
+      id: userId,
+      email: email || null,
+    };
+
+    const { data: inserted, error: insErr } = await supabase
+      .from("profiles")
+      .insert([payload])
+      .select("id, email, llm_tokens_in_total, llm_tokens_out_total, llm_tokens_total, tts_chars_total")
+      .maybeSingle();
+
+    if (insErr) {
+      return { ok: false, reason: "insert_failed", detail: insErr.message || String(insErr) };
+    }
+
+    return { ok: true, existed: false, row: inserted || null };
+  } catch (e) {
+    return { ok: false, reason: "exception", detail: e?.message || String(e) };
+  }
+}
+
+/**
+ * 中文功能說明：
+ * 回寫 LLM 真實 tokens 到 profiles（累加）
+ * - llm_tokens_in_total += promptTokens
+ * - llm_tokens_out_total += completionTokens
+ * - llm_tokens_total += totalTokens
+ *
+ * 注意：
+ * - 目前採「讀 → 算 → 寫」；高併發可能有競態（之後可改成 RPC 原子累加）
+ * - 這裡採 best-effort：失敗只 warn，不會影響主要功能
+ */
+async function addLLMTokensToProfile({
+  userId,
+  email = "",
+  promptTokens = 0,
+  completionTokens = 0,
+  totalTokens = 0,
+  endpoint = "",
+  provider = "",
+  model = "",
+  requestId = "",
+}) {
+  const supabase = getAdminSupabaseClient();
+  if (!supabase) {
+    console.warn("[USAGE_PROFILE] skipped: missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY");
+    return;
+  }
+
+  if (!userId) {
+    console.warn("[USAGE_PROFILE] skipped: missing userId");
+    return;
+  }
+
+  // 1) 確保 row 存在 & 取回目前累計
+  const ensured = await ensureProfileRow({ supabase, userId, email });
+  if (!ensured.ok) {
+    console.warn("[USAGE_PROFILE] ensureProfileRow failed:", ensured.reason, ensured.detail || "");
+    return;
+  }
+
+  const row = ensured.row || {};
+  const prevIn = Number(row.llm_tokens_in_total || 0);
+  const prevOut = Number(row.llm_tokens_out_total || 0);
+  const prevTotal = Number(row.llm_tokens_total || 0);
+
+  const addIn = Number(promptTokens || 0);
+  const addOut = Number(completionTokens || 0);
+  const addTotal = Number(totalTokens || 0);
+
+  const nextIn = prevIn + addIn;
+  const nextOut = prevOut + addOut;
+  const nextTotal = prevTotal + addTotal;
+
+  // 2) 更新累計
+  try {
+    const { error: updErr } = await supabase
+      .from("profiles")
+      .update({
+        llm_tokens_in_total: nextIn,
+        llm_tokens_out_total: nextOut,
+        llm_tokens_total: nextTotal,
+      })
+      .eq("id", userId);
+
+    if (updErr) {
+      console.warn("[USAGE_PROFILE] update failed:", updErr.message || String(updErr));
+      return;
+    }
+
+    const rid = requestId ? ` requestId=${requestId}` : "";
+    console.log(
+      `[USAGE_PROFILE] ok userId=${userId}${rid} +in=${addIn} +out=${addOut} +total=${addTotal} endpoint=${endpoint || "-"} provider=${provider || "-"} model=${model || "-"}`
+    );
+  } catch (e) {
+    console.warn("[USAGE_PROFILE] update exception:", e?.message || String(e));
+  }
+}
 
 function getTodayDateString() {
   const d = new Date();
@@ -69,6 +378,55 @@ function logUsage({
   );
 
   appendRecordToFile(record);
+
+  /**
+   * ✅ 2026-01-06：同步回寫 usage_monthly（TTS 以字元數計）
+   * - best-effort：失敗只 warn，不影響主要流程
+   * - LLM 真實 tokens 仍以 logLLMUsage 為準（避免用 estTokens 計費）
+   */
+  try {
+    if (kind === "tts") {
+      addMonthlyUsageToDb({
+        userId: userId || "",
+        email: email || "",
+        llmIn: 0,
+        llmOut: 0,
+        ttsChars: Number(charCount || 0),
+        endpoint: endpoint || "",
+        source: "logUsage",
+        requestId: "",
+      });
+    }
+  } catch (e) {
+    console.warn("[USAGE_MONTHLY] enqueue failed (logUsage):", e?.message || String(e));
+  }
+
+  /**
+   * ✅ 2026-01-06：新增 usage_events（TTS 事件明細）
+   * - best-effort：失敗只 warn，不影響主要流程
+   */
+  try {
+    if (kind === "tts") {
+      addUsageEventToDb({
+        userId: userId || "",
+        email: email || "",
+        ym: getMonthStartDateUTCString(),
+        kind: "tts",
+        endpoint: endpoint || "",
+        provider: "google",
+        model: process.env.TTS_VOICE || process.env.TTS_LANGUAGE || "",
+        promptTokens: null,
+        completionTokens: null,
+        totalTokens: null,
+        ttsChars: Number(charCount || 0),
+        ip: ip || "",
+        requestId: "",
+        source: "logUsage",
+      });
+    }
+  } catch (e) {
+    console.warn("[USAGE_EVENTS] enqueue failed (logUsage):", e?.message || String(e));
+  }
 }
 
 /**
@@ -120,7 +478,9 @@ function logLLMUsage({
     promptTokens:
       typeof usage.prompt_tokens === "number" ? usage.prompt_tokens : null,
     completionTokens:
-      typeof usage.completion_tokens === "number" ? usage.completion_tokens : null,
+      typeof usage.completion_tokens === "number"
+        ? usage.completion_tokens
+        : null,
     totalTokens: usage.total_tokens,
   };
 
@@ -132,6 +492,95 @@ function logLLMUsage({
   );
 
   appendRecordToFile(record);
+
+  /**
+   * ✅ 2026-01-05：同步回寫 profiles（計費/額度用途）
+   * - best-effort：失敗只 warn，不影響主要流程
+   * - 目前採用「讀→算→寫」；後續若要完全避免併發，可再改成 RPC 原子累加
+   */
+  try {
+    const promptTokens =
+      typeof usage.prompt_tokens === "number" ? usage.prompt_tokens : 0;
+    const completionTokens =
+      typeof usage.completion_tokens === "number"
+        ? usage.completion_tokens
+        : 0;
+    const totalTokens = usage.total_tokens;
+
+    // fire-and-forget（不阻塞主流程）
+    addLLMTokensToProfile({
+      userId: userId || "",
+      email: email || "",
+      promptTokens,
+      completionTokens,
+      totalTokens,
+      endpoint: endpoint || "",
+      provider: provider || "",
+      model: model || "",
+      requestId: requestId || "",
+    });
+  } catch (e) {
+    console.warn("[USAGE_PROFILE] enqueue failed:", e?.message || String(e));
+  }
+
+  /**
+   * ✅ 2026-01-06：同步回寫 usage_monthly（LLM 以真實 tokens 計）
+   * - best-effort：失敗只 warn，不影響主要流程
+   */
+  try {
+    const promptTokens =
+      typeof usage.prompt_tokens === "number" ? usage.prompt_tokens : 0;
+    const completionTokens =
+      typeof usage.completion_tokens === "number"
+        ? usage.completion_tokens
+        : 0;
+
+    addMonthlyUsageToDb({
+      userId: userId || "",
+      email: email || "",
+      llmIn: promptTokens,
+      llmOut: completionTokens,
+      ttsChars: 0,
+      endpoint: endpoint || "",
+      source: "logLLMUsage",
+      requestId: requestId || "",
+    });
+  } catch (e) {
+    console.warn("[USAGE_MONTHLY] enqueue failed (logLLMUsage):", e?.message || String(e));
+  }
+
+  /**
+   * ✅ 2026-01-06：新增 usage_events（LLM 事件明細）
+   * - best-effort：失敗只 warn，不影響主要流程
+   */
+  try {
+    const promptTokens =
+      typeof usage.prompt_tokens === "number" ? usage.prompt_tokens : 0;
+    const completionTokens =
+      typeof usage.completion_tokens === "number"
+        ? usage.completion_tokens
+        : 0;
+    const totalTokens = usage.total_tokens;
+
+    addUsageEventToDb({
+      userId: userId || "",
+      email: email || "",
+      ym: getMonthStartDateUTCString(),
+      kind: "llm",
+      endpoint: endpoint || "",
+      provider: provider || "",
+      model: model || "",
+      promptTokens,
+      completionTokens,
+      totalTokens,
+      ttsChars: null,
+      ip: ip || "",
+      requestId: requestId || "",
+      source: "logLLMUsage",
+    });
+  } catch (e) {
+    console.warn("[USAGE_EVENTS] enqueue failed (logLLMUsage):", e?.message || String(e));
+  }
 }
 
 // 寫一行 JSON 到 usage-log.jsonl
@@ -379,3 +828,5 @@ module.exports = {
   getMonthlyUsage,
   getUserUsageMe,
 };
+
+// backend/src/utils/usageLogger.js

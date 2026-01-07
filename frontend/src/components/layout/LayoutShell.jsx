@@ -12,6 +12,9 @@
  *   3) 加入 Production 排查用初始化狀態（window.__layoutShellDebug.nav）
  * - 2025/12/18：dbg（Groq key varName）從帳號左上方移到「整個畫面最右下方」固定顯示（最小插入）
  *
+ * - 2026/01/06：使用量顯示改為 /api/usage/me（DB 聚合），LLM 只顯示 completion_tokens（最小插入）
+ * - 2026/01/06：修正 /api/usage/me 回傳欄位對齊（byKindReal）避免 UI 顯示 0（最小插入）
+ *
  * 既有修改重點（保留原說明，不改業務邏輯）：
  *   1) props 介面對齊 App.jsx：使用 onThemeChange / onUiLangChange（原本 LayoutShell 用錯名字）
  *   2) 亮暗切換採全站等級：App.jsx 已負責將 theme 寫入 localStorage 並套用 <html>.classList.dark
@@ -243,10 +246,106 @@ function LayoutShell({
     setMenuOpen(false);
   }, [user?.id]);
 
-  /** 模組：對齊後端：GET /admin/usage?days=7 */
+  /** 模組：usage 來源（優先 /api/usage/me；保留 /admin/usage?days=7 作為 debug/fallback） */
   async function fetchUsageSummary() {
     const token = getAccessTokenFromLocalStorage();
 
+    // ====== 2026/01/06 新增：優先用 /api/usage/me（DB 聚合） ======
+    // 需求：UI 只呈現「使用者用量」
+    // - LLM：只顯示 completion_tokens（等同 llm_tokens_out）
+    // - TTS：以 chars 計
+    let usedUsageMe = false;
+
+    try {
+      const rMe = await fetch("/api/usage/me", {
+        headers: token ? { Authorization: "Bearer " + token } : undefined,
+      });
+
+      if (rMe.ok) {
+        const me = await rMe.json();
+
+        // ====== 2026/01/06 修正：對齊目前 API 回傳（byKindReal） ======
+        // 你現在 /api/usage/me 回傳長這樣：
+        //   today.byKindReal.llm / tts
+        //   month.byKindReal.llm / tts
+        // 舊版（deprecated）：today.llmCompletionTokens / today.ttsChars ...
+        const todayLLM_fromByKindReal = Number(
+          me?.today?.byKindReal?.llm ?? 0
+        );
+        const todayTTS_fromByKindReal = Number(
+          me?.today?.byKindReal?.tts ?? 0
+        );
+
+        const monthLLM_fromByKindReal = Number(
+          me?.month?.byKindReal?.llm ?? 0
+        );
+        const monthTTS_fromByKindReal = Number(
+          me?.month?.byKindReal?.tts ?? 0
+        );
+
+        // deprecated fallback：保留舊欄位讀法（避免你之後 API 又換回去）
+        const todayLLM_fromDeprecated = Number(
+          me?.today?.llmCompletionTokens || 0
+        );
+        const todayTTS_fromDeprecated = Number(me?.today?.ttsChars || 0);
+
+        const monthLLM_fromDeprecated = Number(
+          me?.month?.llmCompletionTokens || 0
+        );
+        const monthTTS_fromDeprecated = Number(me?.month?.ttsChars || 0);
+
+        // 實際採用：byKindReal 優先，否則 fallback 到 deprecated
+        const todayLLM =
+          todayLLM_fromByKindReal || todayLLM_fromDeprecated || 0;
+        const todayTTS =
+          todayTTS_fromByKindReal || todayTTS_fromDeprecated || 0;
+
+        const monthLLM =
+          monthLLM_fromByKindReal || monthLLM_fromDeprecated || 0;
+        const monthTTS =
+          monthTTS_fromByKindReal || monthTTS_fromDeprecated || 0;
+
+        setUsage({
+          today: { byKind: { llm: todayLLM, tts: todayTTS } },
+          month: { byKind: { llm: monthLLM, tts: monthTTS } },
+        });
+
+        usedUsageMe = true;
+
+        // Production 排查：保留最近一次 usage/me
+        window.__layoutShellDebug = window.__layoutShellDebug || {};
+        window.__layoutShellDebug.lastUsageMe = me || null;
+        window.__layoutShellDebug.lastUsageMeOk = true;
+
+        // ====== 2026/01/06 新增：把採用的值也記一下，避免「API 有回，但 UI 還是 0」難追 ======
+        window.__layoutShellDebug.lastUsageMePicked = {
+          todayLLM,
+          todayTTS,
+          monthLLM,
+          monthTTS,
+          todayLLM_fromByKindReal,
+          todayTTS_fromByKindReal,
+          monthLLM_fromByKindReal,
+          monthTTS_fromByKindReal,
+          todayLLM_fromDeprecated,
+          todayTTS_fromDeprecated,
+          monthLLM_fromDeprecated,
+          monthTTS_fromDeprecated,
+        };
+      } else {
+        window.__layoutShellDebug = window.__layoutShellDebug || {};
+        window.__layoutShellDebug.lastUsageMeOk = false;
+        window.__layoutShellDebug.lastUsageMeStatus = rMe.status;
+      }
+    } catch {
+      window.__layoutShellDebug = window.__layoutShellDebug || {};
+      window.__layoutShellDebug.lastUsageMeOk = false;
+      window.__layoutShellDebug.lastUsageMeStatus = "fetch_failed";
+    }
+
+    // ====== 既有：/admin/usage?days=7（保留） ======
+    // - 若 usedUsageMe=false：fallback 以舊資料填 usage（避免畫面空）
+    // - 若 usedUsageMe=true：僅用來拿 debug key（不覆蓋 usage）
     try {
       const r = await fetch("/admin/usage?days=7", {
         headers: token ? { Authorization: "Bearer " + token } : undefined,
@@ -255,22 +354,24 @@ function LayoutShell({
 
       const data = await r.json();
 
-      // usage：所有人都可看
-      const todayLLM = Number(data?.today?.byKind?.llm || 0);
-      const todayTTS = Number(data?.today?.byKind?.tts || 0);
+      // usage：只有在 usage/me 失敗時才用舊資料填（fallback）
+      if (!usedUsageMe) {
+        const todayLLM = Number(data?.today?.byKind?.llm || 0);
+        const todayTTS = Number(data?.today?.byKind?.tts || 0);
 
-      // 以 month.byKind 優先；若沒有再 fallback 到 monthEstimatedTokens*
-      const monthLLM =
-        Number(data?.month?.byKind?.llm ?? 0) ||
-        Number(data?.monthEstimatedTokensLLM || 0);
-      const monthTTS =
-        Number(data?.month?.byKind?.tts ?? 0) ||
-        Number(data?.monthEstimatedTokensTTS || 0);
+        // 以 month.byKind 優先；若沒有再 fallback 到 monthEstimatedTokens*
+        const monthLLM =
+          Number(data?.month?.byKind?.llm ?? 0) ||
+          Number(data?.monthEstimatedTokensLLM || 0);
+        const monthTTS =
+          Number(data?.month?.byKind?.tts ?? 0) ||
+          Number(data?.monthEstimatedTokensTTS || 0);
 
-      setUsage({
-        today: { byKind: { llm: todayLLM, tts: todayTTS } },
-        month: { byKind: { llm: monthLLM, tts: monthTTS } },
-      });
+        setUsage({
+          today: { byKind: { llm: todayLLM, tts: todayTTS } },
+          month: { byKind: { llm: monthLLM, tts: monthTTS } },
+        });
+      }
 
       // debug key：只有 canView=true 才能看到 currentKeyVar（且你只要變數名，不要實際值）
       const dbg = data?.__debug?.groq;
