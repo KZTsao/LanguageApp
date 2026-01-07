@@ -17,6 +17,7 @@ import useConversation from "../conversation/useConversation";
  * - 2026-01-06：Phase 2-UX：補上 refControls 往 ExampleSentence 傳遞（避免 ExampleSentence 端 refControls 為 undefined）
  * - 2026-01-06：UI 調整：將「多參考輸入匡 + badges」移到 multiRef button 上方（ExampleSentence 之前），並停用下方 render（保留原碼註解回滾）
  * - 2026-01-07：例句標題：新增 headword prop 接收並往 ExampleSentence 傳遞（讓標題可顯示 headword 方框）
+ * - 2026-01-07：UI 調整：多重參考 refControls 改用小視窗（popover-like）浮層呈現，避免佔版面；顯示與否跟隨 multiRefEnabled（toggle）
  *
  * 初始化狀態（Production 排查）
  * - component: ExampleList
@@ -73,8 +74,11 @@ export default function ExampleList({
 
       // ✅ 2026-01-07：headword presence
       hasHeadword: !!headword,
+
+      // ✅ 2026-01-07：multiRef presence
+      multiRefEnabled: !!multiRefEnabled,
     }),
-    [refControls, headword]
+    [refControls, headword, multiRefEnabled]
   );
 
   // DEPRECATED 2026-01-06：早期插入的控制旗標（避免重複宣告造成 syntax error）
@@ -91,9 +95,25 @@ export default function ExampleList({
   //   1) 在 ExampleList 最上方（ExampleSentence 之前）render 一次 refControls → 位置一定在 multiRef button 上方
   //   2) 停用傳入 ExampleSentence 的 refControls（保留原碼註解，以便回滾）
   //   3) 停用原本 ExampleSentence 下方的 refControls render（保留原碼註解，以便回滾）
+  //
+  // ✅ 2026-01-07（本次）：refControls 改為「小視窗浮層」呈現
+  // 中文功能說明：
+  // - 需求：多重參考的輸入匡 + 說明，用小視窗呈現，不要一直佔版面
+  // - 最小改動策略：不改 refControls 內容，只改呈現容器（absolute overlay）
+  // - 顯示/隱藏：跟隨 multiRefEnabled（toggle 開 = 顯示）
   const __RENDER_REFCONTROLS_ABOVE_EXAMPLESENTENCE = true;
   const __PASS_REFCONTROLS_TO_EXAMPLESENTENCE = false;
   const __RENDER_REFCONTROLS_BELOW_EXAMPLESENTENCE = false;
+
+  // ✅ 2026-01-07：Popover-like 浮層模式開關（純 UI，不影響任何查詢）
+  // - 預設：啟用浮層
+  // - 若需回滾：改成 false 會回到原本 inline render（保留原碼）
+  const __USE_REFCONTROLS_POPOVER = true;
+
+  // ✅ 2026-01-07：浮層顯示條件（最小規則）
+  // - 目前使用 multiRefEnabled 直接控制（toggle 開才顯示）
+  // - 若未來要改成「點一下才展開」，可再加入獨立 state（此處先不做，避免動太多）
+  const __SHOULD_SHOW_REFCONTROLS_POPOVER = !!multiRefEnabled;
 
   // ✅ 開發用：確認 refControls/headword 是否有被上游傳入（不影響 production 行為）
   // - 注意：這裡只做 debug，不得觸發任何 API
@@ -104,13 +124,14 @@ export default function ExampleList({
         headword: headword || null,
         hasHeadword: !!headword,
         hasRefControls: !!refControls,
+        multiRefEnabled: !!multiRefEnabled,
         __initState,
       });
     } catch (e) {
       // ignore
     }
     return null;
-  }, [refControls, headword, __initState]);
+  }, [refControls, headword, multiRefEnabled, __initState]);
 
   const hasExamples = Array.isArray(examples) && examples.length > 0;
   const mainSentence = hasExamples ? examples[0] : "";
@@ -145,13 +166,66 @@ export default function ExampleList({
     <div style={{ marginTop: 16 }}>
       {/* ✅ Phase 2-UX：refs 控制區塊插槽（移動到 Multi-ref button 上方） */}
       {__RENDER_REFCONTROLS_ABOVE_EXAMPLESENTENCE && refControls ? (
-        <div
-          style={{
-            marginBottom: 10,
-          }}
-        >
-          {refControls}
-        </div>
+        <>
+          {/* DEPRECATED 2026-01-07: 原本 inline render 會一直佔版面，需求改為小視窗呈現。
+              - 保留原碼以利回滾（不刪行）
+          <div
+            style={{
+              marginBottom: 10,
+            }}
+          >
+            {refControls}
+          </div>
+          */}
+
+          {/* ✅ 2026-01-07：Popover-like 浮層容器（不佔版面） */}
+          {__USE_REFCONTROLS_POPOVER ? (
+            <div
+              style={{
+                position: "relative",
+                // ✅ 讓浮層不推擠版面：本容器高度不依內容撐開
+                height: 0,
+              }}
+            >
+              {__SHOULD_SHOW_REFCONTROLS_POPOVER ? (
+                <div
+                  style={{
+                    position: "absolute",
+                    // ✅ 顯示在例句區塊上方（不影響 layout）
+                    top: -6,
+                    right: 0,
+                    zIndex: 20,
+
+                    // ✅ 面板外觀（亮/暗版：避免寫死黑白，盡量使用 rgba）
+                    padding: 12,
+                    borderRadius: 12,
+                    minWidth: 360,
+                    maxWidth: 720,
+
+                    background:
+                      "var(--panel-bg, rgba(255, 255, 255, 0.98))",
+                    border: "1px solid rgba(0, 0, 0, 0.12)",
+                    boxShadow: "0 10px 28px rgba(0, 0, 0, 0.14)",
+
+                    // ✅ 讓面板內容不要被壓縮
+                    overflow: "visible",
+                  }}
+                >
+                  {refControls}
+                </div>
+              ) : null}
+            </div>
+          ) : (
+            // ✅ 回滾用：若關閉 __USE_REFCONTROLS_POPOVER，回到原本 inline（仍不建議）
+            <div
+              style={{
+                marginBottom: 10,
+              }}
+            >
+              {refControls}
+            </div>
+          )}
+        </>
       ) : null}
 
       {/* 例句區塊 */}

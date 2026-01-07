@@ -15,6 +15,11 @@
  * - 2026/01/06：使用量顯示改為 /api/usage/me（DB 聚合），LLM 只顯示 completion_tokens（最小插入）
  * - 2026/01/06：修正 /api/usage/me 回傳欄位對齊（byKindReal）避免 UI 顯示 0（最小插入）
  *
+ * - 2026/01/07：修正 Vercel 環境 usage API 404（最小插入）
+ *   1) fetchUsageSummary 內改用 apiFetch（統一走 VITE_API_BASE_URL / fallback base）
+ *   2) 加入 Production 排查用初始化狀態（window.__layoutShellDebug.usageApi）
+ *   3) 適當加入 console 觀察 runtime（僅顯示可公開資訊，不含 token/secret）
+ *
  * 既有修改重點（保留原說明，不改業務邏輯）：
  *   1) props 介面對齊 App.jsx：使用 onThemeChange / onUiLangChange（原本 LayoutShell 用錯名字）
  *   2) 亮暗切換採全站等級：App.jsx 已負責將 theme 寫入 localStorage 並套用 <html>.classList.dark
@@ -23,6 +28,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import LoginButton from "../auth/LoginButton";
 import { useAuth } from "../../context/AuthProvider";
+import { apiFetch } from "../../utils/apiClient";
 
 /** 模組：將字串 seed 穩定映射到色相（供頭像底色使用） */
 function hashToHue(seed = "") {
@@ -201,6 +207,17 @@ function LayoutShell({
     };
   });
 
+  /** 模組：Production 排查用初始化狀態（usage API base / env）（不影響業務邏輯） */
+  const [usageApiInit] = useState(() => {
+    return {
+      ts: Date.now(),
+      enabled: true,
+      note: "usage summary fetch uses apiFetch (base from VITE_API_BASE_URL or fallback)",
+      viteHasApiBaseUrl: Boolean(import.meta?.env?.VITE_API_BASE_URL),
+      nodeEnv: (import.meta?.env?.MODE || "not available").toString(),
+    };
+  });
+
   // 保留你的設定（目前固定顯示）
   const showDebugKey = "1";
   //String(import.meta?.env?.VITE_SHOW_DEBUG_KEY || "").trim() === "1";
@@ -218,10 +235,17 @@ function LayoutShell({
       canChangeView: typeof onViewChange === "function",
     };
 
+    // ====== 2026/01/07 新增：usage API 初始化狀態（Production 排查） ======
+    window.__layoutShellDebug.usageApi = {
+      init: usageApiInit,
+      hasApiFetch: typeof apiFetch === "function",
+      // 注意：此處不輸出任何 token/secret
+    };
+
     // ====== 2025/12/18 新增：dbg 顯示位置（Production 排查） ======
     window.__layoutShellDebug.dbg = window.__layoutShellDebug.dbg || {};
     window.__layoutShellDebug.dbg.position = "fixed-bottom-right";
-  }, [showDebugKey, user?.id, navInit, view, onViewChange]);
+  }, [showDebugKey, user?.id, navInit, view, onViewChange, usageApiInit]);
 
   /** 模組：plan 文字 */
   const planText = useMemo(() => {
@@ -250,6 +274,20 @@ function LayoutShell({
   async function fetchUsageSummary() {
     const token = getAccessTokenFromLocalStorage();
 
+    // ====== 2026/01/07 新增：runtime 觀察（Production 排查） ======
+    // - 不輸出 token / secret
+    // - 僅輸出是否有 token、目前 host、是否有 VITE_API_BASE_URL
+    try {
+      console.info("[LayoutShell][usage] fetchUsageSummary start", {
+        host: window?.location?.host || "not available",
+        hasToken: Boolean(token),
+        viteHasApiBaseUrl: Boolean(import.meta?.env?.VITE_API_BASE_URL),
+        mode: (import.meta?.env?.MODE || "not available").toString(),
+      });
+    } catch {
+      // 靜默
+    }
+
     // ====== 2026/01/06 新增：優先用 /api/usage/me（DB 聚合） ======
     // 需求：UI 只呈現「使用者用量」
     // - LLM：只顯示 completion_tokens（等同 llm_tokens_out）
@@ -257,7 +295,8 @@ function LayoutShell({
     let usedUsageMe = false;
 
     try {
-      const rMe = await fetch("/api/usage/me", {
+      // ====== 2026/01/07 修正：統一走 apiFetch，避免 Vercel 相對路徑打到前端 domain 造成 404 ======
+      const rMe = await apiFetch("/api/usage/me", {
         headers: token ? { Authorization: "Bearer " + token } : undefined,
       });
 
@@ -332,22 +371,54 @@ function LayoutShell({
           monthLLM_fromDeprecated,
           monthTTS_fromDeprecated,
         };
+
+        // ====== 2026/01/07 新增：runtime 觀察（Production 排查） ======
+        try {
+          console.info("[LayoutShell][usage] /api/usage/me ok", {
+            usedUsageMe: true,
+            todayLLM,
+            todayTTS,
+            monthLLM,
+            monthTTS,
+          });
+        } catch {
+          // 靜默
+        }
       } else {
         window.__layoutShellDebug = window.__layoutShellDebug || {};
         window.__layoutShellDebug.lastUsageMeOk = false;
         window.__layoutShellDebug.lastUsageMeStatus = rMe.status;
+
+        // ====== 2026/01/07 新增：runtime 觀察（Production 排查） ======
+        try {
+          console.warn("[LayoutShell][usage] /api/usage/me not ok", {
+            status: rMe.status,
+          });
+        } catch {
+          // 靜默
+        }
       }
-    } catch {
+    } catch (e) {
       window.__layoutShellDebug = window.__layoutShellDebug || {};
       window.__layoutShellDebug.lastUsageMeOk = false;
       window.__layoutShellDebug.lastUsageMeStatus = "fetch_failed";
+
+      // ====== 2026/01/07 新增：runtime 觀察（Production 排查） ======
+      try {
+        console.warn("[LayoutShell][usage] /api/usage/me fetch failed", {
+          msg: e?.message || "not available",
+        });
+      } catch {
+        // 靜默
+      }
     }
 
     // ====== 既有：/admin/usage?days=7（保留） ======
     // - 若 usedUsageMe=false：fallback 以舊資料填 usage（避免畫面空）
     // - 若 usedUsageMe=true：僅用來拿 debug key（不覆蓋 usage）
     try {
-      const r = await fetch("/admin/usage?days=7", {
+      // ====== 2026/01/07 修正：統一走 apiFetch，避免 Vercel 相對路徑打到前端 domain 造成 404 ======
+      const r = await apiFetch("/admin/usage?days=7", {
         headers: token ? { Authorization: "Bearer " + token } : undefined,
       });
       if (!r.ok) return;
@@ -371,6 +442,19 @@ function LayoutShell({
           today: { byKind: { llm: todayLLM, tts: todayTTS } },
           month: { byKind: { llm: monthLLM, tts: monthTTS } },
         });
+
+        // ====== 2026/01/07 新增：runtime 觀察（Production 排查） ======
+        try {
+          console.info("[LayoutShell][usage] fallback /admin/usage applied", {
+            usedUsageMe: false,
+            todayLLM,
+            todayTTS,
+            monthLLM,
+            monthTTS,
+          });
+        } catch {
+          // 靜默
+        }
       }
 
       // debug key：只有 canView=true 才能看到 currentKeyVar（且你只要變數名，不要實際值）
@@ -398,8 +482,16 @@ function LayoutShell({
         setGroqKeyDebug(null);
         window.__layoutShellDebug.groqKeyDebug = null;
       }
-    } catch {
+    } catch (e) {
       // 靜默
+      // ====== 2026/01/07 新增：runtime 觀察（Production 排查） ======
+      try {
+        console.warn("[LayoutShell][usage] /admin/usage fetch failed (silent)", {
+          msg: e?.message || "not available",
+        });
+      } catch {
+        // 靜默
+      }
     }
   }
 

@@ -13,6 +13,11 @@
  *   - 修正：當 request 有 body 且未指定 Content-Type 時，自動補上 application/json
  *     目的：避免後端 Express 無法 parse JSON，導致 req.body 為 undefined（analyzeRoute destructure 直接噴錯）
  *   - 新增：initStatus（Production 排查用），記錄 lastRequest / lastError / ready
+ *
+ * - 2026-01-07
+ *   - 修正：Supabase auth-token localStorage key 不可寫死（Vercel / 不同環境可能不同）
+ *     改為掃描 localStorage key（包含 "auth-token"），以提升 Production 穩定性
+ *   - 新增：initStatus.lastAuthTokenKey（Production 排查）
  */
 
 // ======================================
@@ -35,18 +40,44 @@ const initStatus = {
   ready: true,
   lastRequest: null,
   lastError: null,
+  lastAuthTokenKey: "not available", // 2026-01-07: Production 排查
 };
 
 // ======================================
+// 功能：找出 Supabase auth-token 的 localStorage key（避免寫死）
+// - 2026-01-07 新增：Vercel / 不同環境 key 可能不同
+// ======================================
+function findSupabaseAuthTokenKey() {
+  try {
+    const keys = Object.keys(localStorage || {});
+    const hit = keys.find((k) => String(k).includes("auth-token"));
+    return hit || "";
+  } catch {
+    return "";
+  }
+}
+
+// ======================================
 // 功能：從 Supabase localStorage 取 access_token
+// - 2026-01-07 修正：不可寫死 key
 // ======================================
 function getAccessToken() {
   try {
-    const raw = localStorage.getItem("sb-yeemivptkzwqcnuzexdl-auth-token");
+    // legacy（deprecated 2026-01-07）：寫死 key 容易在 Vercel / 不同環境失效
+    // const raw = localStorage.getItem("sb-yeemivptkzwqcnuzexdl-auth-token");
+
+    const key = findSupabaseAuthTokenKey();
+    initStatus.lastAuthTokenKey = key || "not available";
+
+    if (!key) return null;
+
+    const raw = localStorage.getItem(key);
     if (!raw) return null;
+
     const parsed = JSON.parse(raw);
-    return parsed?.access_token || null;
+    return parsed?.access_token || parsed?.currentSession?.access_token || null;
   } catch {
+    initStatus.lastAuthTokenKey = "not available";
     return null;
   }
 }
