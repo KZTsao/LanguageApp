@@ -11,6 +11,7 @@
  * - 2026-01-05：✅ Step 2（POS 可切換機制）：新增 targetPosKey 參數（僅透傳到 analyzeWord，不改既有 UI 行為）
  * - 2026-01-05：✅ Step 2-3（用量歸戶打通）：將 userId/email/ip/endpoint/requestId 透傳到 analyzeWord options（供 lookup 記帳）
  * - 2026-01-07：✅ Step Guard(只讀不擋)：在進入 analyzeWord 前呼叫 can_consume_usage（僅 console 觀測，不阻擋）
+ * - 2026-01-07：✅ Fix Guard RPC keys：對齊 DB function args：p_add_llm_completion_tokens / p_add_tts_chars
  *
  * 注意：
  * - 本檔案遵守「只插入 / 局部替換」原則
@@ -49,10 +50,10 @@ function getSupabaseGuardClient() {
  * - 注意：本階段不阻擋，只 console，避免影響現有使用流程
  * - 參數：
  *   - userId：必須有值才查
- *   - estCompletionTokens：此階段先用 0（只觀測目前已用量/上限/是否會超）
- *   - estTtsChars：此 API 不用 TTS，固定 0
+ *   - estAddCompletionTokens：本次預計新增的 completion tokens（此階段先用 0）
+ *   - estAddTtsChars：本次預計新增的 TTS chars（analyze 固定 0）
  */
-async function guardCanConsumeReadOnly({ userId, estCompletionTokens, estTtsChars, requestId, endpoint }) {
+async function guardCanConsumeReadOnly({ userId, estAddCompletionTokens, estAddTtsChars, requestId, endpoint }) {
   try {
     const supa = getSupabaseGuardClient();
     if (!supa) {
@@ -64,10 +65,12 @@ async function guardCanConsumeReadOnly({ userId, estCompletionTokens, estTtsChar
       return { ok: null, reason: "missing_userId" };
     }
 
+    // ✅ 2026-01-07 Fix：對齊 DB function args
+    // public.can_consume_usage(p_user_id uuid, p_add_llm_completion_tokens bigint, p_add_tts_chars bigint)
     const payload = {
       p_user_id: userId,
-      p_llm_completion_tokens: typeof estCompletionTokens === "number" ? estCompletionTokens : 0,
-      p_tts_chars: typeof estTtsChars === "number" ? estTtsChars : 0,
+      p_add_llm_completion_tokens: typeof estAddCompletionTokens === "number" ? estAddCompletionTokens : 0,
+      p_add_tts_chars: typeof estAddTtsChars === "number" ? estAddTtsChars : 0,
     };
 
     const { data, error } = await supa.rpc("can_consume_usage", payload);
@@ -84,8 +87,8 @@ async function guardCanConsumeReadOnly({ userId, estCompletionTokens, estTtsChar
       endpoint: endpoint || "",
       requestId: requestId || "",
       userId,
-      estCompletionTokens: payload.p_llm_completion_tokens,
-      estTtsChars: payload.p_tts_chars,
+      add_completion_tokens: payload.p_add_llm_completion_tokens,
+      add_tts_chars: payload.p_add_tts_chars,
       ok: row ? row.ok : null,
       reason: row ? row.reason : null,
       day: row ? row.day : null,
@@ -263,11 +266,11 @@ router.post('/', async (req, res, next) => {
 
     // ✅ 2026-01-07：Guard(只讀不擋) - 進 LLM 前做觀測
     // - 本階段不阻擋，不改現有行為
-    // - 估算：analyze 僅做 LLM，先用 0 觀測「目前用量/上限/是否已超」
+    // - 估算：先用 0 觀測「目前用量/上限/是否已超」
     const guardRow = await guardCanConsumeReadOnly({
       userId: authUser?.id || "",
-      estCompletionTokens: 0,
-      estTtsChars: 0,
+      estAddCompletionTokens: 0,
+      estAddTtsChars: 0,
       requestId: requestId || "",
       endpoint: "/api/analyze",
     });
