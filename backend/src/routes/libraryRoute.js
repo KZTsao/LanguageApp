@@ -89,6 +89,9 @@ const INIT_STATUS = {
 
     // ✅ 新增（2025-12-30）：enrich dict_senses（Production 排查用）
     enrichDictSenses: { enabled: true, lastError: null, lastHitAt: null },
+
+    // ✅ 新增（2026-01-07）：Learning sets（下拉選單來源）
+    getLearningSets: { enabled: true, lastError: null, lastHitAt: null },
   },
 
   // ✅ Supabase admin 初始化狀態
@@ -1217,6 +1220,46 @@ router.get("/__init", (req, res) => {
   INIT_STATUS.supabaseAdmin = getSupabaseAdminInitStatus ? getSupabaseAdminInitStatus() : null;
 
   res.json(INIT_STATUS);
+});
+
+/* =========================================================
+ * Learning Sets (Step 1)
+ * - GET /api/library/sets：回傳下拉選單來源（learning_sets）
+ *
+ * 設計：
+ * - guest（無 token）也可呼叫，但只回傳 system sets（不含 favorites）
+ * - logged-in 才回傳全部（含 favorites）
+ * - 不影響既有 /api/library 行為
+ * ========================================================= */
+
+/** GET /api/library/sets（下拉選單集合） */
+router.get("/sets", async (req, res, next) => {
+  const EP = "getLearningSets";
+  try {
+    markEndpointHit(EP);
+
+    const supabaseAdmin = getSupabaseAdmin();
+
+    // ✅ 保守：此 endpoint 允許 guest（但只回 system）
+    const userId = await requireUserId(req, supabaseAdmin);
+
+    let q = supabaseAdmin.from("learning_sets").select("set_code, title, type, order_index").order("order_index", {
+      ascending: true,
+    });
+
+    // ✅ guest：只回 system（不含 favorites）
+    if (!userId) {
+      q = q.eq("type", "system");
+    }
+
+    const { data, error } = await q;
+    if (error) throw error;
+
+    return res.json({ ok: true, sets: data || [] });
+  } catch (err) {
+    markEndpointError(EP, err);
+    next(err);
+  }
 });
 
 /* =========================================================

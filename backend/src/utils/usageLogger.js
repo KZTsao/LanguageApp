@@ -14,6 +14,7 @@
 // - 2026-01-05：新增 logLLMUsage 寫入真實 tokens（既有）
 // - 2026-01-05：新增 profiles 累加（llm_tokens_in_total / out_total / total）【本次異動】
 // - 2026-01-06：新增 usage_monthly 彙總表回寫（RPC: usage_monthly_add）【本次異動】
+// - 2026-01-07：新增 usage_daily 彙總表回寫（RPC: usage_daily_add）【本次異動】
 // - 2026-01-06：新增 usage_events 事件明細寫入（insert into usage_events）【本次異動】
 //
 // 功能初始化狀態（Production 排查）：
@@ -198,6 +199,68 @@ async function addMonthlyUsageToDb({
     console.warn("[USAGE_MONTHLY] exception:", rid, e?.message || String(e));
   }
 }
+
+/**
+ * 中文功能說明：
+ * - 將每日用量累加到 usage_daily（帳務/限額用途）
+ * - 目前「LLM 只計 completion_tokens」（使用者輸出）+ TTS 以字元數計
+ *
+ * RPC 參數：
+ * - p_user_id uuid
+ * - p_day date（YYYY-MM-DD）
+ * - p_llm_completion_tokens bigint
+ * - p_tts_chars bigint
+ */
+async function addDailyUsageToDb({
+  userId,
+  email = "",
+  llmCompletionTokens = 0,
+  ttsChars = 0,
+  endpoint = "",
+  source = "",
+  requestId = "",
+}) {
+  const supabase = getAdminSupabaseClient();
+  if (!supabase) {
+    console.warn("[USAGE_DAILY] skipped: missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY");
+    return;
+  }
+
+  if (!userId) {
+    console.warn("[USAGE_DAILY] skipped: missing userId");
+    return;
+  }
+
+  try {
+    const day = getTodayDateString(); // YYYY-MM-DD
+    const payload = {
+      p_user_id: userId,
+      p_day: day,
+      p_llm_completion_tokens: Math.max(Number(llmCompletionTokens || 0), 0),
+      p_tts_chars: Math.max(Number(ttsChars || 0), 0),
+    };
+
+    const { data, error } = await supabase.rpc("usage_daily_add", payload);
+
+    if (error) {
+      const rid = requestId ? ` requestId=${requestId}` : "";
+      console.warn("[USAGE_DAILY] rpc failed:", rid, error.message || String(error));
+      return;
+    }
+
+    // RETURNS TABLE 可能回傳 array
+    const row = Array.isArray(data) ? data[0] : data;
+
+    const rid = requestId ? ` requestId=${requestId}` : "";
+    console.log(
+      `[USAGE_DAILY] ok userId=${userId}${rid} day=${day} add(llm_completion=${payload.p_llm_completion_tokens}, tts_chars=${payload.p_tts_chars}) totals(llm_completion=${row?.llm_completion_tokens}, tts=${row?.tts_chars})`
+    );
+  } catch (e) {
+    const rid = requestId ? ` requestId=${requestId}` : "";
+    console.warn("[USAGE_DAILY] exception:", rid, e?.message || String(e));
+  }
+}
+
 
 /**
  * 中文功能說明：
@@ -396,6 +459,20 @@ function logUsage({
         source: "logUsage",
         requestId: "",
       });
+      
+      // ✅ 2026-01-07：同步回寫 usage_daily（TTS 以字元數計）
+      // - best-effort：失敗只 warn，不影響主要流程
+      if (kind === "tts") {
+        addDailyUsageToDb({
+          userId: userId || "",
+          email: email || "",
+          llmCompletionTokens: 0,
+          ttsChars: Number(charCount || 0),
+          endpoint: endpoint || "",
+          source: "logUsage",
+          requestId: "",
+        });
+      }
     }
   } catch (e) {
     console.warn("[USAGE_MONTHLY] enqueue failed (logUsage):", e?.message || String(e));
@@ -549,6 +626,29 @@ function logLLMUsage({
     console.warn("[USAGE_MONTHLY] enqueue failed (logLLMUsage):", e?.message || String(e));
   }
 
+
+  /**
+   * ✅ 2026-01-07：同步回寫 usage_daily（LLM 只計 completion_tokens）
+   * - best-effort：失敗只 warn，不影響主要流程
+   */
+  try {
+    const completionTokens =
+      typeof usage.completion_tokens === "number"
+        ? usage.completion_tokens
+        : 0;
+
+    addDailyUsageToDb({
+      userId: userId || "",
+      email: email || "",
+      llmCompletionTokens: completionTokens,
+      ttsChars: 0,
+      endpoint: endpoint || "",
+      source: "logLLMUsage",
+      requestId: requestId || "",
+    });
+  } catch (e) {
+    console.warn("[USAGE_DAILY] enqueue failed (logLLMUsage):", e?.message || String(e));
+  }
   /**
    * ✅ 2026-01-06：新增 usage_events（LLM 事件明細）
    * - best-effort：失敗只 warn，不影響主要流程

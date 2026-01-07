@@ -20,6 +20,7 @@
  *   - 保留既有資料流與查詢規則（仍需手動 refresh 才會打 API）
  * - 2026-01-06：i18n：共用文字統一由 uiText 處理（未補齊 key 先 fallback 到既有 hardcode，避免功能中斷）
  * - 2026-01-06：i18n 修正：移除 isEn/isJa/zh ternary fallback，強制只透過 uiText 取字（uiLang -> zh-TW -> hardFallback）
+ * - 2026-01-07：Phase 2-UX（Step A-6）：例句標題顯示 headword（銳角外方匡）：WordExampleBlock 往下傳 headword 給 ExampleList（預設 not available）
  */
 
 import React, { useCallback, useState, useMemo } from "react";
@@ -80,6 +81,16 @@ export default function WordExampleBlock({
 
   // ✅ 方案 M：保留接線（不顯示 debug UI）
   const [selectedForm, setSelectedForm] = useState(null);
+
+  // ✅ Phase 2-UX（Step A-6）：例句標題顯示 headword（銳角外方匡）
+  // 中文功能說明：
+  // - 將 headword 往下傳給 ExampleList -> ExampleSentence 使用
+  // - 來源優先順序：d.word -> d.baseForm -> not available
+  // - 注意：只負責傳遞與可觀測性，不改任何例句/翻譯/查詢流程
+  const headwordForExampleTitle = useMemo(() => {
+    const hw = (d?.word || d?.baseForm || "").toString().trim();
+    return hw ? hw : "not available";
+  }, [d]);
 
   // ✅ 新增：多重參考（前端保存，per wordKey；不進 DB）
   const wordKey = useMemo(() => {
@@ -332,6 +343,10 @@ export default function WordExampleBlock({
         missingRefs: safeMissingRefs,
         refInput,
         refError,
+
+        // ✅ Phase 2-UX（Step A-6）：例句標題 headword 觀測（Production 排查）
+        headwordForExampleTitle,
+        hasHeadwordForExampleTitle: headwordForExampleTitle !== "not available",
       });
     }
   } catch (e) {
@@ -952,11 +967,13 @@ export default function WordExampleBlock({
         conversationTitle={conversationTitleLabel}
         conversationToggleTooltip={conversationToggleTooltipLabel}
         conversationTurnLabel={conversationTurnLabel}
-        conversationPrevLabel={conversationPrevLabel}
         conversationNextLabel={conversationNextLabel}
         conversationPlayLabel={conversationPlayLabel}
         conversationCloseLabel={conversationCloseLabel}
         conversationLoadingLabel={conversationLoadingLabel}
+
+        // ✅ Phase 2-UX（Step A-6）：例句標題顯示 headword（銳角外方匡）
+        headword={headwordForExampleTitle}
 
         // ✅ Phase 2-UX（Step A-1）：轉傳到 ExampleSentence（例句標題列）用的 multiRef toggle props
         // - 這裡只提供資料/事件，不改現有 UI；ExampleSentence 若尚未接，這些 props 也不會影響任何行為

@@ -16,6 +16,7 @@ import useConversation from "../conversation/useConversation";
  * - 2026-01-06：Phase 2-UX：新增 refControls slot，渲染於 ExampleSentence 下方（不改查詢規則）
  * - 2026-01-06：Phase 2-UX：補上 refControls 往 ExampleSentence 傳遞（避免 ExampleSentence 端 refControls 為 undefined）
  * - 2026-01-06：UI 調整：將「多參考輸入匡 + badges」移到 multiRef button 上方（ExampleSentence 之前），並停用下方 render（保留原碼註解回滾）
+ * - 2026-01-07：例句標題：新增 headword prop 接收並往 ExampleSentence 傳遞（讓標題可顯示 headword 方框）
  *
  * 初始化狀態（Production 排查）
  * - component: ExampleList
@@ -32,6 +33,9 @@ export default function ExampleList({
   refreshTooltip,
   onWordClick,
   onSpeak,
+
+  // ✅ 2026-01-07：例句標題顯示用（往下傳到 ExampleSentence）
+  headword,
 
   // 語言資訊（只給後端 / hook 用，不在這裡做文案判斷）
   explainLang,
@@ -66,8 +70,11 @@ export default function ExampleList({
       phase: "2-UX",
       timestamp: new Date().toISOString(),
       hasRefControls: !!refControls,
+
+      // ✅ 2026-01-07：headword presence
+      hasHeadword: !!headword,
     }),
-    [refControls]
+    [refControls, headword]
   );
 
   // DEPRECATED 2026-01-06：早期插入的控制旗標（避免重複宣告造成 syntax error）
@@ -88,12 +95,14 @@ export default function ExampleList({
   const __PASS_REFCONTROLS_TO_EXAMPLESENTENCE = false;
   const __RENDER_REFCONTROLS_BELOW_EXAMPLESENTENCE = false;
 
-  // ✅ 開發用：確認 refControls 是否有被上游傳入（不影響 production 行為）
+  // ✅ 開發用：確認 refControls/headword 是否有被上游傳入（不影響 production 行為）
   // - 注意：這裡只做 debug，不得觸發任何 API
   useMemo(() => {
     try {
       // eslint-disable-next-line no-console
-      console.debug("[ExampleList][refControls] presence =", {
+      console.debug("[ExampleList][presence] =", {
+        headword: headword || null,
+        hasHeadword: !!headword,
         hasRefControls: !!refControls,
         __initState,
       });
@@ -101,7 +110,7 @@ export default function ExampleList({
       // ignore
     }
     return null;
-  }, [refControls, __initState]);
+  }, [refControls, headword, __initState]);
 
   const hasExamples = Array.isArray(examples) && examples.length > 0;
   const mainSentence = hasExamples ? examples[0] : "";
@@ -130,8 +139,7 @@ export default function ExampleList({
   const tConversationNext = conversationNextLabel || "下一句";
   const tConversationPlay = conversationPlayLabel || "播放";
   const tConversationClose = conversationCloseLabel || "關閉";
-  const tConversationLoading =
-    conversationLoadingLabel || "對話產生中…";
+  const tConversationLoading = conversationLoadingLabel || "對話產生中…";
 
   return (
     <div style={{ marginTop: 16 }}>
@@ -160,6 +168,8 @@ export default function ExampleList({
         onSpeak={onSpeak}
         onToggleConversation={openConversation}
         conversationToggleTooltip={tConversationToggleTooltip}
+        // ✅ 2026-01-07：headword 往下傳（例句標題顯示用）
+        headword={headword}
         // ✅ Phase 2-UX：Multi-ref toggle（呈現在例句標題旁）
         multiRefEnabled={multiRefEnabled}
         onToggleMultiRef={onToggleMultiRef}
@@ -198,8 +208,8 @@ export default function ExampleList({
             conversationTurnLabel: tConversationTurnLabel,
             conversationPrevLabel: tConversationPrev,
             conversationNextLabel: tConversationNext,
-            conversationPlayLabel: tConversationPlay,
             conversationCloseLabel: tConversationClose,
+            conversationPlayLabel: tConversationPlay,
             conversationLoadingLabel: tConversationLoading,
           }}
           onWordClick={onWordClick}

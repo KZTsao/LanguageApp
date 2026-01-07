@@ -1,5 +1,4 @@
 // backend/src/routes/analyzeRoute.js
-
 /**
  * 文件說明：
  * - 功能：/api/analyze 路由入口，負責：
@@ -11,6 +10,7 @@
  * 異動紀錄：
  * - 2026-01-05：✅ Step 2（POS 可切換機制）：新增 targetPosKey 參數（僅透傳到 analyzeWord，不改既有 UI 行為）
  * - 2026-01-05：✅ Step 2-3（用量歸戶打通）：將 userId/email/ip/endpoint/requestId 透傳到 analyzeWord options（供 lookup 記帳）
+ * - 2026-01-07：✅ Step Guard(只讀不擋)：在進入 analyzeWord 前呼叫 can_consume_usage（僅 console 觀測，不阻擋）
  *
  * 注意：
  * - 本檔案遵守「只插入 / 局部替換」原則
@@ -21,6 +21,92 @@ const express = require('express');
 const router = express.Router();
 
 const jwt = require("jsonwebtoken");
+
+// ✅ 2026-01-07：Guard(只讀不擋) - 需要 supabase client（lazy init）
+let _supabaseGuardClient = null;
+function getSupabaseGuardClient() {
+  try {
+    if (_supabaseGuardClient) return _supabaseGuardClient;
+    const url = process.env.SUPABASE_URL;
+    const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    if (!url || !key) return null;
+
+    // 延後 require，避免在缺依賴/缺 env 時影響主流程
+    const { createClient } = require("@supabase/supabase-js");
+    _supabaseGuardClient = createClient(url, key, {
+      auth: { persistSession: false },
+    });
+    return _supabaseGuardClient;
+  } catch (e) {
+    console.warn("[GUARD][init] failed:", e?.message || String(e));
+    return null;
+  }
+}
+
+/**
+ * ✅ 2026-01-07：中文功能說明（Guard 只讀不擋）
+ * - 用途：在呼叫昂貴資源（LLM）前，讀取 can_consume_usage 的結果做觀測
+ * - 注意：本階段不阻擋，只 console，避免影響現有使用流程
+ * - 參數：
+ *   - userId：必須有值才查
+ *   - estCompletionTokens：此階段先用 0（只觀測目前已用量/上限/是否會超）
+ *   - estTtsChars：此 API 不用 TTS，固定 0
+ */
+async function guardCanConsumeReadOnly({ userId, estCompletionTokens, estTtsChars, requestId, endpoint }) {
+  try {
+    const supa = getSupabaseGuardClient();
+    if (!supa) {
+      console.warn("[GUARD][readOnly] skipped: missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY");
+      return { ok: null, reason: "missing_env" };
+    }
+    if (!userId) {
+      console.warn("[GUARD][readOnly] skipped: missing userId");
+      return { ok: null, reason: "missing_userId" };
+    }
+
+    const payload = {
+      p_user_id: userId,
+      p_llm_completion_tokens: typeof estCompletionTokens === "number" ? estCompletionTokens : 0,
+      p_tts_chars: typeof estTtsChars === "number" ? estTtsChars : 0,
+    };
+
+    const { data, error } = await supa.rpc("can_consume_usage", payload);
+
+    if (error) {
+      console.warn("[GUARD][readOnly] rpc failed:", requestId ? `rid=${requestId}` : "", error.message || String(error));
+      return { ok: null, reason: "rpc_failed", error };
+    }
+
+    // data 可能是 object 或 array（視 RPC 實作），這裡都兼容
+    const row = Array.isArray(data) ? (data[0] || null) : (data || null);
+
+    console.log("[GUARD][readOnly] ok", {
+      endpoint: endpoint || "",
+      requestId: requestId || "",
+      userId,
+      estCompletionTokens: payload.p_llm_completion_tokens,
+      estTtsChars: payload.p_tts_chars,
+      ok: row ? row.ok : null,
+      reason: row ? row.reason : null,
+      day: row ? row.day : null,
+      period_start: row ? row.period_start : null,
+      period_end: row ? row.period_end : null,
+      day_llm: row ? row.day_llm : null,
+      day_tts: row ? row.day_tts : null,
+      period_llm: row ? row.period_llm : null,
+      period_tts: row ? row.period_tts : null,
+      cap_day_llm: row ? row.cap_day_llm : null,
+      cap_day_tts: row ? row.cap_day_tts : null,
+      cap_period_llm: row ? row.cap_period_llm : null,
+      cap_period_tts: row ? row.cap_period_tts : null,
+    });
+
+    return row || { ok: null, reason: "no_row" };
+  } catch (e) {
+    console.warn("[GUARD][readOnly] exception:", requestId ? `rid=${requestId}` : "", e?.message || String(e));
+    return { ok: null, reason: "exception" };
+  }
+}
 
 const { analyzeWord } = require('../services/analyzeWord');
 const { analyzeSentence } = require('../services/analyzeSentence'); // 先保留引用（未使用）
@@ -48,12 +134,17 @@ const INIT_STATUS = {
     lastUserId: null,
     lastEmail: null,
     lastRequestId: null,
+    // ✅ 2026-01-07：Guard runtime（只讀不擋）
+    lastGuardOk: null,
+    lastGuardReason: null,
   },
   features: {
     // ✅ 2026-01-05：支援指定詞性（僅透傳）
     supportTargetPosKey: true,
     // ✅ 2026-01-05：用量歸戶透傳（lookup 記帳）
     supportUsageAttributionOptions: true,
+    // ✅ 2026-01-07：Guard(只讀不擋)
+    supportGuardReadOnly: true,
   },
 };
 
@@ -170,6 +261,19 @@ router.post('/', async (req, res, next) => {
     INIT_STATUS.runtime.lastEmail = authUser?.email || null;
     INIT_STATUS.runtime.lastRequestId = requestId || null;
 
+    // ✅ 2026-01-07：Guard(只讀不擋) - 進 LLM 前做觀測
+    // - 本階段不阻擋，不改現有行為
+    // - 估算：analyze 僅做 LLM，先用 0 觀測「目前用量/上限/是否已超」
+    const guardRow = await guardCanConsumeReadOnly({
+      userId: authUser?.id || "",
+      estCompletionTokens: 0,
+      estTtsChars: 0,
+      requestId: requestId || "",
+      endpoint: "/api/analyze",
+    });
+    INIT_STATUS.runtime.lastGuardOk = (guardRow && typeof guardRow.ok === "boolean") ? guardRow.ok : null;
+    INIT_STATUS.runtime.lastGuardReason = (guardRow && guardRow.reason) ? String(guardRow.reason) : null;
+
     // 記錄本次 /api/analyze 呼叫的粗略用量
     logUsage({
       endpoint: '/api/analyze',
@@ -221,6 +325,9 @@ router.post('/', async (req, res, next) => {
       email: authUser?.email || "",
       // ✅ 2026-01-05：用量歸戶 trace
       requestId: options.requestId || "",
+      // ✅ 2026-01-07：Guard(只讀不擋) trace
+      guard_ok: (guardRow && typeof guardRow.ok === "boolean") ? guardRow.ok : null,
+      guard_reason: (guardRow && guardRow.reason) ? guardRow.reason : null,
     });
 
     const result = await analyzeWord(trimmed, options);
