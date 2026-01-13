@@ -7,6 +7,12 @@
 // - 顯示對齊：LLM 僅採用 completion_tokens（輸出 tokens）
 // - 保留：舊版檔案 usage-log.jsonl 的 fallback（不刪、不改既有 function）
 //
+// 2026-01-07
+// - 修正：UI 顯示 0 的 root cause → 回傳欄位 total/byKind 仍為 0（UI 吃的是 total 而不是 totalReal）
+// - 調整：Today 改為「直接讀 usage_daily」（completion only），不再用 usage_events 即時累加（避免時區/limit/資料量干擾）
+// - 顯示策略：total 只顯示 LLM completion_tokens；TTS chars 仍保留在 byKind.tts / byKindReal.tts（但不併入 total）
+// - 開發預設值：not available（避免中文定字）
+//
 // 注意：這支 route 只做「顯示用」摘要，不做計費結算
 // ------------------------------------------------------------
 
@@ -57,21 +63,49 @@ async function getUserUsageMeFromDb({ userId, email = "" }) {
   const supabase = getSupabaseAdmin();
   if (!supabase) return null;
 
+  // 開發預設值：not available（避免中文定字）
+  const NA = "not available";
+
   const now = new Date();
-  const y = now.getFullYear();
-  const m = String(now.getMonth() + 1).padStart(2, "0");
-  const d = String(now.getDate()).padStart(2, "0");
-  const todayStr = `${y}-${m}-${d}`; // YYYY-MM-DD
+
+  // ✅ 統一用 UTC 日期字串（避免部署後時區跨日顯示 0）
+  const todayStr = now.toISOString().slice(0, 10); // YYYY-MM-DD (UTC)
+  const y = todayStr.slice(0, 4);
+  const m = todayStr.slice(5, 7);
   const ymStr = `${y}-${m}`; // YYYY-MM
   const monthDate = `${y}-${m}-01`; // usage_monthly.ym
 
-  // 1) Today：從 usage_events 累加（completion_tokens / tts_chars）
+  // 1) Today：改為直接讀 usage_daily（completion only）
   let todayLLMCompletion = 0;
   let todayTTSChars = 0;
-  try {
-    // 以 UTC day start 篩選（避免時區影響太大）
-    const since = `${todayStr}T00:00:00.000Z`;
 
+  try {
+    const { data: daily, error: dErr } = await supabase
+      .from("usage_daily")
+      .select("llm_completion_tokens, tts_chars, updated_at")
+      .eq("user_id", userId)
+      .eq("day", todayStr)
+      .maybeSingle();
+
+    if (dErr) {
+      console.warn("[usageMeRoute][db] usage_daily select failed:", dErr.message);
+    } else if (daily) {
+      todayLLMCompletion = Number(daily.llm_completion_tokens || 0);
+      todayTTSChars = Number(daily.tts_chars || 0);
+    }
+  } catch (e) {
+    console.warn(
+      "[usageMeRoute][db] usage_daily read exception:",
+      e && e.message ? e.message : e
+    );
+  }
+
+  // DEPRECATED 2026-01-07:
+  // 原本用 usage_events gte(created_at, since) 來累加 today
+  // 問題：時區/limit/資料量會讓「顯示」不穩定；daily 已是計費/guard 的基準，顯示應對齊 daily
+  /*
+  try {
+    const since = `${todayStr}T00:00:00.000Z`;
     const { data: rows, error } = await supabase
       .from("usage_events")
       .select("kind, completion_tokens, tts_chars, created_at")
@@ -98,6 +132,7 @@ async function getUserUsageMeFromDb({ userId, email = "" }) {
       e && e.message ? e.message : e
     );
   }
+  */
 
   // 2) Month：從 usage_monthly 讀取（llm_tokens_out = completion_tokens）
   let monthLLMCompletion = 0;
@@ -123,29 +158,39 @@ async function getUserUsageMeFromDb({ userId, email = "" }) {
     );
   }
 
-  // 3) 回傳：保持原結構（today/month + byKindReal）
+  // 3) 回傳：保持原結構
+  // ✅ 修正：讓 UI 直接吃 total/byKind（不要再是 0）
+  // ✅ 顯示策略：total 只呈現 LLM completion_tokens（你要的計費基準）；TTS chars 不併入 total
   return {
-    userId,
-    email: email || "",
-    mode: "db_completion_only",
+    userId: userId || NA,
+    email: email || NA,
+    mode: "db_completion_only_daily",
     today: {
-      date: todayStr,
-      total: 0,
-      byKind: {},
-      totalReal: todayLLMCompletion + todayTTSChars,
+      date: todayStr || NA,
+      total: Number(todayLLMCompletion || 0), // ✅ UI 顯示用（只顯示 completion_tokens）
+      byKind: {
+        llm: Number(todayLLMCompletion || 0),
+        tts: Number(todayTTSChars || 0),
+      },
+      // 保留：方便你比對/除錯（但 UI 不應依賴）
+      totalReal: Number(todayLLMCompletion || 0), // completion only
       byKindReal: {
-        llm: todayLLMCompletion,
-        tts: todayTTSChars,
+        llm: Number(todayLLMCompletion || 0),
+        tts: Number(todayTTSChars || 0),
       },
     },
     month: {
-      ym: ymStr,
-      total: 0,
-      byKind: {},
-      totalReal: monthLLMCompletion + monthTTSChars,
+      ym: ymStr || NA,
+      total: Number(monthLLMCompletion || 0), // ✅ UI 顯示用（只顯示 completion_tokens）
+      byKind: {
+        llm: Number(monthLLMCompletion || 0),
+        tts: Number(monthTTSChars || 0),
+      },
+      // 保留：方便你比對/除錯（但 UI 不應依賴）
+      totalReal: Number(monthLLMCompletion || 0), // completion only
       byKindReal: {
-        llm: monthLLMCompletion,
-        tts: monthTTSChars,
+        llm: Number(monthLLMCompletion || 0),
+        tts: Number(monthTTSChars || 0),
       },
     },
   };

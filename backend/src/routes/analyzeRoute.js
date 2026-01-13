@@ -12,13 +12,14 @@
  * - 2026-01-05：✅ Step 2-3（用量歸戶打通）：將 userId/email/ip/endpoint/requestId 透傳到 analyzeWord options（供 lookup 記帳）
  * - 2026-01-07：✅ Step Guard(只讀不擋)：在進入 analyzeWord 前呼叫 can_consume_usage（僅 console 觀測，不阻擋）
  * - 2026-01-07：✅ Fix Guard RPC keys：對齊 DB function args：p_add_llm_completion_tokens / p_add_tts_chars
+ * - 2026-01-11：✅ Step Set Seen（最小閉環）：/api/analyze 成功後，寫入 user_learning_progress（seen/touch，不覆蓋 familiar）
  *
  * 注意：
  * - 本檔案遵守「只插入 / 局部替換」原則
  * - 本階段只做後端參數打通與 runtime console（Production 排查）
  */
 
-const express = require('express');
+const express =require('express');
 const router = express.Router();
 
 const jwt = require("jsonwebtoken");
@@ -111,6 +112,89 @@ async function guardCanConsumeReadOnly({ userId, estAddCompletionTokens, estAddT
   }
 }
 
+/**
+ * ✅ 2026-01-11：Set Seen（最小閉環）
+ * 中文功能說明：
+ * - 目的：在 /api/analyze 成功後，記錄「user 已接觸此 item」（seen）
+ * - 表：public.user_learning_progress
+ * - 原則：
+ *   - 不覆蓋 familiar（避免 user 已熟悉被寫回 false）
+ *   - 不影響主流程：任何錯誤只 console.warn
+ * - 觸發點：
+ *   - analyzeWord 成功回傳後（代表查字流程已跑過）
+ */
+async function touchUserLearningProgressSeen({
+  userId,
+  itemType,
+  itemRef,
+  requestId,
+  endpoint,
+}) {
+  try {
+    const supa = getSupabaseGuardClient();
+    if (!supa) {
+      // 這裡沿用 service role client，缺 env 就跳過（不擋主流程）
+      console.warn("[LEARN][seen] skipped: missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY");
+      return { ok: null, reason: "missing_env" };
+    }
+    if (!userId) {
+      // 沒登入就不寫（不擋主流程）
+      return { ok: null, reason: "missing_userId" };
+    }
+
+    const ref = (itemRef || "").trim();
+    const type = (itemType || "").trim();
+    if (!ref || !type) return { ok: null, reason: "missing_item" };
+
+    // ① 先確保 row 存在：用 upsert + ignoreDuplicates 避免覆蓋 familiar
+    const upsertPayload = {
+      auth_user_id: userId,
+      item_type: type,
+      item_ref: ref,
+      // familiar 不在這裡寫入，避免覆蓋既有熟悉度
+    };
+
+    const { error: upsertErr } = await supa
+      .from("user_learning_progress")
+      .upsert(upsertPayload, {
+        onConflict: "auth_user_id,item_type,item_ref",
+        ignoreDuplicates: true,
+      });
+
+    if (upsertErr) {
+      console.warn("[LEARN][seen] upsert failed:", requestId ? `rid=${requestId}` : "", upsertErr.message || String(upsertErr));
+      return { ok: null, reason: "upsert_failed", error: upsertErr };
+    }
+
+    // ② 觸發 updated_at（seen touch）：只更新 updated_at，不動 familiar
+    const { error: touchErr } = await supa
+      .from("user_learning_progress")
+      .update({ updated_at: new Date().toISOString() })
+      .eq("auth_user_id", userId)
+      .eq("item_type", type)
+      .eq("item_ref", ref);
+
+    if (touchErr) {
+      console.warn("[LEARN][seen] touch failed:", requestId ? `rid=${requestId}` : "", touchErr.message || String(touchErr));
+      return { ok: null, reason: "touch_failed", error: touchErr };
+    }
+
+    // ✅ runtime console（Production 排查）
+    console.log("[LEARN][seen] ok", {
+      endpoint: endpoint || "",
+      requestId: requestId || "",
+      userId,
+      item_type: type,
+      item_ref: ref,
+    });
+
+    return { ok: true };
+  } catch (e) {
+    console.warn("[LEARN][seen] exception:", requestId ? `rid=${requestId}` : "", e?.message || String(e));
+    return { ok: null, reason: "exception" };
+  }
+}
+
 const { analyzeWord } = require('../services/analyzeWord');
 const { analyzeSentence } = require('../services/analyzeSentence'); // 先保留引用（未使用）
 const { AppError } = require('../utils/errorHandler');
@@ -140,6 +224,11 @@ const INIT_STATUS = {
     // ✅ 2026-01-07：Guard runtime（只讀不擋）
     lastGuardOk: null,
     lastGuardReason: null,
+    // ✅ 2026-01-11：Set Seen runtime
+    lastSeenOk: null,
+    lastSeenReason: null,
+    lastSeenItemType: null,
+    lastSeenItemRef: null,
   },
   features: {
     // ✅ 2026-01-05：支援指定詞性（僅透傳）
@@ -148,6 +237,8 @@ const INIT_STATUS = {
     supportUsageAttributionOptions: true,
     // ✅ 2026-01-07：Guard(只讀不擋)
     supportGuardReadOnly: true,
+    // ✅ 2026-01-11：Set Seen（最小閉環）
+    supportSetSeenTouch: true,
   },
 };
 
@@ -335,6 +426,45 @@ router.post('/', async (req, res, next) => {
 
     const result = await analyzeWord(trimmed, options);
 
+    // ✅ 2026-01-11：Set Seen（最小閉環）
+    // - 僅在「有 userId」且「查字流程成功」後記錄 seen
+    // - item_type：word → headword；phrase → phrase
+    // - 不擋主流程：任何錯誤只 console.warn
+    const seenItemType = (lookupMode === "word") ? "headword" : "phrase";
+    let shouldTouchSeen = false;
+    try {
+      // ✅ 保守判斷：只要 analyzeWord 回來且有 dictionary 區塊/常見欄位，就視為成功（避免純點擊亂刷）
+      const hasDict =
+        Boolean(result && result.dictionary) ||
+        Boolean(result && result.ok === true) ||
+        Boolean(result && result.data && result.data.dictionary) ||
+        Boolean(result && result.entryId) ||
+        Boolean(result && result.headword) ||
+        Boolean(result && result.lemma);
+      shouldTouchSeen = Boolean(result) && hasDict;
+    } catch (e) {
+      shouldTouchSeen = Boolean(result);
+    }
+
+    if (shouldTouchSeen) {
+      const seenRow = await touchUserLearningProgressSeen({
+        userId: options.userId || "",
+        itemType: seenItemType,
+        itemRef: trimmed,
+        requestId: options.requestId || "",
+        endpoint: options.endpoint || "/api/analyze",
+      });
+      INIT_STATUS.runtime.lastSeenOk = (seenRow && typeof seenRow.ok === "boolean") ? seenRow.ok : null;
+      INIT_STATUS.runtime.lastSeenReason = (seenRow && seenRow.reason) ? String(seenRow.reason) : null;
+      INIT_STATUS.runtime.lastSeenItemType = seenItemType;
+      INIT_STATUS.runtime.lastSeenItemRef = trimmed;
+    } else {
+      INIT_STATUS.runtime.lastSeenOk = null;
+      INIT_STATUS.runtime.lastSeenReason = "skipped_not_success";
+      INIT_STATUS.runtime.lastSeenItemType = seenItemType;
+      INIT_STATUS.runtime.lastSeenItemRef = trimmed;
+    }
+
     // ✅ runtime console（Production 排查）
     console.log("[analyzeRoute][response]", {
       text: trimmed,
@@ -347,6 +477,11 @@ router.post('/', async (req, res, next) => {
       // ✅ 2026-01-05：用量歸戶 trace
       requestId: options.requestId || "",
       userId: options.userId || "",
+      // ✅ 2026-01-11：Set Seen trace
+      seen_ok: INIT_STATUS.runtime.lastSeenOk,
+      seen_reason: INIT_STATUS.runtime.lastSeenReason,
+      seen_item_type: INIT_STATUS.runtime.lastSeenItemType,
+      seen_item_ref: INIT_STATUS.runtime.lastSeenItemRef,
     });
 
     res.json(result);

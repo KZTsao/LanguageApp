@@ -21,14 +21,20 @@
 // ⭐ Step C-1（本輪變更：新增「不規則」拆分標籤 + 多國語系）
 // - 支援 extraInfo.irregularType / extraInfo.irregular{type} / extraInfo.irregular=true
 // - 只新增 badge 顯示，不影響 conjugation / TTS 行為
+//
+// ⭐ Step D-1（本輪變更：反身動詞去重）
+// - LLM 有時會在 conjugation raw 內已帶反身代名詞（例如 "wasche mich"）
+// - 前端原本又會再 inject 一次 → 造成 "mich mich"
+// - 修正：只有 raw 尚未包含該 pronoun 時才補上
 // -----------------------------------------------------
 
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import uiText from "../../uiText";
 import { playTTS } from "../../utils/ttsClient";
 
 export default function WordPosInfoVerb({
   baseForm,
+  queryWord,
   labels = {},
   extraInfo = {},
   onSelectForm,
@@ -197,6 +203,107 @@ export default function WordPosInfoVerb({
   // 被選取的格子（給外框用）：{ tense, personKey } | null
   const [selectedCell, setSelectedCell] = useState(null);
 
+  // ✅ focus pulse：只用來做 0.2s 動畫，不影響邏輯
+  const pulseRef = useRef({ key: null, ts: 0 });
+
+  // ✅ 用來觸發 0.2s 後 re-render（讓「其他格子變暗」自動恢復）
+  const [pulseTick, setPulseTick] = useState(0);
+  const pulseTimerRef = useRef(null);
+
+  // ✅ cell refs：用 key 記住每格 DOM，方便 scrollIntoView
+  const cellRefs = useRef({}); // { [key: string]: HTMLDivElement | null }
+
+  // ✅ 被選取單字特效持續時間
+  const PULSE_DURATION_MS = 1000; // 想要多久就改這裡
+
+  function getCellKey(t, personKey) {
+    return `${t}:${personKey}`;
+  }
+
+  // ✅ 當選取格子變更時，自動滑到該格並置中
+  useEffect(() => {
+    if (!selectedCell) return;
+    if (!isOpen) return;
+
+    const key = getCellKey(selectedCell.tense, selectedCell.personKey);
+    const el = cellRefs.current ? cellRefs.current[key] : null;
+    if (!el) return;
+
+    // 等 DOM paint 完再滑，避免 setTense 造成的 DOM 尚未更新
+    requestAnimationFrame(() => {
+      try {
+        el.scrollIntoView({
+          behavior: "smooth",
+          block: "nearest",
+          inline: "nearest",
+        });
+      } catch (e) {
+        // fallback（少數環境不支援 options）
+        try {
+          el.scrollIntoView(true);
+        } catch (e2) {}
+      }
+    });
+  }, [selectedCell, isOpen, tense]);
+
+  // ✅ pulse 狀態：當 pulseRef 更新時，立刻 re-render 一次，並在 220ms 後再 re-render（讓 dim 自動恢復）
+  function triggerPulseRerender() {
+    try {
+      if (pulseTimerRef.current) {
+        clearTimeout(pulseTimerRef.current);
+      }
+    } catch (e) {}
+
+    setPulseTick(Date.now());
+
+    pulseTimerRef.current = setTimeout(() => {
+      setPulseTick(Date.now());
+    }, PULSE_DURATION_MS + 20);
+  }
+
+  useEffect(() => {
+    return () => {
+      try {
+        if (pulseTimerRef.current) clearTimeout(pulseTimerRef.current);
+      } catch (e) {}
+    };
+  }, []);
+
+  // ✅ MVP：自動匡選「使用者查到的詞形」（queryWord）
+  // - 只在 queryWord 改變時自動定位一次
+  // - 規則：在 conjugation 的各時態/人稱中找完全相等；若是 Perfekt 片語，也允許比對最後一個 token（例如 "genommen"）
+  useEffect(() => {
+    const q = (queryWord || "").trim().toLowerCase();
+    if (!q) return;
+    if (!conjugation || typeof conjugation !== "object") return;
+
+    const tensesToScan = ["praesens", "praeteritum", "perfekt"];
+    for (const t of tensesToScan) {
+      const table = conjugation[t];
+      if (!table || typeof table !== "object") continue;
+
+      for (const personKey of Object.keys(table)) {
+        const raw = table[personKey];
+        if (typeof raw !== "string") continue;
+
+        const v = raw.trim().toLowerCase();
+        if (!v) continue;
+
+        const lastToken = v.split(/\s+/).pop() || "";
+        if (v === q || lastToken === q) {
+          setTense(t);
+          setSelectedCell({ tense: t, personKey });
+          pulseRef.current = {
+            key: `${t}:${personKey}`,
+            ts: Date.now(),
+          };
+          triggerPulseRerender(); // ✅ 讓 0.2s dim/pulse 真正生效
+          return;
+        }
+      }
+    }
+  }, [queryWord, conjugation]);
+
   const forms =
     conjugation && conjugation[tense] && typeof conjugation[tense] === "object"
       ? conjugation[tense]
@@ -220,6 +327,10 @@ export default function WordPosInfoVerb({
     if (!selectedCell) return false;
     return selectedCell.tense === tense && selectedCell.personKey === personKey;
   }
+
+  // ✅ pulse active：0.2s 內啟用 dim
+  const isPulseActive =
+    !!pulseRef.current.key && Date.now() - pulseRef.current.ts < PULSE_DURATION_MS;
 
   // ✅ 下拉共同樣式：小、無外匡、無原生箭頭、底線提示、與動詞更靠近
   const subjectSelectStyle = {
@@ -261,6 +372,27 @@ export default function WordPosInfoVerb({
     ihr: "euch",
     sie_Sie: "sich",
   };
+
+  // ✅ Step D：反身動詞去重 helper（避免 "mich mich"）
+  function normalizeTokenForMatch(s) {
+    // 只做最小化：去頭尾標點，保留德文字母
+    return String(s || "")
+      .trim()
+      .replace(/^[^\p{L}]+/gu, "")
+      .replace(/[^\p{L}]+$/gu, "")
+      .toLowerCase();
+  }
+
+  function hasStandaloneToken(text, token) {
+    const t = String(token || "").trim().toLowerCase();
+    if (!t) return false;
+
+    const parts = String(text || "").split(/\s+/).filter(Boolean);
+    for (const p of parts) {
+      if (normalizeTokenForMatch(p) === t) return true;
+    }
+    return false;
+  }
 
   // 常見可分前綴（簡化版）
   const separablePrefixes = useMemo(
@@ -333,10 +465,26 @@ export default function WordPosInfoVerb({
     const s = (raw || "").trim();
     if (!s || !prefix) return { core: s, suffix: "" };
 
-    const lower = s.toLowerCase();
-    if (!lower.startsWith(prefix)) return { core: s, suffix: "" };
+    const prefixLower = String(prefix || "").trim().toLowerCase();
+    if (!prefixLower) return { core: s, suffix: "" };
 
-    const core = s.slice(prefix.length);
+    // ✅ Case 1（最常見）：前綴已經在句尾（可分離動詞有限式）
+    // e.g. "bringe das Kind weg", "bereitest dich vor"
+    const parts = s.split(/\s+/).filter(Boolean);
+    if (parts.length >= 2) {
+      const last = parts[parts.length - 1] || "";
+      if (String(last).toLowerCase() === prefixLower) {
+        const core = parts.slice(0, -1).join(" ").trim();
+        if (core) return { core, suffix: last }; // suffix 用 last（保留原大小寫）
+      }
+    }
+
+    // ✅ Case 2（fallback/legacy）：前綴黏在開頭
+    // e.g. "wegbringe"（某些來源會不正常回這種）
+    const lower = s.toLowerCase();
+    if (!lower.startsWith(prefixLower)) return { core: s, suffix: "" };
+
+    const core = s.slice(String(prefix).length).trim();
     if (!core) return { core: s, suffix: "" };
 
     return { core, suffix: prefix };
@@ -348,6 +496,9 @@ export default function WordPosInfoVerb({
 
     const pron = reflexivePronounMap[personKey] || "";
     if (!pron) return s;
+
+    // ✅ Step D：如果 raw 內已經有該 pronoun，就不要再 inject（避免 "habe mich mich ..."）
+    if (hasStandaloneToken(s, pron)) return s;
 
     const parts = s.split(/\s+/).filter(Boolean);
     if (parts.length <= 1) return `${s} ${pron}`.trim();
@@ -382,8 +533,22 @@ export default function WordPosInfoVerb({
     }
 
     const pron = needsReflexive ? reflexivePronounMap[personKey] || "" : "";
+
+    // ✅ Step D：反身動詞去重
+    // - 如果 raw/core 裡已經有 mich/dich/sich/uns/euch，就不要再 append
+    const shouldAppendPron = (() => {
+      if (!pron) return false;
+      // core already has pron → don't append
+      if (hasStandaloneToken(core, pron)) return false;
+      // suffix 若也是 pron（理論上不會）→ don't append
+      if (hasStandaloneToken(suffix, pron)) return false;
+      // raw already has pron → don't append（保守）
+      if (hasStandaloneToken(raw, pron)) return false;
+      return true;
+    })();
+
     const chunks = [core];
-    if (pron) chunks.push(pron);
+    if (shouldAppendPron) chunks.push(pron);
     if (suffix) chunks.push(suffix);
 
     return chunks.filter(Boolean).join(" ").trim();
@@ -396,6 +561,13 @@ export default function WordPosInfoVerb({
 
     const next = { tense, personKey };
     setSelectedCell(next);
+
+    // ✅ 手動點選也做 0.2s focus（你要的效果）
+    pulseRef.current = {
+      key: `${tense}:${personKey}`,
+      ts: Date.now(),
+    };
+    triggerPulseRerender();
 
     if (typeof onSelectForm === "function") {
       onSelectForm({
@@ -545,6 +717,11 @@ export default function WordPosInfoVerb({
       irregular,
       irregularResolvedType,
       irregularBadgeText,
+
+      // ✅ pulse debug
+      isPulseActive,
+      pulseTick,
+      pulseKey: pulseRef.current?.key,
     };
   }
 
@@ -555,7 +732,7 @@ export default function WordPosInfoVerb({
     "[WordPosInfoVerb] extraInfoKeys =",
     extraInfo ? Object.keys(extraInfo) : []
   );
-  
+
   const headerText = `${posLabel}｜${title}`;
 
   const ARROW_SIZE = 30;
@@ -824,6 +1001,14 @@ export default function WordPosInfoVerb({
             hasValue={!!ichDisplay}
             isSelected={isSelected("ich")}
             onClick={() => handleCellClick("ich", ichRaw)}
+            cellRef={(el) => {
+              cellRefs.current[getCellKey(tense, "ich")] = el;
+            }}
+            isPulse={
+              pulseRef.current.key === getCellKey(tense, "ich") &&
+              Date.now() - pulseRef.current.ts < 200
+            }
+            isPulseActive={isPulseActive}
           />
           <ConjugationCell
             label={duLabel}
@@ -831,6 +1016,14 @@ export default function WordPosInfoVerb({
             hasValue={!!duDisplay}
             isSelected={isSelected("du")}
             onClick={() => handleCellClick("du", duRaw)}
+            cellRef={(el) => {
+              cellRefs.current[getCellKey(tense, "du")] = el;
+            }}
+            isPulse={
+              pulseRef.current.key === getCellKey(tense, "du") &&
+              Date.now() - pulseRef.current.ts < 200
+            }
+            isPulseActive={isPulseActive}
           />
 
           <ConjugationCell
@@ -851,6 +1044,14 @@ export default function WordPosInfoVerb({
             hasValue={!!erSieEsDisplay}
             isSelected={isSelected("er_sie_es")}
             onClick={() => handleCellClick("er_sie_es", erSieEsRaw)}
+            cellRef={(el) => {
+              cellRefs.current[getCellKey(tense, "er_sie_es")] = el;
+            }}
+            isPulse={
+              pulseRef.current.key === getCellKey(tense, "er_sie_es") &&
+              Date.now() - pulseRef.current.ts < 200
+            }
+            isPulseActive={isPulseActive}
           />
 
           <ConjugationCell
@@ -859,6 +1060,14 @@ export default function WordPosInfoVerb({
             hasValue={!!wirDisplay}
             isSelected={isSelected("wir")}
             onClick={() => handleCellClick("wir", wirRaw)}
+            cellRef={(el) => {
+              cellRefs.current[getCellKey(tense, "wir")] = el;
+            }}
+            isPulse={
+              pulseRef.current.key === getCellKey(tense, "wir") &&
+              Date.now() - pulseRef.current.ts < 200
+            }
+            isPulseActive={isPulseActive}
           />
 
           <ConjugationCell
@@ -867,6 +1076,14 @@ export default function WordPosInfoVerb({
             hasValue={!!ihrDisplay}
             isSelected={isSelected("ihr")}
             onClick={() => handleCellClick("ihr", ihrRaw)}
+            cellRef={(el) => {
+              cellRefs.current[getCellKey(tense, "ihr")] = el;
+            }}
+            isPulse={
+              pulseRef.current.key === getCellKey(tense, "ihr") &&
+              Date.now() - pulseRef.current.ts < 200
+            }
+            isPulseActive={isPulseActive}
           />
 
           <ConjugationCell
@@ -886,6 +1103,14 @@ export default function WordPosInfoVerb({
             hasValue={!!sieSieDisplay}
             isSelected={isSelected("sie_Sie")}
             onClick={() => handleCellClick("sie_Sie", sieSieRaw)}
+            cellRef={(el) => {
+              cellRefs.current[getCellKey(tense, "sie_Sie")] = el;
+            }}
+            isPulse={
+              pulseRef.current.key === getCellKey(tense, "sie_Sie") &&
+              Date.now() - pulseRef.current.ts < 200
+            }
+            isPulseActive={isPulseActive}
           />
         </div>
 
@@ -984,7 +1209,17 @@ function RecRow({ label, items, onClick }) {
   );
 }
 
-function ConjugationCell({ label, value, hasValue, isSelected, onClick }) {
+// ✅ 注意：這裡補上 isPulse / isPulseActive，否則你原檔會用到未定義變數
+function ConjugationCell({
+  label,
+  value,
+  hasValue,
+  isSelected,
+  onClick,
+  cellRef,
+  isPulse,
+  isPulseActive,
+}) {
   const baseStyle = {
     borderRadius: 0,
     padding: "6px 8px",
@@ -1000,18 +1235,36 @@ function ConjugationCell({ label, value, hasValue, isSelected, onClick }) {
     fontWeight: 700,
   };
 
+  const finalOpacity = (() => {
+    // 沒有內容：維持原本偏淡
+    if (!hasValue) return 0.55;
+
+    // pulse 期間：非選取格子退暗
+    if (isPulseActive) {
+      if (isSelected) return 1;
+      if (isPulse) return 1;
+      return 0.45;
+    }
+
+    // 平常：正常顯示
+    return 1;
+  })();
+
   const finalStyle = {
     ...baseStyle,
-    border: isSelected
-      ? "2px solid var(--border-strong)"
-      : "1px solid transparent",
+    border: isSelected ? "2px solid var(--accent)" : "1px solid transparent",
     backgroundColor: isSelected ? "var(--bg-elevated)" : "transparent",
     cursor: hasValue ? "pointer" : "default",
-    opacity: hasValue ? 1 : 0.55,
+    opacity: finalOpacity,
   };
 
   return (
-    <div style={finalStyle} onClick={hasValue ? onClick : undefined}>
+    <div
+      ref={cellRef}
+      style={finalStyle}
+      className={`${isPulse ? "cell-pulse" : ""}`}
+      onClick={hasValue ? onClick : undefined}
+    >
       <span
         style={{
           fontSize: 14,

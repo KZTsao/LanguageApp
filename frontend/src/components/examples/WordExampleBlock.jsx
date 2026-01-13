@@ -21,9 +21,13 @@
  * - 2026-01-06：i18n：共用文字統一由 uiText 處理（未補齊 key 先 fallback 到既有 hardcode，避免功能中斷）
  * - 2026-01-06：i18n 修正：移除 isEn/isJa/zh ternary fallback，強制只透過 uiText 取字（uiLang -> zh-TW -> hardFallback）
  * - 2026-01-07：Phase 2-UX（Step A-6）：例句標題顯示 headword（銳角外方匡）：WordExampleBlock 往下傳 headword 給 ExampleList（預設 not available）
+ * - 2026-01-10：Phase 2-UX（Step A-2.1）：將 refControls 拆為兩個 slot（refBadgesInline / refActionInline），供後續放到不同 div（不改資料流/查詢規則）
+ * - 2026-01-11：Phase 2-UX（Step B-0 定位/Focus）：
+ *   - popup 改為貼近「新增」按鈕，並上緣貼齊 + clamp 避免被截
+ *   - popup 出現後 input 自動 focus
  */
 
-import React, { useCallback, useState, useMemo } from "react";
+import React, { useCallback, useState, useMemo, useEffect, useLayoutEffect, useRef } from "react";
 import { callTTS } from "../../utils/ttsClient";
 
 // ✅ i18n：共用文字統一由 uiText 處理（逐步補齊 key；未補齊則 fallback 到既有 hardcode，避免功能中斷）
@@ -42,6 +46,15 @@ export default function WordExampleBlock({
   explainLang,
   onWordClick,
   uiLang,
+
+  // ✅ Task 1：Entry Header 可被置換（只影響例句 header 顯示）
+  // - 來源：上游容器（WordCard / 同層容器）或其他上游 state
+  // - 注意：僅用於 UI 顯示，不影響 refs、不觸發造句
+  entryHeaderOverride,
+  // ✅ 2026-01-12 Task 1：名詞格/數選取後，往上回拋用（只影響 header 顯示）
+  // - WordPosInfo.jsx 會呼叫此 callback（若有提供）
+  onEntrySurfaceChange,
+
 
   // 以下保留舊 props，不使用，但不能刪（避免上層報錯）
   grammarOptionsLabel,
@@ -88,9 +101,23 @@ export default function WordExampleBlock({
   // - 來源優先順序：d.word -> d.baseForm -> not available
   // - 注意：只負責傳遞與可觀測性，不改任何例句/翻譯/查詢流程
   const headwordForExampleTitle = useMemo(() => {
-    const hw = (d?.word || d?.baseForm || "").toString().trim();
-    return hw ? hw : "not available";
-  }, [d]);
+  // ✅ Task 1：Header 可被置換（Entry 狀態）
+  // - 優先順序：
+  //   1) entryHeaderOverride（上游顯式覆蓋）
+  //   2) selectedForm（本檔案已存在的名詞表 onSelectForm 接線：只在點 cell 時才會有值）
+  //   3) 原本 headword（d.word / d.baseForm）
+  // - 注意：只影響例句 header 顯示，不改 refs、不觸發 refreshExamples
+  const override1 =
+    typeof entryHeaderOverride === "string" ? entryHeaderOverride.trim() : "";
+  const override2 =
+    selectedForm && typeof selectedForm === "object" && typeof selectedForm.surface === "string"
+      ? selectedForm.surface.trim()
+      : "";
+
+  const hw = (d?.word || d?.baseForm || "").toString().trim();
+  return override1 || override2 || hw || "not available";
+}, [d, entryHeaderOverride, selectedForm]);
+
 
   // ✅ 新增：多重參考（前端保存，per wordKey；不進 DB）
   const wordKey = useMemo(() => {
@@ -105,8 +132,45 @@ export default function WordExampleBlock({
   const [dirtyByWordKey, setDirtyByWordKey] = useState({});
   const [refInputByWordKey, setRefInputByWordKey] = useState({});
 
+  // =========================
+  // Phase 2-UX（Step B-0）：新增參考小視窗開關（Production 排查）
+  // 中文功能說明：
+  // - 目標：不要「一開 multiRef toggle 就直接跳出輸入視窗」
+  // - 改為：toggle ON → 顯示「新增」按鈕；點新增才打開小視窗
+  // - 關閉方式：
+  //   - 點擊視窗外側（backdrop）
+  //   - ESC
+  //   - 加入成功（handleAddRef 成功後自動關閉）
+  // - 注意：只改 UI 互動，不改 refs 資料結構/查詢規則
+  // =========================
+  const [addRefPopupOpenByWordKey, setAddRefPopupOpenByWordKey] = useState({});
+
+  // ✅ popup container ref（僅用於 runtime 觀測，不做強耦合）
+  const addRefPopupContainerRef = useRef(null);
+
+  // ✅ P0（定位用）：refs flow 一次性 log guard（避免 console 洗版）
+  // - 只用於釐清「katze 進入 refs 的路徑」：rawInput -> lookup -> final ref object -> badge render
+  const __p0RefFlowLogOnce = useRef({ addConfirm: {}, badgeRender: {} });
+
+  // ✅ Step B-0（popup 定位）：以「新增」按鈕為 anchor，讓小視窗出現在按鈕附近且上緣貼齊
+  // 中文功能說明：
+  // - 需求：popup 不要永遠貼右邊；改為貼近「新增」按鈕出現（上緣對齊），並避免被視窗邊界截斷
+  // - 作法：在「新增」按鈕綁定 ref，popup 開啟時用 getBoundingClientRect() 取座標，計算 top/left 並做 clamp
+  // - 注意：只改 UI 定位，不改 refs 資料流/查詢規則
+  const addRefButtonAnchorRef = useRef(null);
+  const [addRefPopupPosByWordKey, setAddRefPopupPosByWordKey] = useState({});
+
+  // ✅ Step B-0（Focus）：popup input ref，popup 開啟後自動 focus
+  // 中文功能說明：
+  // - 需求：方框出現後，游標要自動進去 input
+  // - 作法：input 綁 ref；popup open 後用 requestAnimationFrame/timeout 等待 DOM 就緒再 focus
+  // - 注意：只影響 UI，不改資料流
+  const addRefInputRef = useRef(null);
+
   // ✅ Phase 2-UX（Step A-5）：ref 輸入錯誤狀態（UI 檢核用；不影響資料流）
   const [refErrorByWordKey, setRefErrorByWordKey] = useState({});
+  // ✅ Phase 2-UX（Step A-5-1）：ref 檢核中狀態（避免重複點擊、顯示 loading）
+  const [refValidateBusyByWordKey, setRefValidateBusyByWordKey] = useState({});
 
   const multiRefEnabled = !!multiRefEnabledByWordKey[wordKey];
   const refs = Array.isArray(refsByWordKey[wordKey]) ? refsByWordKey[wordKey] : [];
@@ -115,6 +179,125 @@ export default function WordExampleBlock({
 
   // ✅ UI 檢核訊息
   const refError = typeof refErrorByWordKey[wordKey] === "string" ? refErrorByWordKey[wordKey] : "";
+
+  // ✅ Phase 2-UX（Step B-0）：小視窗是否打開
+  const isAddRefPopupOpen = !!addRefPopupOpenByWordKey[wordKey];
+
+  // ✅ Step B-0（popup 定位）：取得目前 wordKey 的 popup 座標（預設 0,0）
+  const addRefPopupPos = useMemo(() => {
+    const p = addRefPopupPosByWordKey[wordKey];
+    if (!p || typeof p !== "object") return { top: 0, left: 0 };
+    const top = typeof p.top === "number" ? p.top : 0;
+    const left = typeof p.left === "number" ? p.left : 0;
+    return { top, left };
+  }, [addRefPopupPosByWordKey, wordKey]);
+
+  // ✅ Phase 2-UX（Step B-0）：ESC 關閉小視窗（Production 排查）
+  useEffect(() => {
+    if (!isAddRefPopupOpen) return;
+
+    const onKeyDown = (e) => {
+      if (e && e.key === "Escape") {
+        setAddRefPopupOpenByWordKey((prev) => ({
+          ...prev,
+          [wordKey]: false,
+        }));
+      }
+    };
+
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [isAddRefPopupOpen, wordKey]);
+
+  // ✅ Step B-0（popup 定位）：依「新增」按鈕位置決定 popup top/left（上緣貼齊）
+  // - 使用 position: fixed，避免受容器影響
+  // - 透過 clamp 避免右側/左側被截
+  useLayoutEffect(() => {
+    if (!isAddRefPopupOpen) return;
+
+    const calcAndSet = () => {
+      const el = addRefButtonAnchorRef.current;
+      if (!el || typeof el.getBoundingClientRect !== "function") return;
+
+      const r = el.getBoundingClientRect();
+      const margin = 8;
+      const popupMinWidth = 360; // 與 popup minWidth 對齊
+      const vw = typeof window !== "undefined" ? window.innerWidth : 0;
+      const vh = typeof window !== "undefined" ? window.innerHeight : 0;
+
+      // ✅ 需求：上緣貼齊「新增」按鈕，上方至少留 margin
+      let top = Math.max(margin, Math.round(r.top));
+
+      // ✅ 預設：left 以按鈕左邊對齊（最貼近「新增」）
+      let left = Math.round(r.left);
+
+      // ✅ clamp：避免超出右側/左側（以 popupMinWidth 估算）
+      if (vw > 0) {
+        left = Math.max(margin, Math.min(left, vw - popupMinWidth - margin));
+      } else {
+        left = Math.max(margin, left);
+      }
+
+      // ✅ 垂直方向也做保底（避免完全看不到）
+      if (vh > 0) {
+        const approxPopupHeight = 120; // 粗估，避免完全看不到
+        top = Math.max(margin, Math.min(top, vh - approxPopupHeight - margin));
+      }
+
+      setAddRefPopupPosByWordKey((prev) => ({
+        ...prev,
+        [wordKey]: { top, left },
+      }));
+    };
+
+    calcAndSet();
+
+    // ✅ 視窗尺寸變動時重算（避免縮放/旋轉被截）
+    window.addEventListener("resize", calcAndSet);
+    return () => window.removeEventListener("resize", calcAndSet);
+  }, [isAddRefPopupOpen, wordKey]);
+
+  // ✅ Step B-0（Focus）：popup 開啟後自動 focus input
+  // - 用 requestAnimationFrame 確保 DOM 已插入
+  // - 再加一層 setTimeout 0ms 當作保險（某些瀏覽器/渲染節奏）
+  useEffect(() => {
+    if (!isAddRefPopupOpen) return;
+
+    let raf1 = 0;
+    let raf2 = 0;
+    let t1 = null;
+
+    const tryFocus = () => {
+      const el = addRefInputRef.current;
+      if (!el || typeof el.focus !== "function") return;
+
+      try {
+        el.focus();
+        // ✅ 讓游標到最後（符合「直接接著打」）
+        if (typeof el.setSelectionRange === "function") {
+          const len = (el.value || "").length;
+          el.setSelectionRange(len, len);
+        }
+      } catch (e) {
+        // ignore
+      }
+    };
+
+    raf1 = window.requestAnimationFrame(() => {
+      raf2 = window.requestAnimationFrame(() => {
+        tryFocus();
+        t1 = window.setTimeout(() => {
+          tryFocus();
+        }, 0);
+      });
+    });
+
+    return () => {
+      if (raf1) window.cancelAnimationFrame(raf1);
+      if (raf2) window.cancelAnimationFrame(raf2);
+      if (t1) window.clearTimeout(t1);
+    };
+  }, [isAddRefPopupOpen]);
 
   const isZh = explainLang?.startsWith("zh");
   const isEn = explainLang?.startsWith("en");
@@ -434,6 +617,21 @@ export default function WordExampleBlock({
     };
   }, [pillBaseStyle]);
 
+  // ✅ Step B-0：新增按鈕（開啟小視窗用）
+  // 中文功能說明：
+  // - 視覺上與「加入」同系統，但文字是「新增」，避免與「加入」語意混淆
+  // - 不額外加粗字體（使用者要求回原本字重）
+  const addRefButtonStyle = useMemo(() => {
+    return {
+      ...pillBaseStyle,
+      justifyContent: "center",
+      border: "1px solid rgba(0, 0, 0, 0.18)",
+      background: "transparent",
+      fontWeight: 500,
+      padding: "2px 12px",
+    };
+  }, [pillBaseStyle]);
+
   // ✅ refs badge：改成與詞性 pill 同系統（狀態用變色表達，不使用勾勾）
   const refBadgeBaseStyle = useMemo(() => {
     return {
@@ -501,6 +699,64 @@ export default function WordExampleBlock({
       .replace(/\s+/g, " ");
   }, []);
 
+  // =========================
+  // ✅ Phase 2-UX（Step A-5-2）：ref lemma 檢核 / 正規化
+  // - 目的：badge 內只允許存「lemma」（例如 hund → Hund、schlafst → schlafen）
+  // - 策略：
+  //   A) 單字（無空白）：優先走 dictionary lookup；查不到就視為無效
+  //   B) 多字詞（含空白）：允許先加入（因為字典可能不支援片語），但不做 lemma 正規化
+  // - 注意：這裡只處理「ref badge 的輸入」，不要求例句一定要用 lemma 呈現
+  const tryLookupLemma = useCallback(
+    async (rawText) => {
+      const t = (rawText || "").toString().trim();
+      if (!t) return { ok: false, lemma: "", reason: "empty" };
+
+      // ✅ 多字詞：先放行（後續可再設計 phrase-level 的驗證策略）
+      if (t.includes(" ")) {
+        return { ok: true, lemma: t, reason: "multi_word_passthrough" };
+      }
+
+      try {
+        // ⚠️ endpoint 依你現有 backend route 實作：dictionaryRoute.js
+        // - 這裡不假設回傳 schema，只做「保守型抽取」：
+        //   baseForm / lemma / headword / word 任一存在即視為 lemma
+        const resp = await fetch("/api/dictionary/lookup", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            word: t,
+            explainLang,
+            // cache-bust：避免 dev server/edge cache 造成舊資料
+            __ts: Date.now(),
+          }),
+        });
+
+        if (!resp.ok) {
+          return { ok: false, lemma: "", reason: `http_${resp.status}` };
+        }
+
+        const data = await resp.json();
+
+        // 保守抽取：盡量抓到「最像 lemma」的欄位
+        const lemmaCandidate =
+          (data && typeof data.baseForm === "string" && data.baseForm) ||
+          (data && typeof data.lemma === "string" && data.lemma) ||
+          (data && typeof data.headword === "string" && data.headword) ||
+          (data && typeof data.word === "string" && data.word) ||
+          "";
+
+        if (!lemmaCandidate) {
+          return { ok: false, lemma: "", reason: "no_lemma" };
+        }
+
+        return { ok: true, lemma: lemmaCandidate, reason: "lookup_ok" };
+      } catch (e) {
+        return { ok: false, lemma: "", reason: "fetch_error" };
+      }
+    },
+    [explainLang]
+  );
+
   const isPlaceholderRefText = useCallback((s) => {
     const t = normalizeRefText(s);
     const lower = t.toLowerCase();
@@ -549,6 +805,15 @@ export default function WordExampleBlock({
         ...prev,
         [wordKey]: !!enabled,
       }));
+
+      // ✅ Phase 2-UX（Step B-0）：關閉 toggle 時，同步關閉新增小視窗（避免殘留）
+      if (!enabled) {
+        setAddRefPopupOpenByWordKey((prev) => ({
+          ...prev,
+          [wordKey]: false,
+        }));
+      }
+
       setDirtyByWordKey((prev) => ({
         ...prev,
         [wordKey]: true,
@@ -568,8 +833,8 @@ export default function WordExampleBlock({
     handleToggleMultiRefButton();
   }, [handleToggleMultiRefButton]);
 
-  const handleAddRef = useCallback(() => {
-    // ✅ Phase 2-UX（Step A-5）：先做 UI 檢核，擋掉 placeholder refs（xxx/.../…）
+  const handleAddRef = useCallback(async () => {
+    // ✅ Phase 2-UX（Step A-5）：先做 UI 檢核（空值 / placeholder）
     const textRaw = (refInput || "").toString();
     const text = normalizeRefText(textRaw);
 
@@ -589,34 +854,73 @@ export default function WordExampleBlock({
 
       // ✅ 可控 debug：只有開 flag 才 log，避免 production 汙染
       try {
-        const __dbgFlag = (import.meta && import.meta.env && import.meta.env.VITE_DEBUG_EXAMPLES_REFS) || "";
-        if (__dbgFlag === "1") {
-          console.warn("[WordExampleBlock][ref-validate] blocked", { wordKey, text });
+        const __dbgFlag =
+          import.meta && import.meta.env && import.meta.env.VITE_DEBUG
+            ? String(import.meta.env.VITE_DEBUG).toLowerCase() === "true"
+            : false;
+        if (__dbgFlag) {
+          console.warn("[WordExampleBlock] ref rejected by placeholder check:", text);
         }
-      } catch (e) {}
+      } catch (_) {}
 
       return;
     }
 
-    // ✅ 通過檢核：清掉錯誤
-    setRefErrorByWordKey((prev) => ({
-      ...prev,
-      [wordKey]: "",
-    }));
+    // ✅ Phase 2-UX（Step A-5-2）：lemma 檢核 / 正規化
+    // - badge 內只存 lemma（單字），多字詞先放行（不做 lemma 正規化）
+    setRefValidateBusyByWordKey((prev) => ({ ...prev, [wordKey]: true }));
+    try {
+      const res = await tryLookupLemma(text);
+      if (!res?.ok || !res?.lemma) {
+        setRefErrorByWordKey((prev) => ({
+          ...prev,
+          [wordKey]: tRefInvalidHint,
+        }));
+        return;
+      }
 
-    setRefsByWordKey((prev) => {
+      const lemmaText = normalizeRefText(res.lemma);
+      if (!lemmaText) {
+        setRefErrorByWordKey((prev) => ({
+          ...prev,
+          [wordKey]: tRefInvalidHint,
+        }));
+        return;
+      }
+
+
+      // ✅ P0（定位）：新增 confirm handler 的最終寫入值
+      // - 只 log 一次/每個 wordKey，避免洗版
+      try {
+        const __once = __p0RefFlowLogOnce.current && __p0RefFlowLogOnce.current.addConfirm;
+        if (__once && !__once[wordKey]) {
+          __once[wordKey] = true;
+          console.log("[P0][addRefConfirm]", {
+            wordKey,
+            rawInput: textRaw,
+            normalizedInput: text,
+            lookupResult: res,
+            lemmaText,
+            finalRef: { kind: "custom", key: lemmaText, displayText: lemmaText, pinned: true },
+            typeofKey: typeof lemmaText,
+            isSingleWord: !text.includes(" "),
+          });
+        }
+      } catch (_) {}
+
+setRefsByWordKey((prev) => {
       const cur = Array.isArray(prev[wordKey]) ? prev[wordKey] : [];
 
       // ✅ 去重（同 key 不重複加入）：不改資料結構，只在 UI prevent duplication
       // - 注意：不刪除舊邏輯，只是避免 UI 重複輸入造成混亂
-      const existed = cur.some((r) => (r?.key || r?.displayText || "") === text);
+      const existed = cur.some((r) => (r?.key || r?.displayText || "") === lemmaText);
       if (existed) return prev;
 
       const next = cur.concat([
         {
           kind: "custom",
-          key: text,
-          displayText: text,
+          key: lemmaText,
+          displayText: lemmaText,
           pinned: true,
         },
       ]);
@@ -635,12 +939,24 @@ export default function WordExampleBlock({
       ...prev,
       [wordKey]: true,
     }));
+
+    // ✅ Phase 2-UX（Step B-0）：加入成功後關閉小視窗（避免卡住）
+    setAddRefPopupOpenByWordKey((prev) => ({
+      ...prev,
+      [wordKey]: false,
+    }));
+    } finally {
+      setRefValidateBusyByWordKey((prev) => ({ ...prev, [wordKey]: false }));
+    }
   }, [
+
     refInput,
     wordKey,
     normalizeRefText,
     isPlaceholderRefText,
+    tryLookupLemma,
     tRefInvalidHint,
+  
   ]);
 
   const handleRemoveRefAt = useCallback(
@@ -667,129 +983,341 @@ export default function WordExampleBlock({
   // - 目的：讓「新增參考/加入/refs badges/dirty/used&missing」出現在 ExampleSentence 下方（由 ExampleList 渲染）
   // - 注意：此區塊純 UI，不改查詢規則；仍需按 Refresh 才會真正打 API
   // =========================
-  const refControls = useMemo(() => {
+
+  // ============================================================
+  // ✅ NEW 2026/01/10: 拆分 refControls -> 兩個 slot
+  // - refBadgesInline：只包含 refs badges（+Hund）
+  // - refActionInline：只包含 新增按鈕 + popup + missing/dirty hints
+  // - refControls（deprecated）保留：組合上述兩個 slot，保持現有 UI/行為
+  // ============================================================
+
+  const refBadgesInline = useMemo(() => {
     if (!multiRefEnabled) return null;
 
+    // ✅ P0（定位）：badge render 前先看 refs 到底長什麼樣（key / displayText）
+    // - 只 log 一次/每個 wordKey，避免洗版
+    try {
+      const __once = __p0RefFlowLogOnce.current && __p0RefFlowLogOnce.current.badgeRender;
+      if (__once && !__once[wordKey]) {
+        __once[wordKey] = true;
+        console.log("[P0][badgeRender]", {
+          wordKey,
+          refs: (Array.isArray(refs) ? refs : []).map((r) => ({
+            key: r?.key,
+            displayText: r?.displayText,
+            rawInput: r?.rawInput,
+            kind: r?.kind,
+            typeofKey: typeof r?.key,
+          })),
+        });
+      }
+    } catch (_) {}
+
     return (
-      <div
-        style={{
-          marginTop: 2,
-          marginBottom: 2,
-          display: "flex",
-          gap: 10,
-          alignItems: "center",
-          flexWrap: "wrap",
-        }}
-      >
-        <input
-          type="text"
-          value={refInput}
-          placeholder={tRefPlaceholder}
-          onChange={(e) => {
-            // ✅ Phase 2-UX（Step A-5）：輸入變更就清掉錯誤（避免卡住）
-            setRefErrorByWordKey((prev) => ({
+      <>
+        {/* ✅ Step B-0-1：refs badges 固定顯示（例句/lemma 旁邊） */}
+        {refs.length > 0 && (
+          <div
+            data-ref="exampleRefBadgesInline"
+            style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}
+          >
+            {refs.map((r, idx) => {
+              const key = r?.key || r?.displayText || "";
+              const isUsed = safeUsedRefs.includes(key);
+              const isMissing = safeMissingRefs.includes(key);
+
+              // ✅ 狀態呈現策略（不放 ✅/⚠️，只用變色）
+              // - showRefStatus=true 才反映 used/missing 的色彩狀態
+              // - showRefStatus=false（尚未 refresh/尚未回傳）時，維持 idle 視覺
+              let __st = refBadgeStatusStyles.idle;
+              if (showRefStatus && isMissing) __st = refBadgeStatusStyles.missing;
+              if (showRefStatus && !isMissing && isUsed) __st = refBadgeStatusStyles.used;
+
+              const badgeStyle = {
+                ...refBadgeBaseStyle,
+                border: __st.border,
+                background: __st.background,
+                color: __st.color,
+                opacity: __st.opacity,
+              };
+
+              return (
+                <span
+                  key={`inline-${key}-${idx}`}
+                  style={badgeStyle}
+                  title={showRefStatus ? (isMissing ? tRefStatusMissing : isUsed ? tRefStatusUsed : "") : ""}
+                >
+                  <span>{`+ ${key}`}</span>
+
+                  <button
+                    type="button"
+                    onClick={() => handleRemoveRefAt(idx)}
+                    style={{
+                      border: "none",
+                      background: "transparent",
+                      cursor: "pointer",
+                      fontSize: 11,
+                      padding: 0,
+                      lineHeight: 1,
+                      opacity: 0.75,
+                    }}
+                    aria-label="remove-ref"
+                    title="remove"
+                  >
+                    ✕
+                  </button>
+                </span>
+              );
+            })}
+          </div>
+        )}
+      </>
+    );
+  }, [
+    multiRefEnabled,
+    wordKey,
+    refs,
+    safeUsedRefs,
+    safeMissingRefs,
+    showRefStatus,
+    refBadgeBaseStyle,
+    refBadgeStatusStyles,
+    handleRemoveRefAt,
+    tRefStatusUsed,
+    tRefStatusMissing,
+  ]);
+
+  const refActionInline = useMemo(() => {
+    if (!multiRefEnabled) return null;
+
+    // ✅ Phase 2-UX（Step B-0-0）：DEPRECATED 開關（保留原本 popup 內 badges 的 render，預設不顯示）
+    // - 需求變更：refs badges 改為固定顯示在 header（例句/lemma）旁邊，而不是放在 popup 內
+    // - 保留舊碼：避免之後需要回復或比對；若要回復，將此值改為 true
+    const __deprecatedShowBadgesInPopup = false;
+
+    // ✅ DEPRECATED 2026/01/10: inline hints next to the action button removed (UI request)
+    // - 保留原邏輯：若未來要恢復顯示，把這個開關改回 true
+    const __deprecatedShowInlineActionHints = false;
+
+    return (
+      <>
+        {/* ✅ Step B-0：新增按鈕（toggle ON 才出現） */}
+        <button
+          type="button"
+          ref={addRefButtonAnchorRef}
+          onClick={() => {
+            setAddRefPopupOpenByWordKey((prev) => ({
               ...prev,
-              [wordKey]: "",
+              [wordKey]: true,
             }));
 
-            setRefInputByWordKey((prev) => ({
-              ...prev,
-              [wordKey]: e.target.value,
-            }));
+            // ✅ 可控 debug：只在開 flag 才 log（Production 排查）
+            try {
+              const __dbgFlag =
+                (import.meta && import.meta.env && import.meta.env.VITE_DEBUG_EXAMPLES_REFS) || "";
+              if (__dbgFlag === "1") {
+                console.log("[WordExampleBlock][addRefPopup] open", {
+                  wordKey,
+                });
+              }
+            } catch (e) {}
           }}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") handleAddRef();
-          }}
-          style={refInputStyle}
-        />
-
-        <button type="button" onClick={handleAddRef} style={addRefBtnStyle}>
-          {tAddRefBtn}
+          style={addRefButtonStyle}
+          // ✅ 多國：「新增」按鈕文案（fallback: 新增）
+          // DEPRECATED 2026/01/10: old fallback "not available" kept below for reference
+          // title={__t("exampleBlock.addRefButtonTooltip", "not available") || "not available"}
+          // aria-label={__t("exampleBlock.addRefButtonAria", "not available") || "not available"}
+          title={__t("exampleBlock.addRefButtonTooltip", "新增") || "新增"}
+          aria-label={__t("exampleBlock.addRefButtonAria", "新增") || "新增"}
+        >
+          {/* DEPRECATED 2026/01/10: old fallback "not available" kept below for reference */}
+          {/* {__t("exampleBlock.addRefButtonLabel", "not available") || "not available"} */}
+          {__t("exampleBlock.addRefButtonLabel", "新增") || "新增"}
         </button>
 
-        {/* ✅ Phase 2-UX（Step A-5）：ref 輸入錯誤提示（只在有錯誤時顯示） */}
-        {!!refError && <span style={refErrorStyle}>{refError}</span>}
+        {/* ✅ Step B-0：小視窗（只有點「新增」才顯示） */}
+        {isAddRefPopupOpen && (
+          <>
+            {/* backdrop：點擊外側關閉 */}
+            <div
+              data-ref="exampleRefBackdrop"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setAddRefPopupOpenByWordKey((prev) => ({
+                  ...prev,
+                  [wordKey]: false,
+                }));
+              }}
+              style={{
+                position: "fixed",
+                inset: 0,
+                zIndex: 9998,
+                background: "rgba(0,0,0,0.001)",
+              }}
+            />
 
-        {/* refs badges + 狀態 */}
-        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          {refs.map((r, idx) => {
-            const key = r?.key || r?.displayText || "";
-            const isUsed = safeUsedRefs.includes(key);
-            const isMissing = safeMissingRefs.includes(key);
-
-            // ✅ 狀態呈現策略（不放 ✅/⚠️，只用變色）
-            // - showRefStatus=true 才反映 used/missing 的色彩狀態
-            // - showRefStatus=false（尚未 refresh/尚未回傳）時，維持 idle 視覺
-            let __st = refBadgeStatusStyles.idle;
-            if (showRefStatus && isMissing) __st = refBadgeStatusStyles.missing;
-            if (showRefStatus && !isMissing && isUsed) __st = refBadgeStatusStyles.used;
-
-            const badgeStyle = {
-              ...refBadgeBaseStyle,
-              border: __st.border,
-              background: __st.background,
-              color: __st.color,
-              opacity: __st.opacity,
-            };
-
-            return (
-              <span
-                key={`${key}-${idx}`}
-                style={badgeStyle}
-                title={showRefStatus ? (isMissing ? tRefStatusMissing : isUsed ? tRefStatusUsed : "") : ""}
+            {/* popup panel：依新增按鈕定位（上緣貼齊 + clamp 避免被截） */}
+            <div
+              data-ref="exampleRefPopup"
+              style={{
+                position: "fixed",
+                top: addRefPopupPos.top,
+                left: addRefPopupPos.left,
+                zIndex: 9999,
+                padding: 12,
+                borderRadius: 12,
+                minWidth: 360,
+                maxWidth: "min(90vw, 720px)",
+                background: "var(--panel-bg, rgba(255, 255, 255, 0.98))",
+                border: "1px solid rgba(0,0,0,0.12)",
+                boxShadow: "rgba(0,0,0,0.14) 0px 10px 28px",
+                overflow: "visible",
+              }}
+              onMouseDown={(e) => {
+                // ✅ 阻擋事件往上（避免外層 listener 誤判）
+                e.stopPropagation();
+              }}
+            >
+              <div
+                style={{
+                  marginTop: 2,
+                  marginBottom: 2,
+                  display: "flex",
+                  gap: 10,
+                  alignItems: "center",
+                  flexWrap: "wrap",
+                }}
               >
-                <span>{key}</span>
+                <input
+                  ref={addRefInputRef}
+                  data-ref="exampleRefPopupInput"
+                  type="text"
+                  value={refInput}
+                  placeholder={tRefPlaceholder}
+                  onChange={(e) => {
+                    // ✅ Phase 2-UX（Step A-5）：輸入變更就清掉錯誤（避免卡住）
+                    setRefErrorByWordKey((prev) => ({
+                      ...prev,
+                      [wordKey]: "",
+                    }));
 
-                <button
-                  type="button"
-                  onClick={() => handleRemoveRefAt(idx)}
-                  style={{
-                    border: "none",
-                    background: "transparent",
-                    cursor: "pointer",
-                    fontSize: 11, // ✅ icon 更小
-                    padding: 0,
-                    lineHeight: 1,
-                    opacity: 0.75,
+                    setRefInputByWordKey((prev) => ({
+                      ...prev,
+                      [wordKey]: e.target.value,
+                    }));
                   }}
-                  aria-label="remove-ref"
-                  title="remove"
-                >
-                  ✕
-                </button>
-              </span>
-            );
-          })}
-        </div>
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") handleAddRef();
+                  }}
+                  style={refInputStyle}
+                />
 
-        {/* missing 提示 */}
-        {showRefStatus && safeMissingRefs.length > 0 && (
+                <button type="button" onClick={handleAddRef} style={addRefBtnStyle}>
+                  {tAddRefBtn}
+                </button>
+
+                {/* ✅ Phase 2-UX（Step A-5）：ref 輸入錯誤提示（只在有錯誤時顯示） */}
+                {!!refError && <span style={refErrorStyle}>{refError}</span>}
+
+                {/* DEPRECATED 2026/01/09: refs badges in popup kept for rollback; now rendered inline next to header */}
+                {/* refs badges + 狀態 */}
+                {__deprecatedShowBadgesInPopup && (
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                    {refs.map((r, idx) => {
+                      const key = r?.key || r?.displayText || "";
+                      const isUsed = safeUsedRefs.includes(key);
+                      const isMissing = safeMissingRefs.includes(key);
+
+                      // ✅ 狀態呈現策略（不放 ✅/⚠️，只用變色）
+                      // - showRefStatus=true 才反映 used/missing 的色彩狀態
+                      // - showRefStatus=false（尚未 refresh/尚未回傳）時，維持 idle 視覺
+                      let __st = refBadgeStatusStyles.idle;
+                      if (showRefStatus && isMissing) __st = refBadgeStatusStyles.missing;
+                      if (showRefStatus && !isMissing && isUsed) __st = refBadgeStatusStyles.used;
+
+                      const badgeStyle = {
+                        ...refBadgeBaseStyle,
+                        border: __st.border,
+                        background: __st.background,
+                        color: __st.color,
+                        opacity: __st.opacity,
+                      };
+
+                      return (
+                        <span
+                          key={`${key}-${idx}`}
+                          style={badgeStyle}
+                          title={showRefStatus ? (isMissing ? tRefStatusMissing : isUsed ? tRefStatusUsed : "") : ""}
+                        >
+                          <span>{key}</span>
+
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveRefAt(idx)}
+                            style={{
+                              border: "none",
+                              background: "transparent",
+                              cursor: "pointer",
+                              fontSize: 11, // ✅ icon 更小
+                              padding: 0,
+                              lineHeight: 1,
+                              opacity: 0.75,
+                            }}
+                            aria-label="remove-ref"
+                            title="remove"
+                          >
+                            ✕
+                          </button>
+                        </span>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* missing 提示 */}
+                {showRefStatus && safeMissingRefs.length > 0 && (
+                  <span style={{ fontSize: 12, opacity: 0.85 }}>
+                    {tMissingRefsHint}
+                  </span>
+                )}
+
+                {/* dirty 提示 */}
+                {dirty && (
+                  <span style={{ fontSize: 12, opacity: 0.85 }}>
+                    {tDirtyHint}
+                  </span>
+                )}
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* ✅ missing refs 提示（popup 未開啟時也要顯示在 controls 區） */}
+        {/* 中文說明：原本這些提示是在 refControls 容器內；拆 slot 後將其視為 action 區的一部分 */}
+        {/* ✅ DEPRECATED 2026/01/10: inline hints removed (keep logic, default hidden) */}
+        {__deprecatedShowInlineActionHints && showRefStatus && safeMissingRefs.length > 0 && (
           <span style={{ fontSize: 12, opacity: 0.85 }}>
-            {/* DEPRECATED 2026/01/06: hardcoded i18n moved to uiText */}
-            {/* {isEn
-              ? "Some references were not used. Please regenerate."
-              : isJa
-              ? "一部の参照が使用されていません。再生成してください。"
-              : "有參考未被使用，請再重新產生"} */}
             {tMissingRefsHint}
           </span>
         )}
 
-        {/* dirty 提示 */}
-        {dirty && (
+        {__deprecatedShowInlineActionHints && dirty && (
           <span style={{ fontSize: 12, opacity: 0.85 }}>
             {tDirtyHint}
           </span>
         )}
-      </div>
+      </>
     );
   }, [
     multiRefEnabled,
+    isAddRefPopupOpen,
     refInput,
     tRefPlaceholder,
     wordKey,
     handleAddRef,
     refInputStyle,
+    addRefButtonStyle,
     addRefBtnStyle,
     refs,
     safeUsedRefs,
@@ -808,7 +1336,374 @@ export default function WordExampleBlock({
     tMissingRefsHint,
     tRefStatusUsed,
     tRefStatusMissing,
+    dirty,
+    __t,
+    addRefPopupPos,
+
+    // ✅ Step B-0（Focus）新增依賴：ref 本身不需要放依賴，但保留註解避免被誤刪
+    // addRefInputRef,
   ]);
+
+  const refControls = useMemo(() => {
+    if (!multiRefEnabled) return null;
+
+    // ✅ Phase 2-UX（Step B-0-0）：DEPRECATED 開關（保留原本 popup 內 badges 的 render，預設不顯示）
+    // - 需求變更：refs badges 改為固定顯示在 header（例句/lemma）旁邊，而不是放在 popup 內
+    // - 保留舊碼：避免之後需要回復或比對；若要回復，將此值改為 true
+    const __deprecatedShowBadgesInPopup = false;
+
+    return (
+      <div
+        // ✅ Phase 2-UX（Step B-0）：加入 container ref（Production 排查）
+        ref={addRefPopupContainerRef}
+        style={{
+          position: "relative",
+          marginTop: 2,
+          marginBottom: 2,
+          display: "flex",
+          gap: 10,
+          alignItems: "center",
+          flexWrap: "wrap",
+          justifyContent: "space-between", // ✅ 左 badges / 右 action 分開
+          width: "100%", // ✅ 讓 space-between 生效
+        }}
+      >
+        {/* ✅ NEW 2026/01/10: refControls 現在只負責「組合 slot」以維持既有 UI/行為 */}
+        {/* ✅ NEW 2026/01/10: 拆成左右兩個 div，讓 badges 與「新增」按鈕不要綁在同一個 div（UI 排版需求） */}
+        <div
+          data-ref="exampleRefInlineLeft"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            flexWrap: "wrap",
+            flex: "1 1 auto",
+            minWidth: 220,
+          }}
+        >
+          {refBadgesInline}
+        </div>
+
+
+        {/* ✅ 2026-01-10: exampleRefInlineRight（action 區）已準備改為「放到 toggle 之後」呈現
+            - 目標：toggle 在左，action（確認/新增 popup）貼在右
+            - 做法：refActionInline 會另外以 props 往下傳（refConfirm / refActionInline），由 ExampleSentence 的 toggle row 右側渲染
+            - 這裡保留舊 render（deprecated）方便回溯，但預設不顯示，避免 UI 重複
+        */}
+        {(() => {
+          // ✅ Phase 2-UX：Action（確認按鈕）已改由 ExampleSentence 的 toggle row（refConfirm slot）負責呈現
+          // - 這裡保留舊邏輯作為回溯參考（deprecated），但預設關閉，避免『確認』出現在下一行（Example/badge 那行）
+          // const __DEPRECATED_SHOW_ACTION_INLINE_IN_REFCONTROLS = !!multiRefEnabled; // deprecated
+          const __DEPRECATED_SHOW_ACTION_INLINE_IN_REFCONTROLS = false;
+          if (!__DEPRECATED_SHOW_ACTION_INLINE_IN_REFCONTROLS) return null;
+          return (
+
+
+        <div
+          data-ref="exampleRefInlineRight"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            flexWrap: "wrap",
+            flex: "0 0 auto",
+            justifyContent: "flex-end",
+            position: "relative", // ✅ 讓 popup 以右側 action 區塊定位（避免跑到整行最右）
+          }}
+        >
+          {refActionInline}
+        </div>
+
+          );
+        })()}
+
+        {/* DEPRECATED 2026/01/10: 下面這段是「拆分前的原始 JSX」，保留以便回溯（不再渲染） */}
+        {/*
+        {refs.length > 0 && (
+          <div
+            data-ref="exampleRefBadgesInline"
+            style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}
+          >
+            {refs.map((r, idx) => {
+              const key = r?.key || r?.displayText || "";
+              const isUsed = safeUsedRefs.includes(key);
+              const isMissing = safeMissingRefs.includes(key);
+
+              let __st = refBadgeStatusStyles.idle;
+              if (showRefStatus && isMissing) __st = refBadgeStatusStyles.missing;
+              if (showRefStatus && !isMissing && isUsed) __st = refBadgeStatusStyles.used;
+
+              const badgeStyle = {
+                ...refBadgeBaseStyle,
+                border: __st.border,
+                background: __st.background,
+                color: __st.color,
+                opacity: __st.opacity,
+              };
+
+              return (
+                <span
+                  key={`inline-${key}-${idx}`}
+                  style={badgeStyle}
+                  title={showRefStatus ? (isMissing ? tRefStatusMissing : isUsed ? tRefStatusUsed : "") : ""}
+                >
+                  <span>{`+ ${key}`}</span>
+
+                  <button
+                    type="button"
+                    onClick={() => handleRemoveRefAt(idx)}
+                    style={{
+                      border: "none",
+                      background: "transparent",
+                      cursor: "pointer",
+                      fontSize: 11,
+                      padding: 0,
+                      lineHeight: 1,
+                      opacity: 0.75,
+                    }}
+                    aria-label="remove-ref"
+                    title="remove"
+                  >
+                    ✕
+                  </button>
+                </span>
+              );
+            })}
+          </div>
+        )}
+
+        <button
+          type="button"
+          onClick={() => {
+            setAddRefPopupOpenByWordKey((prev) => ({
+              ...prev,
+              [wordKey]: true,
+            }));
+
+            try {
+              const __dbgFlag =
+                (import.meta && import.meta.env && import.meta.env.VITE_DEBUG_EXAMPLES_REFS) || "";
+              if (__dbgFlag === "1") {
+                console.log("[WordExampleBlock][addRefPopup] open", {
+                  wordKey,
+                });
+              }
+            } catch (e) {}
+          }}
+          style={addRefButtonStyle}
+          // ✅ 多國：確認按鈕（fallback 以中文顯示）
+          title={__t("exampleBlock.addRefButtonTooltip", "新增") || "新增"}
+          aria-label={__t("exampleBlock.addRefButtonAria", "新增") || "新增"}
+        >
+          {__t("exampleBlock.addRefButtonLabel", "新增") || "新增"}
+        </button>
+
+        {isAddRefPopupOpen && (
+          <>
+            <div
+              data-ref="exampleRefBackdrop"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setAddRefPopupOpenByWordKey((prev) => ({
+                  ...prev,
+                  [wordKey]: false,
+                }));
+              }}
+              style={{
+                position: "fixed",
+                inset: 0,
+                zIndex: 9998,
+                background: "rgba(0,0,0,0.001)",
+              }}
+            />
+
+            <div
+              data-ref="exampleRefPopup"
+              style={{
+                position: "absolute",
+                top: -6,
+                right: 0,
+                zIndex: 9999,
+                padding: 12,
+                borderRadius: 12,
+                minWidth: 360,
+                maxWidth: 720,
+                background: "var(--panel-bg, rgba(255, 255, 255, 0.98))",
+                border: "1px solid rgba(0,0,0,0.12)",
+                boxShadow: "rgba(0,0,0,0.14) 0px 10px 28px",
+                overflow: "visible",
+              }}
+              onMouseDown={(e) => {
+                e.stopPropagation();
+              }}
+            >
+              <div
+                style={{
+                  marginTop: 2,
+                  marginBottom: 2,
+                  display: "flex",
+                  gap: 10,
+                  alignItems: "center",
+                  flexWrap: "wrap",
+                }}
+              >
+                <input
+                  type="text"
+                  value={refInput}
+                  placeholder={tRefPlaceholder}
+                  onChange={(e) => {
+                    setRefErrorByWordKey((prev) => ({
+                      ...prev,
+                      [wordKey]: "",
+                    }));
+
+                    setRefInputByWordKey((prev) => ({
+                      ...prev,
+                      [wordKey]: e.target.value,
+                    }));
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") handleAddRef();
+                  }}
+                  style={refInputStyle}
+                />
+
+                <button type="button" onClick={handleAddRef} style={addRefBtnStyle}>
+                  {tAddRefBtn}
+                </button>
+
+                {!!refError && <span style={refErrorStyle}>{refError}</span>}
+
+                {__deprecatedShowBadgesInPopup && (
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                    {refs.map((r, idx) => {
+                      const key = r?.key || r?.displayText || "";
+                      const isUsed = safeUsedRefs.includes(key);
+                      const isMissing = safeMissingRefs.includes(key);
+
+                      let __st = refBadgeStatusStyles.idle;
+                      if (showRefStatus && isMissing) __st = refBadgeStatusStyles.missing;
+                      if (showRefStatus && !isMissing && isUsed) __st = refBadgeStatusStyles.used;
+
+                      const badgeStyle = {
+                        ...refBadgeBaseStyle,
+                        border: __st.border,
+                        background: __st.background,
+                        color: __st.color,
+                        opacity: __st.opacity,
+                      };
+
+                      return (
+                        <span
+                          key={`${key}-${idx}`}
+                          style={badgeStyle}
+                          title={showRefStatus ? (isMissing ? tRefStatusMissing : isUsed ? tRefStatusUsed : "") : ""}
+                        >
+                          <span>{key}</span>
+
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveRefAt(idx)}
+                            style={{
+                              border: "none",
+                              background: "transparent",
+                              cursor: "pointer",
+                              fontSize: 11,
+                              padding: 0,
+                              lineHeight: 1,
+                              opacity: 0.75,
+                            }}
+                            aria-label="remove-ref"
+                            title="remove"
+                          >
+                            ✕
+                          </button>
+                        </span>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {showRefStatus && safeMissingRefs.length > 0 && (
+                  <span style={{ fontSize: 12, opacity: 0.85 }}>
+                    {tMissingRefsHint}
+                  </span>
+                )}
+
+                {dirty && (
+                  <span style={{ fontSize: 12, opacity: 0.85 }}>
+                    {tDirtyHint}
+                  </span>
+                )}
+              </div>
+            </div>
+          </>
+        )}
+        */}
+      </div>
+    );
+  }, [
+    multiRefEnabled,
+    addRefPopupContainerRef,
+    refBadgesInline,
+    refActionInline,
+
+    // 原依賴保留（不刪），避免你未來要回溯 old block 時找不到
+    isAddRefPopupOpen,
+    refInput,
+    tRefPlaceholder,
+    wordKey,
+    handleAddRef,
+    refInputStyle,
+    addRefButtonStyle,
+    addRefBtnStyle,
+    refs,
+    safeUsedRefs,
+    safeMissingRefs,
+    showRefStatus,
+    handleRemoveRefAt,
+    isEn,
+    isJa,
+    tDirtyHint,
+    setRefInputByWordKey,
+    refBadgeBaseStyle,
+    refBadgeStatusStyles,
+    refError,
+    refErrorStyle,
+    setRefErrorByWordKey,
+    tMissingRefsHint,
+    tRefStatusUsed,
+    tRefStatusMissing,
+    dirty,
+    __t,
+  ]);
+
+
+  // =========================
+  // Phase 2-UX（Step B-1）：toggle ON 才顯示「新增/refs 控制區」
+  // 中文功能說明：
+  // - 使用者選擇方案 2：只有 multiRefEnabled=true 時，才把 refControls/refBadgesInline/refActionInline 往下傳
+  // - 目的：讓切換 toggle 能直接控制「新增」按鈕與 refs 控制區是否出現（不改查詢規則）
+  // - 注意：此 gate 只影響 UI 顯示，不改 refs 資料、不改 refresh 規則
+  // =========================
+  const refControlsForExampleList = useMemo(() => {
+    return multiRefEnabled ? refControls : null;
+  }, [multiRefEnabled, refControls]);
+
+  const refBadgesInlineForExampleList = useMemo(() => {
+    return multiRefEnabled ? refBadgesInline : null;
+  }, [multiRefEnabled, refBadgesInline]);
+
+  const refActionInlineForExampleList = useMemo(() => {
+    return multiRefEnabled ? refActionInline : null;
+  }, [multiRefEnabled, refActionInline]);
+
+  // ✅ NOTE 2026/01/10: ExampleSentence 的 toggle row 目前是用 refConfirm slot 來渲染「toggle 右側的按鈕」。
+  // - 需求：toggle 右側要顯示「新增」(開啟 addRef popup)，因此這裡把 refActionInline（新增+popup）接到 refConfirm。
+  const refConfirmForExampleList = useMemo(() => {
+    return multiRefEnabled ? refActionInline : null;
+  }, [multiRefEnabled, refActionInline]);
 
   const injectedPlural =
     typeof (d?.plural || d?.pluralForm || d?.nounPlural || d?.pluralBaseForm) ===
@@ -821,6 +1716,7 @@ export default function WordExampleBlock({
       {d && (d.baseForm || d.word) && (
         <WordPosInfo
           partOfSpeech={d.partOfSpeech}
+          queryWord={d.word}
           baseForm={d.baseForm || d.word}
           gender={d.gender}
           uiLabels={{}}
@@ -828,6 +1724,7 @@ export default function WordExampleBlock({
           type={d.type}
           uiLang={uiLang}
           onSelectForm={setSelectedForm}
+          onEntrySurfaceChange={onEntrySurfaceChange}
           onWordClick={onWordClick}
         />
       )}
@@ -934,12 +1831,6 @@ export default function WordExampleBlock({
             {/* missing 提示 */}
             {showRefStatus && safeMissingRefs.length > 0 && (
               <span style={{ fontSize: 12, opacity: 0.85 }}>
-                {/* DEPRECATED 2026/01/06: hardcoded i18n moved to uiText */}
-                {/* {isEn
-                  ? "Some references were not used. Please regenerate."
-                  : isJa
-                  ? "一部の参照が使用されていません。再生成してください。"
-                  : "有參考未被使用，請再重新產生"} */}
                 {tMissingRefsHint}
               </span>
             )}
@@ -983,7 +1874,16 @@ export default function WordExampleBlock({
         multiRefToggleHint={tMultiRefHint}
 
         // ✅ Phase 2-UX（Step A-2）：refs 控制區塊插槽（ExampleSentence 下方）
-        refControls={refControls}
+        refControls={refControlsForExampleList}
+
+        // ✅ 2026-01-10: 讓 action 區（確認/新增 popup）可移到 toggle 後方（由下游元件決定如何 render）
+        // - 目前保持向後相容：refControls 仍存在（badges 為主）
+        // - 新增兩個 slot：refBadgesInline / refActionInline
+        // - 同時提供 refConfirm（與 ExampleSentence 的命名一致）
+        refBadgesInline={refBadgesInlineForExampleList}
+        refActionInline={refActionInlineForExampleList}
+        refConfirm={refConfirmForExampleList}
+
       />
     </div>
   );

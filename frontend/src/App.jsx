@@ -97,6 +97,10 @@
  *   1) 移除未被讀取的 Production 排查用 initStatus state（僅 set、不參與任何業務邏輯）
  *   2) 移除未被使用的 libraryCursor state（cursor 尚未在本檔參與任何流程）
  *   3) 移除已註解且無引用的 legacyPayload 殘留註解
+* - 2026-01-12：Task 3（新增收藏可選分類：category_id 接線修正）
+*   1) handleToggleFavorite / toggleFavoriteViaApi 支援第二參數 options（含 category_id）
+*   2) addFavoriteViaApi payload 支援 category_id（僅在有效整數時送出；否則省略走後端預設）
+*   3) fallback：未指定分類時，優先用 selectedFavoriteCategoryId；再嘗試 name===「我的最愛1」；最後不帶 category_id
  */
 
 // App 只管狀態與邏輯，畫面交給 LayoutShell / SearchBox / ResultPanel
@@ -315,8 +319,42 @@ function AppInner() {
   const THEME_KEY = `langapp::${userBucket}::appTheme`;
   const LASTTEXT_KEY = `langapp::${userBucket}::lastText`;
   const HISTORY_KEY = `langapp::${userBucket}::history_v1`;
+  const FAVORITES_CATEGORY_KEY = `langapp::${userBucket}::favoritesCategoryId`;
+
 
   const [libraryItems, setLibraryItems] = useState([]);
+
+  // ✅ 分頁 cursor（沿用後端 nextCursor；分類切換時需要 reset）
+  const [libraryCursor, setLibraryCursor] = useState(null);
+
+  // ✅ 任務 2：收藏分類（Favorites Categories）
+  const [favoriteCategories, setFavoriteCategories] = useState([]);
+  const [favoriteCategoriesLoading, setFavoriteCategoriesLoading] = useState(false);
+  const [favoriteCategoriesLoadError, setFavoriteCategoriesLoadError] = useState(null);
+
+  // ✅ 任務 2：目前選取的收藏分類（localStorage per userId）
+  const [selectedFavoriteCategoryId, setSelectedFavoriteCategoryId] = useState(() => {
+    try {
+      const raw = window.localStorage.getItem(FAVORITES_CATEGORY_KEY);
+      const v = raw === null || typeof raw === "undefined" ? "" : String(raw).trim();
+      return v ? v : null;
+    } catch (e) {
+      return null;
+    }
+  });
+
+  // ✅ 任務 2：userId 變更時，同步讀取 localStorage（每個 userId 各自記住）
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(FAVORITES_CATEGORY_KEY);
+      const v = raw === null || typeof raw === "undefined" ? "" : String(raw).trim();
+      setSelectedFavoriteCategoryId(v ? v : null);
+    } catch (e) {
+      setSelectedFavoriteCategoryId(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [FAVORITES_CATEGORY_KEY]);
+
 
 
   // ✅ 測試模式：隨機單字卡 + 收藏狀態
@@ -790,11 +828,38 @@ function AppInner() {
       if (!clickedPosKey || !word) return;
       if (clickedPosKey === activePosKey) return;
 
-      // ✅ 詞性切換屬於「新的查詢」，不應該覆蓋歷史回放
-      setHistoryIndex(-1);
+      // 🔒 詞性 pill = 歷史切換（不打 API）
+      const historyKey = `${word}::${clickedPosKey}`;
 
-      // ✅ 注意：後端 analyzeRoute 以 targetPosKey 觸發特定詞性分析
-      handleAnalyzeByText(word, { queryMode: "word", targetPosKey: clickedPosKey });
+      // 你目前的歷史是用 index + snapshot
+      // 這裡直接在 history 裡找「同 word + posKey」的那一筆
+      const hitIndex = history.findIndex(
+        (h) =>
+          h?.text === word &&
+          (
+            h?.resultSnapshot?.dictionary?.posKey === clickedPosKey ||
+            h?.resultSnapshot?.dictionary?.canonicalPos === clickedPosKey
+          )
+      );
+
+      if (hitIndex >= 0) {
+        console.log("[App][posSwitch] hit history", historyKey, hitIndex);
+
+        // 切換歷史索引（這是你 Phase 4 已完成的能力）
+        setHistoryIndex(hitIndex);
+
+        // 同步顯示該筆結果（避免 re-render 亂跳）
+        const snapshot = history[hitIndex]?.resultSnapshot;
+        if (snapshot) {
+          setResult(snapshot);
+        }
+      } else {
+        console.log("[App][posSwitch] no history for posKey", historyKey);
+        // 沒有歷史：依你的規則，pill 也不打 API
+      }
+
+      return; // ⭐ 關鍵：阻斷後續所有 analyze 流程
+
     } catch (err) {
       console.warn("[App][posSwitch] handleSelectPosKey error", err);
     }
@@ -1164,13 +1229,71 @@ function AppInner() {
   };
 
   /** 功能：讀取單字庫（分頁） */
-  const loadLibraryFromApi = async ({ limit = 50, cursor = null } = {}) => {
+
+  /**
+   * 任務 2：讀取「收藏分類清單」
+   * - GET /api/library/favorites/categories
+   * - 失敗時：不影響既有收藏清單（fallback：不篩選）
+   */
+  const loadFavoriteCategoriesFromApi = async () => {
+    if (!authUserId) return { ok: false, categories: null, error: new Error("not logged in") };
+
+    setFavoriteCategoriesLoading(true);
+    setFavoriteCategoriesLoadError(null);
+
+    try {
+      const res = await apiFetch(`/api/library/favorites/categories`);
+      if (!res) throw new Error("[favorites] categories response is null");
+
+      // ✅ 401/403：視為未登入（維持既有行為：讓外層靠 authUserId 控制）
+      if (res.status === 401 || res.status === 403) {
+        const err = new Error(`[favorites] categories unauthorized: ${res.status}`);
+        setFavoriteCategoriesLoadError(err);
+        setFavoriteCategories([]);
+        return { ok: false, categories: null, error: err, unauthorized: true };
+      }
+
+      if (!res.ok) {
+        let detail = "";
+        try {
+          detail = await res.text();
+        } catch {}
+        throw new Error(
+          `[favorites] GET /api/library/favorites/categories failed: ${res.status} ${res.statusText}${
+            detail ? " | " + detail : ""
+          }`
+        );
+      }
+
+      let data = null;
+      try {
+        data = await res.json();
+      } catch {
+        data = null;
+      }
+
+      const categories = Array.isArray(data?.categories) ? data.categories : [];
+      setFavoriteCategories(categories);
+
+      return { ok: true, categories };
+    } catch (e) {
+      // ✅ fallback：不影響原本收藏清單
+      setFavoriteCategoriesLoadError(e);
+      setFavoriteCategories([]);
+      return { ok: false, categories: null, error: e };
+    } finally {
+      setFavoriteCategoriesLoading(false);
+    }
+  };
+
+  const loadLibraryFromApi = async ({ limit = 50, cursor = null, categoryId = null } = {}) => {
     if (!authUserId) return;
 
     try {
       const qs = new URLSearchParams();
       qs.set("limit", String(limit));
       if (cursor) qs.set("cursor", cursor);
+      if (categoryId) qs.set("category_id", String(categoryId));
 
       const res = await apiFetch(`/api/library?${qs.toString()}`);
       if (!res) throw new Error("[library] response is null");
@@ -1313,6 +1436,9 @@ function AppInner() {
     headwordGlossLang,
     familiarity,
     isHidden,
+    // ✅ Task 3：新增收藏可選分類（容錯：允許 categoryId / category_id）
+    categoryId,
+    category_id,
   }) => {
     if (!authUserId) return;
 
@@ -1327,6 +1453,11 @@ function AppInner() {
         ? headwordGlossLang.trim()
         : uiLang;
 
+// ✅ Task 3：category_id（必須是有效整數；不合法就不帶，讓後端走預設策略）
+const rawCat = category_id ?? categoryId;
+const catNum = Number.parseInt(String(rawCat ?? ""), 10);
+const safeCategoryId = Number.isFinite(catNum) && catNum > 0 ? catNum : null;
+
     const payload = {
       headword,
       canonicalPos,
@@ -1335,6 +1466,7 @@ function AppInner() {
       headwordGlossLang: safeGlossLang,
       ...(Number.isInteger(familiarity) ? { familiarity } : {}),
       ...(typeof isHidden === "boolean" ? { isHidden } : {}),
+      ...(safeCategoryId != null ? { category_id: safeCategoryId } : {}),
     };
 
     // ✅ runtime 觀察：確認前端送出的 payload 是否包含 gloss key/值
@@ -1497,7 +1629,7 @@ function AppInner() {
   /**
    * 功能：API 版收藏切換（DB 唯一真相）
    */
-  const toggleFavoriteViaApi = async (entry) => {
+  const toggleFavoriteViaApi = async (entry, options = null) => {
     if (!authUserId) return;
     const { headword, canonicalPos } = getFavoriteKey(entry);
     if (!headword) return;
@@ -1508,6 +1640,38 @@ function AppInner() {
         ((x?.canonical_pos ?? x?.canonicalPos) || "").trim() === canonicalPos
       );
     });
+
+// ✅ Task 3：決定要送出的 category_id（新增收藏時）
+// - 優先：呼叫端 options.category_id / options.categoryId
+// - 其次：目前 ResultPanel 下拉所選（selectedFavoriteCategoryId）
+// - 再其次：收藏分類清單內 name===「我的最愛1」的 id
+// - 最後：不帶 category_id（讓後端用預設策略）
+const pickDefaultCategoryIdForAdd = () => {
+  try {
+    // 1) options
+    const optRaw =
+      options && typeof options === "object"
+        ? options.category_id ?? options.categoryId
+        : null;
+    if (optRaw !== null && typeof optRaw !== "undefined") return optRaw;
+
+    // 2) state selected
+    if (selectedFavoriteCategoryId) return selectedFavoriteCategoryId;
+
+    // 3) name===我的最愛1
+    if (Array.isArray(favoriteCategories) && favoriteCategories.length > 0) {
+      const prefer = favoriteCategories.find((c) => (c?.name || "") === "我的最愛1");
+      if (prefer && (prefer?.id ?? null) !== null) return prefer.id;
+    }
+  } catch (e) {
+    // no-op
+  }
+  return null;
+};
+
+const rawCat = pickDefaultCategoryIdForAdd();
+const catNum = Number.parseInt(String(rawCat ?? ""), 10);
+const safeCategoryId = Number.isFinite(catNum) && catNum > 0 ? catNum : null;
 
     try {
       if (exists) {
@@ -1552,7 +1716,10 @@ function AppInner() {
               });
             } catch {}
 
-            await addFavoriteViaApi(p);
+            await addFavoriteViaApi({
+              ...p,
+              ...(safeCategoryId != null ? { category_id: safeCategoryId } : {}),
+            });
           }
         } else {
           // DEPRECATED (2025-12-26): 理論上不會走到（payloads 最少回 1），保留以便排查
@@ -1562,6 +1729,7 @@ function AppInner() {
             senseIndex: 0,
             headwordGloss: "",
             headwordGlossLang: uiLang,
+            ...(safeCategoryId != null ? { category_id: safeCategoryId } : {}),
           });
         }
       }
@@ -1572,22 +1740,149 @@ function AppInner() {
   /**
    * 功能：收藏切換 wrapper（並存模式）
    */
-  const handleToggleFavorite = (entry) => {
+  const handleToggleFavorite = (entry, options = null) => {
     if (!authUserId) return;
     if (USE_API_LIBRARY) {
-      toggleFavoriteViaApi(entry);
+      toggleFavoriteViaApi(entry, options);
       return;
     }
     toggleFavorite(entry);
   };
 
+  /**
+   * 任務 2：切換收藏分類（下拉選單）
+   * - 必須 reset cursor（從第一頁開始）
+   * - localStorage per userId 記住
+   */
+  const handleSelectFavoriteCategory = async (categoryId) => {
+    if (!USE_API_LIBRARY) return;
+    if (!authUserId) return;
+
+    const nextId = categoryId ? String(categoryId) : null;
+
+    try {
+      if (nextId) window.localStorage.setItem(FAVORITES_CATEGORY_KEY, nextId);
+      else window.localStorage.removeItem(FAVORITES_CATEGORY_KEY);
+    } catch (e) {
+      // no-op
+    }
+
+    setSelectedFavoriteCategoryId(nextId);
+
+    // ✅ reset cursor
+    try {
+      setLibraryCursor(null);
+    } catch (e) {}
+
+    // ✅ 重新拉收藏清單（依分類 / fallback：不篩選）
+    if (nextId) {
+      await loadLibraryFromApi({ limit: 50, cursor: null, categoryId: nextId });
+    } else {
+      await loadLibraryFromApi({ limit: 50, cursor: null });
+    }
+  };
+
+  /**
+   * 任務 3：查字結果區「新增收藏」用的分類選擇（不影響單字庫清單的篩選）
+   * - 目的：ResultPanel 的下拉可用，並記住使用者最後選擇
+   * - 注意：不要在這裡觸發 loadLibraryFromApi（避免你只是想換收藏分類，卻導致單字庫列表被重拉）
+   */
+  const handleSelectFavoriteCategoryForAdd = (categoryId) => {
+    if (!USE_API_LIBRARY) return;
+    if (!authUserId) return;
+
+    const nextId = categoryId ? String(categoryId) : null;
+
+    try {
+      if (nextId) window.localStorage.setItem(FAVORITES_CATEGORY_KEY, nextId);
+      else window.localStorage.removeItem(FAVORITES_CATEGORY_KEY);
+    } catch (e) {
+      // no-op
+    }
+
+    setSelectedFavoriteCategoryId(nextId);
+  };
+
+  /**
+   * 任務 3：為了讓 ResultPanel 的分類下拉「一進查字結果就能用」
+   * - 原本分類只在打開單字庫彈窗時才載入，會導致 ResultPanel 下拉永遠沒有 options → disabled
+   * - 這裡改成：只要登入後且使用 API library，就先載入一次分類（失敗也不阻斷收藏）
+   */
+  useEffect(() => {
+    if (!USE_API_LIBRARY) return;
+    if (!authUserId) return;
+
+    if (favoriteCategoriesLoading) return;
+    if (Array.isArray(favoriteCategories) && favoriteCategories.length > 0) return;
+
+    loadFavoriteCategoriesFromApi();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [USE_API_LIBRARY, authUserId]);
+
+
+
   // ✅ Phase 4：彈窗打開時載入單字庫（取代 view===library 的舊觸發方式）
+// ✅ 任務 2：同時載入收藏分類，並依分類重新載入 items（fallback：不篩選）
   useEffect(() => {
     if (!USE_API_LIBRARY) return;
     if (!authUserId) return;
     if (!showLibraryModal) return;
 
-    loadLibraryFromApi({ limit: 50 });
+    let cancelled = false;
+
+    (async () => {
+      // 1) 先拉分類（若失敗，不阻斷：仍可走不篩選）
+      const catRes = await loadFavoriteCategoriesFromApi();
+
+      if (cancelled) return;
+
+      const cats = Array.isArray(catRes?.categories) ? catRes.categories : [];
+
+      // 2) 決定預設分類（優先：localStorage；其次：name===我的最愛1；最後：第一個）
+      let nextSelectedId = selectedFavoriteCategoryId;
+
+      if (!nextSelectedId) {
+        const prefer = cats.find((c) => (c?.name || "") === "我的最愛1");
+        if (prefer && (prefer?.id ?? null) !== null) nextSelectedId = String(prefer.id);
+        else if (cats[0] && (cats[0]?.id ?? null) !== null) nextSelectedId = String(cats[0].id);
+        else nextSelectedId = null;
+      } else {
+        // ✅ 若 localStorage 記住的 id 不在清單中，則回退到第一個
+        const hit = cats.some((c) => String(c?.id ?? "") === String(nextSelectedId));
+        if (!hit) {
+          if (cats[0] && (cats[0]?.id ?? null) !== null) nextSelectedId = String(cats[0].id);
+          else nextSelectedId = null;
+        }
+      }
+
+      // 3) 設定 state + localStorage（每個 userId 各自記住）
+      try {
+        if (nextSelectedId) {
+          setSelectedFavoriteCategoryId(String(nextSelectedId));
+          window.localStorage.setItem(FAVORITES_CATEGORY_KEY, String(nextSelectedId));
+        } else {
+          setSelectedFavoriteCategoryId(null);
+          window.localStorage.removeItem(FAVORITES_CATEGORY_KEY);
+        }
+      } catch (e) {
+        // no-op
+      }
+
+      // 4) reset cursor + 載入收藏清單（依分類 / fallback：不帶 category_id）
+      try {
+        setLibraryCursor(null);
+      } catch (e) {}
+
+      if (nextSelectedId) {
+        await loadLibraryFromApi({ limit: 50, cursor: null, categoryId: nextSelectedId });
+      } else {
+        await loadLibraryFromApi({ limit: 50, cursor: null });
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [USE_API_LIBRARY, authUserId, showLibraryModal]);
 
@@ -1741,6 +2036,12 @@ function AppInner() {
             onPrev={goPrevHistory}
             onNext={goNextHistory}
             onWordClick={handleWordClick}
+            // ✅ 任務 3：新增收藏時可選分類（ResultPanel 下拉）
+            favoriteCategories={favoriteCategories}
+            favoriteCategoriesLoading={favoriteCategoriesLoading}
+            selectedFavoriteCategoryId={selectedFavoriteCategoryId}
+            onSelectFavoriteCategory={handleSelectFavoriteCategoryForAdd}
+
             // ✅ 單字庫彈窗入口（icon 按鈕在 ResultPanel 最右邊）
             onOpenLibrary={openLibraryModal}
             // ✅ 清除當下回放紀錄：移到 ResultPanel 箭頭旁邊
@@ -1749,6 +2050,8 @@ function AppInner() {
             clearHistoryLabel={t("app.history.clearThis")}
             // ✅ 詞性切換：由 ResultPanel → App
             onSelectPosKey={handleSelectPosKey}
+            onSelectPosKeyFromApp={handleSelectPosKey}
+
           />
 
           {/* ✅ 單字庫彈窗（不換 view） */}
@@ -1876,6 +2179,12 @@ function AppInner() {
                     favoriteDisabled={!authUserId}
                     uiText={uiText}
                     uiLang={uiLang}
+
+                    // ✅ 任務 2：收藏分類（下拉）
+                    favoriteCategories={favoriteCategories}
+                    favoriteCategoriesLoading={favoriteCategoriesLoading}
+                    selectedFavoriteCategoryId={selectedFavoriteCategoryId}
+                    onSelectFavoriteCategory={handleSelectFavoriteCategory}
                   />
                 </div>
               </div>

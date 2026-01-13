@@ -318,3 +318,39 @@ select {
   border-color: #4b5563;
   background: rgba(15, 23, 42, 0.7);
 }
+
+/* ==========================
+   Verb conjugation focus pulse (0.2s)
+   ========================== */
+
+/* ✅ 黃系脈衝外圈：亮暗版都可見 */
+.cell-pulse {
+  animation: cellPulse 0.2s ease-out;
+  position: relative;
+  z-index: 2;
+}
+
+@keyframes cellPulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(231, 162, 58, 0.75);
+  }
+  100% {
+    box-shadow: 0 0 0 10px rgba(231, 162, 58, 0);
+  }
+}
+
+/* ✅ 暗版再亮一點（避免被深底吃掉） */
+:root.dark .cell-pulse,
+.theme-dark .cell-pulse,
+.dark .cell-pulse {
+  animation: cellPulseDark 0.2s ease-out;
+}
+
+@keyframes cellPulseDark {
+  0% {
+    box-shadow: 0 0 0 0 rgba(255, 214, 102, 0.85);
+  }
+  100% {
+    box-shadow: 0 0 0 10px rgba(255, 214, 102, 0);
+  }
+}

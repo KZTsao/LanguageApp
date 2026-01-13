@@ -243,7 +243,12 @@ export default function WordPosInfoNoun({
   const miniTableRows = getMiniCaseTableForGender(genderKey, personKey);
 
   useEffect(() => {
+    // ✅ 2026-01-12 Task 1（Entry 狀態：Header 可被置換）
+    // - 行為定義：只有「點某格/某 cell」才會設定 header override
+    // - 因此當使用者切換 tab / plural / personKey 時（非點格動作），
+    //   需要同步清掉選取與上層的 header override（等同 Clear）。
     setSelectedCell(null);
+    if (typeof onSelectForm === "function") onSelectForm(null);
   }, [activeTab, numberMode, personKey]);
 
   useEffect(() => {

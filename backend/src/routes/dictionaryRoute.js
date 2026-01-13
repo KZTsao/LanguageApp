@@ -3,6 +3,35 @@ const express = require("express");
 const router = express.Router();
 const jwt = require("jsonwebtoken");
 
+// =========================
+// Phase X：回報問題（Example Report）寫入 Supabase
+// - 目的：讓前端在「回報問題」當下，把畫面資訊（context/snapshot）一起送進 DB
+// - 注意：這段僅新增，不影響既有 lookup/examples/conversation 流程
+// =========================
+const { createClient } = require("@supabase/supabase-js");
+
+let __supabaseAdminClient = null;
+function getSupabaseAdmin() {
+  if (__supabaseAdminClient) return __supabaseAdminClient;
+
+  const url = process.env.SUPABASE_URL || process.env.SUPABASE_PROJECT_URL || "";
+  const key =
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.SUPABASE_SERVICE_KEY ||
+    process.env.SUPABASE_SERVICE_ROLE ||
+    "";
+
+  if (!url || !key) {
+    return null;
+  }
+
+  __supabaseAdminClient = createClient(url, key, {
+    auth: { persistSession: false },
+  });
+
+  return __supabaseAdminClient;
+}
+
 const {
   lookupWord,
   generateExamples,
@@ -11,26 +40,9 @@ const {
 
 const { logUsage } = require("../utils/usageLogger");
 
-/**
- * 文件說明（dictionaryRoute）
- * - 用途：提供 /api/dictionary 的路由（lookup / examples / conversation）
- * - 注意：本檔案的 /examples 端點需遵守 Phase 1 硬規則：
- *   - history 切換不查
- *   - refs 變更不自動查
- *   - 只有按 Refresh 才打 /api/dictionary/examples
- *   （此規則主要由前端控制；後端僅回傳結果與可觀測欄位）
- *
- * 異動紀錄（保留舊紀錄，僅新增）
- * - 2026-01-06：Phase 2-5：refs 資料結構擴充（kind + surfaceForms），並更新後驗檢查：
- *   - 後驗檢查優先使用 ref.surfaceForms（若存在），否則使用 ref.key
- *   - 僅針對 kind: custom / entry 做字串包含檢查（case-insensitive）
- *   - kind: grammar 不做字串檢查，避免誤判；可依賴 LLM 回報（usedRefs/missingRefs）
- *   - 回傳 usedRefs/missingRefs/notes（向後相容：若無 refs 則回空陣列）
- *
- * 功能初始化狀態（Production 排查）
- * - DICT_ROUTE_REFS_DIAG.enabled = false（預設關閉）
- */
-
+// =========================
+// refs 診斷開關（預設 false）
+// =========================
 const DICT_ROUTE_REFS_DIAG = {
   enabled: false,
   tag: "[dictionaryRoute][refs]",
@@ -129,10 +141,16 @@ function isAnySurfaceFormUsedInExamples(examples, surfaceForms) {
     .filter((s) => typeof s === "string" && s.trim().length > 0)
     .map((s) => normalizeForIncludes(s));
 
-  for (const form of forms) {
-    const f = normalizeForIncludes(form);
-    if (!f) continue;
-    for (const ex of normalizedExamples) {
+  const normalizedForms = forms
+    .filter((s) => typeof s === "string" && s.trim().length > 0)
+    .map((s) => normalizeForIncludes(s));
+
+  if (normalizedExamples.length === 0 || normalizedForms.length === 0) {
+    return false;
+  }
+
+  for (const ex of normalizedExamples) {
+    for (const f of normalizedForms) {
       if (ex.includes(f)) return true;
     }
   }
@@ -178,6 +196,51 @@ function postCheckMissingRefs({ refs, examples }) {
 
   return { used, missing };
 }
+
+// =========================
+// 單字查詢 API
+// POST /api/dictionary/lookup
+// =========================
+router.post("/lookup", async (req, res) => {
+  try {
+    const {
+      word,
+      explainLang,
+      uiLang,
+      useCache,
+      enableMultiSense,
+      includeDictEntry,
+    } = req.body;
+
+    const authUser = tryGetAuthUser(req);
+
+    const result = await lookupWord({
+      word,
+      explainLang,
+      uiLang,
+      useCache,
+      enableMultiSense,
+      includeDictEntry,
+    });
+
+    // ✅ 用量紀錄（若沒有登入也可寫匿名，不阻塞）
+    try {
+      await logUsage({
+        authUserId: authUser ? authUser.id : null,
+        type: "dictionary_lookup",
+        input: { word, explainLang, uiLang },
+        output: result,
+      });
+    } catch (e) {
+      console.warn("[dictionaryRoute] logUsage lookup failed:", e);
+    }
+
+    res.json(result);
+  } catch (error) {
+    console.error("[dictionaryRoute] /lookup error:", error);
+    res.status(500).json({ error: "dictionary_lookup_failed" });
+  }
+});
 
 // =========================
 // 例句刷新 API
@@ -340,123 +403,394 @@ router.post("/examples", async (req, res) => {
       console.error("[dictionaryRoute] refs post-check failed:", e);
     }
 
-    if (cleaned.examples.length === 0) {
-      cleaned.examples = [`(No example generated - ${Date.now()})`];
-      cleaned.exampleTranslation = "";
-    }
-
-    // ======== 用量紀錄（不影響回傳） ========
+    // ✅ 用量紀錄（若沒有登入也可寫匿名，不阻塞）
     try {
-      const textForCount = JSON.stringify({
-        word: cleaned.word,
-        baseForm: cleaned.baseForm,
-        partOfSpeech: cleaned.partOfSpeech,
-        examples: cleaned.examples,
-        exampleTranslation: cleaned.exampleTranslation,
-        usedRefs: cleaned.usedRefs,
-        missingRefs: cleaned.missingRefs,
-        notes: cleaned.notes,
-      });
-
       await logUsage({
-        userId: authUser?.id || "",
-        userEmail: authUser?.email || "",
-        endpoint: "/api/dictionary/examples",
-        charCount: textForCount.length,
-        kind: "llm",
+        authUserId: authUser ? authUser.id : null,
+        type: "dictionary_examples",
+        input: {
+          word,
+          baseForm,
+          partOfSpeech,
+          gender,
+          senseIndex,
+          explainLang,
+          options,
+          definitionDeList,
+          definitionLangList,
+
+          // ✅ Phase 2-5：記錄 refs 輸入，方便 audit
+          multiRef: !!multiRef,
+          refs: Array.isArray(refs) ? refs : [],
+        },
+        output: cleaned,
       });
     } catch (e) {
-      console.error("[dictionaryRoute] logUsage failed:", e);
+      console.warn("[dictionaryRoute] logUsage examples failed:", e);
     }
 
-    const elapsed = Date.now() - startedAt;
-    console.log("[dictionaryRoute] /examples DONE in", elapsed, "ms");
-    res.json(cleaned);
-  } catch (err) {
-    console.error("[dictionaryRoute] /examples error:", err);
-    res.status(500).json({ error: "example_generation_failed" });
-  }
-});
+    const elapsedMs = Date.now() - startedAt;
 
-// =========================
-// 單字查詢 API
-// POST /api/dictionary/lookup
-// =========================
-
-router.post("/lookup", async (req, res) => {
-  const startedAt = Date.now();
-  try {
-    const { word, explainLang, _ts } = req.body || {};
-    const authUser = tryGetAuthUser(req);
-
-    const rawResult = await lookupWord({
-      word,
-      explainLang,
-      _ts,
+    res.json({
+      ...cleaned,
+      _debug: {
+        elapsedMs,
+      },
     });
-
-    if (process.env.DEBUG_DICTIONARY === "1") {
-      console.log("[/lookup raw]", rawResult);
-    }
-
-    const elapsed = Date.now() - startedAt;
-    console.log("[dictionaryRoute] /lookup DONE in", elapsed, "ms");
-
-    // ======== 用量紀錄（不影響回傳） ========
-    try {
-      const textForCount = JSON.stringify(rawResult || {});
-      await logUsage({
-        userId: authUser?.id || "",
-        userEmail: authUser?.email || "",
-        endpoint: "/api/dictionary/lookup",
-        charCount: textForCount.length,
-        kind: "llm",
-      });
-    } catch (e) {
-      console.error("[dictionaryRoute] logUsage failed:", e);
-    }
-
-    res.json(rawResult || {});
-  } catch (err) {
-    console.error("[dictionaryRoute] /lookup error:", err);
-    res.status(500).json({ error: "dictionary_lookup_failed" });
+  } catch (error) {
+    console.error("[dictionaryRoute] /examples error:", error);
+    res.status(500).json({ error: "examples_generation_failed" });
   }
 });
 
 // =========================
-// 連續對話 API
+// 對話生成 API
 // POST /api/dictionary/conversation
 // =========================
-
 router.post("/conversation", async (req, res) => {
-  const startedAt = Date.now();
   try {
+    const {
+      word,
+      baseForm,
+      partOfSpeech,
+      gender,
+      senseIndex,
+      explainLang,
+      uiLang,
+
+      // 對話主題/角色/程度
+      scenario,
+      difficulty,
+      options,
+    } = req.body;
+
     const authUser = tryGetAuthUser(req);
 
-    const rawResult = await generateConversation(req.body || {});
-    const elapsed = Date.now() - startedAt;
-    console.log("[dictionaryRoute] /conversation DONE in", elapsed, "ms");
+    const result = await generateConversation({
+      word,
+      baseForm,
+      partOfSpeech,
+      gender,
+      senseIndex,
+      explainLang,
+      uiLang,
+      scenario,
+      difficulty,
+      options,
+    });
 
-    // ======== 用量紀錄（不影響回傳） ========
+    // ✅ 用量紀錄（若沒有登入也可寫匿名，不阻塞）
     try {
-      const textForCount = JSON.stringify(rawResult || {});
       await logUsage({
-        userId: authUser?.id || "",
-        userEmail: authUser?.email || "",
-        endpoint: "/api/dictionary/conversation",
-        charCount: textForCount.length,
-        kind: "llm",
+        authUserId: authUser ? authUser.id : null,
+        type: "dictionary_conversation",
+        input: {
+          word,
+          baseForm,
+          partOfSpeech,
+          gender,
+          senseIndex,
+          explainLang,
+          uiLang,
+          scenario,
+          difficulty,
+          options,
+        },
+        output: result,
       });
     } catch (e) {
-      console.error("[dictionaryRoute] logUsage failed:", e);
+      console.warn("[dictionaryRoute] logUsage conversation failed:", e);
     }
 
-    res.json(rawResult || {});
+    res.json(result);
   } catch (err) {
     console.error("[dictionaryRoute] /conversation error:", err);
     res.status(500).json({ error: "conversation_generation_failed" });
   }
 });
+
+
+// =========================
+// 回報問題 API（Example Report）
+// POST /api/dictionary/examples/report
+// - 前端於回報當下送：exampleId + reportType + context（畫面資訊）
+// - 後端：寫入 public.dict_example_reports
+// =========================
+// =========================
+// 回報問題 API（Example Report）
+// POST /api/dictionary/examples/report
+// - 前端於回報當下送：exampleId + reportType + context（畫面資訊）
+// - 後端：寫入 public.dict_example_reports
+// - DB schema (current): example_id / auth_user_id / report_type / reason / created_at
+// =========================
+router.post("/examples/report", async (req, res) => {
+  try {
+    const supabase = getSupabaseAdmin();
+    if (!supabase) {
+      return res.status(500).json({
+        ok: false,
+        error: "supabase_admin_not_configured",
+      });
+    }
+
+    const authUser = tryGetAuthUser(req);
+
+    // ✅ Auth required: 回報問題必須登入
+    if (!authUser || !authUser.id) {
+      return res.status(401).json({ ok: false, error: "unauthorized" });
+    }
+
+
+    const {
+      exampleId,
+      example_id,
+      reportType,
+      report_type,
+      note,
+      reportNote,
+      report_note,
+      reason,
+      context,
+      payload,
+      snapshot,
+    } = req.body || {};
+
+    const finalExampleId =
+      typeof exampleId === "number"
+        ? exampleId
+        : typeof example_id === "number"
+        ? example_id
+        : null;
+
+    const finalReportType =
+      typeof reportType === "string" && reportType.trim()
+        ? reportType.trim()
+        : typeof report_type === "string" && report_type.trim()
+        ? report_type.trim()
+        : "unknown";
+
+    const finalNote =
+      typeof note === "string"
+        ? note
+        : typeof reportNote === "string"
+        ? reportNote
+        : typeof report_note === "string"
+        ? report_note
+        : "";
+
+    if (!finalExampleId) {
+      return res.status(400).json({ ok: false, error: "missing_example_id" });
+    }
+
+    // ✅ 一律把「當下畫面資訊」收進 reason（JSON 字串），方便日後回放/除錯
+    // - 若前端已提供 reason（字串），就把它當作 baseReason.note
+    const nowIso = new Date().toISOString();
+    const reasonObj = {
+      note: typeof reason === "string" && reason.trim() ? reason.trim() : finalNote || "",
+      context: context || payload || null,
+      snapshot: snapshot || null,
+      requestMeta: {
+        receivedAt: nowIso,
+        userAgent: req.headers["user-agent"] || "",
+        referer: req.headers.referer || "",
+        origin: req.headers.origin || "",
+        ip: req.ip || "",
+      },
+    };
+
+    // DEPRECATED (kept for backward comparison; DO NOT USE)
+    // const insertRowLegacy = {
+    //   example_id: finalExampleId,
+    //   report_type: finalReportType,
+    //   report_note: finalNote,
+    //   context: { ...reasonObj },
+    // };
+
+    const insertRowAligned = {
+      example_id: finalExampleId,
+      report_type: finalReportType,
+      reason: JSON.stringify(reasonObj),
+    };
+
+    if (authUser && authUser.id) {
+      insertRowAligned.auth_user_id = authUser.id;
+    }
+
+    const { data, error } = await supabase
+      .from("dict_example_reports")
+      .insert(insertRowAligned)
+      .select("id")
+      .maybeSingle();
+
+    if (error) {
+      console.error("[dictionaryRoute] /examples/report insert error:", error);
+      return res.status(500).json({ ok: false, error: "db_insert_failed" });
+    }
+
+    return res.json({ ok: true, id: data ? data.id : null });
+  } catch (err) {
+    console.error("[dictionaryRoute] /examples/report error:", err);
+    return res.status(500).json({ ok: false, error: "report_failed" });
+  }
+});
+router.post("/reportIssue", async (req, res) => {
+  try {
+    const supabase = getSupabaseAdmin();
+    if (!supabase) {
+      return res.status(500).json({
+        ok: false,
+        error: "supabase_admin_not_configured",
+      });
+    }
+
+    const authUser = tryGetAuthUser(req);
+
+    // ✅ Auth required: 回報問題必須登入
+    if (!authUser || !authUser.id) {
+      return res.status(401).json({ ok: false, error: "unauthorized" });
+    }
+
+
+    const {
+      headword,
+      canonicalPos,
+      canonical_pos,
+      senseIndex,
+      sense_index,
+      reportIssueCategory,
+      issueCategory,
+      report_type,
+      reportType,
+      definition,
+      definition_de,
+      definition_de_translation,
+      snapshot,
+      context,
+      payload,
+    } = req.body || {};
+
+    const finalHeadword =
+      typeof headword === "string" && headword.trim() ? headword.trim() : "";
+
+    const finalCanonicalPos =
+      typeof canonicalPos === "string" && canonicalPos.trim()
+        ? canonicalPos.trim()
+        : typeof canonical_pos === "string" && canonical_pos.trim()
+        ? canonical_pos.trim()
+        : "";
+
+    const finalSenseIndex =
+      typeof senseIndex === "number"
+        ? senseIndex
+        : typeof sense_index === "number"
+        ? sense_index
+        : 0;
+
+    const finalCategory =
+      typeof reportIssueCategory === "string" && reportIssueCategory.trim()
+        ? reportIssueCategory.trim()
+        : typeof issueCategory === "string" && issueCategory.trim()
+        ? issueCategory.trim()
+        : typeof reportType === "string" && reportType.trim()
+        ? reportType.trim()
+        : typeof report_type === "string" && report_type.trim()
+        ? report_type.trim()
+        : "unknown";
+
+    if (!finalHeadword || !finalCanonicalPos) {
+      return res.status(400).json({
+        ok: false,
+        error: "missing_headword_or_pos",
+      });
+    }
+
+    // ✅ 1) 先標記 dict_entries.needs_refresh = true（如果你的 schema 有這個欄位）
+    // - 欄位不存在時 supabase 會回錯；這裡會轉成 warning，不讓整個回報失敗
+    let updateOk = false;
+    let updateWarning = null;
+
+    try {
+      const { error: updateErr } = await supabase
+        .from("dict_entries")
+        .update({ needs_refresh: true })
+        .eq("headword", finalHeadword)
+        .eq("canonical_pos", finalCanonicalPos);
+
+      if (updateErr) {
+        updateWarning = String(updateErr.message || updateErr.details || updateErr);
+      } else {
+        updateOk = true;
+      }
+    } catch (e) {
+      updateWarning = String(e && e.message ? e.message : e);
+    }
+
+    // ✅ 2) 盡力寫入 dict_entry_reports（若表還沒建，不阻塞）
+    // - reason：把當下畫面資訊塞進去（JSON 字串）
+    const nowIso = new Date().toISOString();
+    const reasonObj = {
+      category: finalCategory,
+      headword: finalHeadword,
+      canonicalPos: finalCanonicalPos,
+      senseIndex: finalSenseIndex,
+      snapshot: snapshot || null,
+      context: context || payload || null,
+      definition: typeof definition === "string" ? definition : "",
+      definition_de: typeof definition_de === "string" ? definition_de : "",
+      definition_de_translation:
+        typeof definition_de_translation === "string"
+          ? definition_de_translation
+          : "",
+      requestMeta: {
+        receivedAt: nowIso,
+        userAgent: req.headers["user-agent"] || "",
+        referer: req.headers.referer || "",
+        origin: req.headers.origin || "",
+        ip: req.ip || "",
+      },
+    };
+
+    let reportInserted = false;
+    let reportInsertWarning = null;
+
+    try {
+      const insertRow = {
+        headword: finalHeadword,
+        canonical_pos: finalCanonicalPos,
+        sense_index: finalSenseIndex,
+        report_issue_category: finalCategory,
+        note: JSON.stringify(reasonObj),
+      };
+
+      if (authUser && authUser.id) {
+        insertRow.auth_user_id = authUser.id;
+      }
+
+      const { error: insertErr } = await supabase
+        .from("dict_entry_reports")
+        .insert(insertRow);
+
+      if (insertErr) {
+        reportInsertWarning = String(insertErr.message || insertErr.details || insertErr);
+      } else {
+        reportInserted = true;
+      }
+    } catch (e) {
+      reportInsertWarning = String(e && e.message ? e.message : e);
+    }
+
+    return res.json({
+      ok: true,
+      updateOk,
+      reportInserted,
+      warning: updateWarning || reportInsertWarning || null,
+    });
+  } catch (err) {
+    console.error("[dictionaryRoute] /reportIssue error:", err);
+    return res.status(500).json({ ok: false, error: "report_issue_failed" });
+  }
+});
+
 
 module.exports = router;
 // backend/src/routes/dictionaryRoute.js

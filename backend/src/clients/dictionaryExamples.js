@@ -11,6 +11,7 @@
  * 異動紀錄
  * - 2026-01-05：Phase 2-1：加入 refs/usedRefs/missingRefs/notes schema 與 prompt 強制；補初始化狀態（Production 排查）；所有回傳向後相容且 usedRefs/missingRefs 保證存在
  * - 2026-01-05：Phase 2-2：新增 kind:"custom" 後驗檢查（case-insensitive includes）；以後驗結果覆蓋 custom refs 的 used/missing，非 custom 仍保留 LLM 回報
+ * - 2026-01-11：Phase 2-UX：強化「德文名詞大小寫」硬規則，避免 LLM 產生 hund 這類錯誤用法；新增後驗檢查 + 單次 retry（不改動 used/missing 邏輯）
  */
 
 const client = require("./groqClient");
@@ -123,6 +124,151 @@ function includesCI(haystack, needle) {
 }
 
 /**
+ * ✅ 2026/01/11：大小寫嚴格檢查小工具（避免 Hund → hund）
+ *
+ * 注意：
+ * - 這裡不是用於 used/missing 的命中邏輯（那段維持 Phase 2-2 不動）
+ * - 這裡只用來做「品質底線」：名詞大小寫不該錯
+ */
+
+/**
+ * 中文功能說明：escape 正規表達式特殊字元
+ */
+function escapeRegExp(input) {
+  return String(input || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * 中文功能說明：判斷是否是「單字」ref（不含空白）
+ */
+function isSingleTokenRefKey(refKey) {
+  return typeof refKey === "string" && refKey.trim() && !/\s/.test(refKey.trim());
+}
+
+/**
+ * 中文功能說明：判斷 refKey 是否「像名詞」：
+ * - 最保守 heuristic：單字 + 首字母是大寫（含德文 ÄÖÜ）
+ * - 不依賴 POS（因為此檔案目前拿不到 refs 的 POS）
+ */
+function isNounLikeRefKey(refKey) {
+  const k = String(refKey || "").trim();
+  if (!isSingleTokenRefKey(k)) return false;
+  // 德文名詞首字母大寫（A-ZÄÖÜ）
+  return /^[A-ZÄÖÜ]/.test(k);
+}
+
+/**
+ * 中文功能說明：case-sensitive word boundary match（避免 substring 誤判）
+ */
+function hasWordExactCase(sentence, word) {
+  try {
+    const s = String(sentence || "");
+    const w = String(word || "").trim();
+    if (!s || !w) return false;
+    const re = new RegExp(`\\b${escapeRegExp(w)}\\b`, "u");
+    return re.test(s);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 中文功能說明：是否出現「小寫版本」但未出現正確大小寫
+ * - 例：word=Hund, lower=hund
+ * - 若 sentence 包含 \bhund\b 且不包含 \bHund\b → true
+ */
+function hasLowercaseInsteadOfProper(sentence, properWord) {
+  try {
+    const s = String(sentence || "");
+    const w = String(properWord || "").trim();
+    if (!s || !w) return false;
+
+    const lower = w.toLowerCase();
+
+    // 若 proper 本身已是全小寫，沒意義
+    if (w === lower) return false;
+
+    const hasLower = hasWordExactCase(s, lower);
+    const hasProper = hasWordExactCase(s, w);
+
+    return hasLower && !hasProper;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 中文功能說明：找出「名詞型 refs」清單（僅單字、首字母大寫）
+ */
+function pickNounLikeSingleTokenRefs(refKeys) {
+  const list = Array.isArray(refKeys) ? refKeys : [];
+  return list
+    .map((k) => String(k || "").trim())
+    .filter(Boolean)
+    .filter((k) => isNounLikeRefKey(k));
+}
+
+/**
+ * 中文功能說明：檢查例句是否違反名詞大小寫底線
+ * - 目前規則：若 noun-like ref（例如 Hund）在句子中出現小寫版本（hund）但沒有正確版本 → 視為 violation
+ * - 若句子完全沒有出現該 ref（正確大小寫），這裡不把它當成大小寫錯（它會在 refs used/missing 另行處理）
+ */
+function validateNounCapitalizationForRefs({ sentence, refKeys }) {
+  const s = String(sentence || "");
+  const nounRefs = pickNounLikeSingleTokenRefs(refKeys);
+
+  const violations = [];
+
+  for (const proper of nounRefs) {
+    // only check "lowercase instead of proper" scenario
+    if (hasLowercaseInsteadOfProper(s, proper)) {
+      violations.push({
+        ref: proper,
+        found: proper.toLowerCase(),
+        expected: proper,
+      });
+    }
+  }
+
+  return {
+    ok: violations.length === 0,
+    violations,
+    nounRefs,
+  };
+}
+
+/**
+ * 中文功能說明：建構「名詞大小寫硬規則」提示片段
+ * - 這段會插入 prompt，讓 LLM 有明確約束
+ */
+function buildNounCapitalizationRuleText(refKeys) {
+  const nounRefs = pickNounLikeSingleTokenRefs(refKeys);
+
+  // 不想太冗長：只列出最多 10 個 noun refs
+  const display = nounRefs.slice(0, 10);
+  const bullet =
+    display.length > 0
+      ? display.map((k) => `- ${k}`).join("\n")
+      : "(keine)";
+
+  const extra =
+    nounRefs.length > 10
+      ? `\n(weitere ${nounRefs.length - 10} Nomen-Refs sind ebenfalls zu beachten)`
+      : "";
+
+  return (
+    "GERMAN ORTHOGRAPHY HARD RULES (MUST FOLLOW):\n" +
+    "- In German, ALL NOUNS MUST be capitalized.\n" +
+    "- If a ref is a noun-like single word (e.g., starts with a capital letter), you MUST use EXACTLY the same casing in the example.\n" +
+    "- NEVER output a lowercase noun form such as \"hund\" when the correct form is \"Hund\".\n" +
+    "- If unsure, rephrase the sentence but keep noun capitalization correct.\n" +
+    "\nNoun-like single-word refs (exact casing required):\n" +
+    bullet +
+    extra
+  );
+}
+
+/**
  * 中文功能說明（Phase 2-2）：只針對 kind:"custom" 做極簡後驗
  * - 規則：ref.key 若在任何 example 中大小寫不敏感包含 → used
  * - 否則 → missing
@@ -178,7 +324,9 @@ function applyPostCheckToRefs({
   });
 
   // 先把 LLM 的 used/missing 裡「custom keys」移除（避免 LLM 亂報污染）
-  const keptUsed = llmUsed.filter((k) => !customKeySet.has(String(k).toLowerCase()));
+  const keptUsed = llmUsed.filter(
+    (k) => !customKeySet.has(String(k).toLowerCase())
+  );
   const keptMissing = llmMissing.filter(
     (k) => !customKeySet.has(String(k).toLowerCase())
   );
@@ -189,7 +337,9 @@ function applyPostCheckToRefs({
   const customUsedSet = new Set(customUsed.map((k) => k.toLowerCase()));
   const mergedMissing = [
     ...keptMissing,
-    ...customMissing.filter((k) => !customUsedSet.has(String(k).toLowerCase())),
+    ...customMissing.filter(
+      (k) => !customUsedSet.has(String(k).toLowerCase())
+    ),
   ];
 
   // 去重（保序）
@@ -332,6 +482,9 @@ async function generateExamples(params = {}) {
 
   const optionsSummary = JSON.stringify(options || {}, null, 2);
 
+  // ✅ 2026/01/11：名詞大小寫硬規則片段（插入 prompt）
+  const nounCapitalizationRuleText = buildNounCapitalizationRuleText(refKeys);
+
   const systemPromptForExamples = `
 You are a German example sentence generator for a language learning app.
 
@@ -343,6 +496,8 @@ Your task:
 - If constraints are impossible or unnatural, IGNORE some of the constraints, but STILL return a natural example sentence. NEVER leave the examples empty.
 - Even if the caller provides the same word and senseIndex multiple times, you must imagine a DIFFERENT realistic situation each time and avoid repeating the same stock phrases (for example, do not always start with "Ich gehe ..." or "Ich besuche ...").
 - The target learner's explanation language is ${targetLangLabel}.
+
+${nounCapitalizationRuleText}
 
 PHASE 2 REF RULES (IMPORTANT):
 - You will receive a list of reference points ("refs").
@@ -409,8 +564,66 @@ Anforderungen:
 - Nutze ausschließlich die angegebene Wortbedeutung für senseIndex ${normSenseIndex} und ignoriere alle anderen.
 - Gib nur EINEN Satz zurück.
 - Du MUSST alle refs im Satz unterbringen (natürliches Deutsch; Flexion erlaubt).
+- Orthographie-Hard-Rule: Alle deutschen Nomen werden großgeschrieben. Wenn ein Ref ein Nomen ist (z.B. "Hund"), benutze exakt diese Groß-/Kleinschreibung. Schreibe NICHT "hund".
 - Am Ende: Gib NUR das JSON im beschriebenen Format zurück (inkl. usedRefs/missingRefs).
 `;
+
+  /**
+   * ✅ 2026/01/11：retry prompt（只用一次，避免無限 loop）
+   * - 目的：若模型產生 "hund" 但應為 "Hund"，要求修正並重新產生
+   */
+  function buildRetryUserPrompt({ basePrompt, violations, nounRefs }) {
+    const vList = Array.isArray(violations) ? violations : [];
+    const nounList = Array.isArray(nounRefs) ? nounRefs : [];
+
+    const vText =
+      vList.length > 0
+        ? vList
+            .slice(0, 8)
+            .map((v) => `- Found "${v.found}" but expected "${v.expected}"`)
+            .join("\n")
+        : "- (unknown)";
+
+    const nText =
+      nounList.length > 0
+        ? nounList.slice(0, 12).map((k) => `- ${k}`).join("\n")
+        : "(keine)";
+
+    return (
+      basePrompt +
+      "\n\n" +
+      "WICHTIG (RETRY): In der vorherigen Antwort war die Groß-/Kleinschreibung von Nomen falsch.\n" +
+      "Bitte erzeuge den Satz NEU und korrigiere die Orthographie.\n" +
+      "Regeln:\n" +
+      "- Alle deutschen Nomen werden großgeschrieben.\n" +
+      "- Für noun-like single-word refs muss die exakte Schreibweise verwendet werden (z.B. \"Hund\" nicht \"hund\").\n" +
+      "- Falls nötig, formuliere den Satz um, aber bleibe natürlich.\n" +
+      "\nNoun-like refs (exakte Schreibweise):\n" +
+      nText +
+      "\n\nVerstöße, die zu korrigieren sind:\n" +
+      vText +
+      "\n\nGib wieder NUR das JSON zurück."
+    );
+  }
+
+  /**
+   * ✅ 2026/01/11：統一呼叫 LLM（方便 retry）
+   * - 保留原 model/format 設定；retry 僅調低 temperature 以提高遵循度
+   */
+  async function callLLMForExamples({ systemPrompt, userPrompt, temperature }) {
+    return client.chat.completions.create({
+      model: "llama-3.3-70b-versatile",
+      temperature:
+        typeof temperature === "number" && Number.isFinite(temperature)
+          ? temperature
+          : 0.7, // default same as original
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+    });
+  }
 
   // 簡單 fallback：萬一 LLM 回傳空例句時使用
   function buildFallbackExample() {
@@ -450,25 +663,13 @@ Anforderungen:
     };
   }
 
-  try {
-    const response = await client.chat.completions.create({
-      model: "llama-3.3-70b-versatile",
-      temperature: 0.7, // 提高一點隨機性，讓每次句子差異更明顯
-      response_format: { type: "json_object" },
-      messages: [
-        { role: "system", content: systemPromptForExamples },
-        { role: "user", content: userPromptForExamples },
-      ],
-    });
-
-    const content = response.choices[0]?.message?.content;
-
-    if (process.env.DEBUG_LLM_DICT === "1") {
-      console.log("[dictionary] Raw LLM Result =", content);
-    }
-
+  /**
+   * ✅ 2026/01/11：把 LLM content parse + normalize 成統一結構
+   * - 目的：retry 時也能重用
+   */
+  function parseAndNormalizeLLMContent({ content, noteOnParseFail }) {
     if (!content) {
-      return buildFallbackResult("no_content");
+      return { ok: false, error: "no_content", result: null };
     }
 
     let parsed;
@@ -476,7 +677,11 @@ Anforderungen:
       parsed = JSON.parse(content);
     } catch (e) {
       console.error("[dictionary] JSON parse error in examples:", e);
-      return buildFallbackResult("json_parse_error");
+      return {
+        ok: false,
+        error: "json_parse_error",
+        result: buildFallbackResult(noteOnParseFail || "json_parse_error"),
+      };
     }
 
     const parsedWithRefs = ensureRefsFields(parsed);
@@ -538,7 +743,7 @@ Anforderungen:
       example: examples[0] || "",
     });
 
-    return {
+    const result = {
       word: parsedWithRefs.word || safeWord,
       baseForm: parsedWithRefs.baseForm || baseForm || safeWord,
       partOfSpeech: parsedWithRefs.partOfSpeech || partOfSpeech || "",
@@ -556,6 +761,150 @@ Anforderungen:
       missingRefs: postChecked.missingRefs,
       notes: parsedWithRefs.notes,
     };
+
+    return { ok: true, error: "", result };
+  }
+
+  /**
+   * ✅ 2026/01/11：名詞大小寫後驗檢查 + 單次 retry
+   * - 只處理「noun-like single-token refs」的錯誤（例如 Hund → hund）
+   * - 不更動 used/missing 的規則（那段維持 Phase 2-2）
+   */
+  function shouldRetryForNounCapitalization({ sentence, refKeys }) {
+    const check = validateNounCapitalizationForRefs({ sentence, refKeys });
+    return check;
+  }
+
+  try {
+    // =========================
+    // 1) First attempt
+    // =========================
+    const response = await callLLMForExamples({
+      systemPrompt: systemPromptForExamples,
+      userPrompt: userPromptForExamples,
+      temperature: 0.7,
+    });
+
+    const content = response.choices[0]?.message?.content;
+
+    if (process.env.DEBUG_LLM_DICT === "1") {
+      console.log("[dictionary] Raw LLM Result =", content);
+    }
+
+    // parse & normalize
+    const firstParsed = parseAndNormalizeLLMContent({
+      content,
+      noteOnParseFail: "json_parse_error",
+    });
+
+    if (!firstParsed.ok && firstParsed.result) {
+      // json parse fail or fallback already built
+      return firstParsed.result;
+    }
+
+    if (!firstParsed.ok) {
+      return buildFallbackResult(firstParsed.error || "no_content");
+    }
+
+    const firstResult = firstParsed.result;
+
+    // =========================
+    // 2) Post quality check: noun capitalization for noun-like refs
+    // =========================
+    const firstSentence =
+      Array.isArray(firstResult?.examples) && firstResult.examples.length > 0
+        ? String(firstResult.examples[0] || "")
+        : "";
+
+    const retryDecision = shouldRetryForNounCapitalization({
+      sentence: firstSentence,
+      refKeys,
+    });
+
+    debugRefsRuntime("noun_caps_check", {
+      ok: retryDecision.ok,
+      nounRefs: retryDecision.nounRefs,
+      violations: retryDecision.violations,
+      sentence: firstSentence,
+    });
+
+    // 若沒有 violations，直接回傳
+    if (retryDecision.ok) {
+      return firstResult;
+    }
+
+    // =========================
+    // 3) Retry once with stricter instruction (lower temperature)
+    // =========================
+    const retryUserPrompt = buildRetryUserPrompt({
+      basePrompt: userPromptForExamples,
+      violations: retryDecision.violations,
+      nounRefs: retryDecision.nounRefs,
+    });
+
+    const retryResp = await callLLMForExamples({
+      systemPrompt: systemPromptForExamples,
+      userPrompt: retryUserPrompt,
+      temperature: 0.2, // tighter adherence
+    });
+
+    const retryContent = retryResp.choices[0]?.message?.content;
+
+    if (process.env.DEBUG_LLM_DICT === "1") {
+      console.log("[dictionary] Raw LLM Retry Result =", retryContent);
+    }
+
+    const retryParsed = parseAndNormalizeLLMContent({
+      content: retryContent,
+      noteOnParseFail: "retry_json_parse_error",
+    });
+
+    if (!retryParsed.ok && retryParsed.result) {
+      // retry parse fail -> fallback already built
+      return retryParsed.result;
+    }
+
+    if (!retryParsed.ok) {
+      // retry got no content -> fallback
+      return buildFallbackResult("retry_no_content");
+    }
+
+    const retryResult = retryParsed.result;
+
+    // 最後再檢查一次；若還不 ok，仍回傳 retryResult（不再重試，避免 loop）
+    const retrySentence =
+      Array.isArray(retryResult?.examples) && retryResult.examples.length > 0
+        ? String(retryResult.examples[0] || "")
+        : "";
+
+    const retryDecision2 = shouldRetryForNounCapitalization({
+      sentence: retrySentence,
+      refKeys,
+    });
+
+    debugRefsRuntime("noun_caps_check_retry", {
+      ok: retryDecision2.ok,
+      nounRefs: retryDecision2.nounRefs,
+      violations: retryDecision2.violations,
+      sentence: retrySentence,
+    });
+
+    // 在 notes 留一點線索（不影響 UI 顯示邏輯；前端可選擇忽略 notes）
+    if (!retryDecision2.ok) {
+      // 不覆蓋原 notes，只在後面追加（避免破壞既有含義）
+      const prevNotes =
+        typeof retryResult.notes === "string" ? retryResult.notes : "";
+      const add =
+        "noun_caps_retry_failed: model still violates noun capitalization for some refs";
+      retryResult.notes = prevNotes ? `${prevNotes} | ${add}` : add;
+    } else {
+      const prevNotes =
+        typeof retryResult.notes === "string" ? retryResult.notes : "";
+      const add = "noun_caps_retry_ok";
+      retryResult.notes = prevNotes ? `${prevNotes} | ${add}` : add;
+    }
+
+    return retryResult;
   } catch (err) {
     console.error("[dictionary] Groq example error:", err.message);
     return buildFallbackResult("groq_error");

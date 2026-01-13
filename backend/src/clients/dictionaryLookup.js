@@ -22,6 +22,16 @@
  *   - 在 Groq 回傳 response.usage 後呼叫 logLLMUsage()
  *   - 可透過 options 傳入 userId/email/ip/endpoint/requestId（向下相容：沒傳也不影響查字）
  *
+ * - 2026-01-08：✅ Phase 2：DB-first HIT 時同時回填 dict_entry_props，並支援 dict_entries.needs_refresh
+ *   - dict_entries：讀 needs_refresh / quality_status / refresh meta
+ *   - 若 needs_refresh=true：視為 miss（允許走 LLM refresh）
+ *   - dict_entry_props：讀 noun/verb/prep + extra_props，並以「白名單」merge 回 parsedLike（避免污染結構）
+ *
+ * - 2026-01-09：✅ Phase 2-2：LLM 查詢完成後，落地寫入 dict_entries / dict_entry_props / dict_senses（DB-first 真正生效）
+ *   - dict_entries：needs_refresh=false、quality_status='ok'
+ *   - dict_senses：以 explainLang 覆蓋（同語言先刪再插入）
+ *   - dict_entry_props：noun/verb/prep 欄位 + extra_props（保留結構化資訊供 DB-first 還原）
+ *
  * 功能初始化狀態（Production 排查）（Step 3 補充）：
  * - DICT_LLM_POS_OPTIONS=1：要求 LLM 回傳 posOptions（預設 1）
  * - DEBUG_LLM_DICT_POS_OPTIONS=1：印出 posOptions 指令是否套用與回傳長度（預設 0）
@@ -45,6 +55,13 @@ const { systemPrompt, buildUserPrompt } = require('./dictionaryPrompts');
 
 // ✅ Step 2-3（本次新增）：LLM 真實 tokens 記帳（回寫 profiles 由 usageLogger 負責）
 const { logLLMUsage } = require('../utils/usageLogger');
+
+// ✅ Phase 2-2：DB 落地寫入（dict_entries / dict_entry_props / dict_senses）
+const {
+  upsertDictEntryAndGetIdCore,
+  upsertDictEntryPropsCore,
+  upsertDictSensesForLangCore,
+} = require('../io/dictEntryIO');
 
 /**
  * ✅ DB-first / Debug 開關（預設關）
@@ -199,9 +216,268 @@ function getSupabaseAdminClientSafe() {
 }
 
 /**
+ * ✅ Phase 2（本次新增）
+ * 中文功能說明：
+ * - 從 dict_entry_props.extra_props 安全地取出指定 key（避免 extra_props 非 object）
+ * - 只讀不寫，避免污染資料
+ */
+function safeGetExtraProp(extraProps, key) {
+  try {
+    if (!extraProps || typeof extraProps !== 'object') return undefined;
+    return extraProps[key];
+  } catch (e) {
+    return undefined;
+  }
+}
+
+/**
+ * ✅ Phase 2（本次新增）
+ * 中文功能說明：
+ * - 白名單 merge：把 extra_props 內的「已知欄位」補到 parsedLike（僅當 parsedLike 尚未有該 key）
+ * - 目的：讓 normalizeDictionaryResult 能吃到更多結構化資訊（不改 dictionaryUtils）
+ * - 設計原則：
+ *   - 不做推測、不做 mapping
+ *   - 不覆寫已存在欄位（避免 DB 資料錯誤覆蓋）
+ */
+function mergeExtraPropsWhitelistIntoParsedLike(parsedLike, extraProps) {
+  try {
+    if (!parsedLike || typeof parsedLike !== 'object') return parsedLike;
+    if (!extraProps || typeof extraProps !== 'object') return parsedLike;
+
+    // 白名單：依你目前 normalized/LLM schema 常見欄位
+    const whitelistKeys = [
+      'baseForm',
+      'gender',
+      'plural',
+      'verbSubtype',
+      'separable',
+      'reflexive',
+      'auxiliary',
+      'conjugation',
+      'valenz',
+      'tenses',
+      'comparison',
+      'notes',
+      'posOptions',
+      'recommendations',
+      'irregular',
+      'primaryPos',
+      'posKey',
+      'canonicalPos',
+    ];
+
+    for (const k of whitelistKeys) {
+      if (parsedLike[k] === undefined) {
+        const v = safeGetExtraProp(extraProps, k);
+        if (v !== undefined) {
+          parsedLike[k] = v;
+        }
+      }
+    }
+
+    return parsedLike;
+  } catch (e) {
+    return parsedLike;
+  }
+}
+
+/**
+ * ✅ Phase 2-2（本次新增）
+ * 中文功能說明：
+ * - 從 normalized 組出 entryProps（dict_entry_props）
+ * - 注意：不做詞性推測，只做「把已存在資料搬進 DB」
+ */
+function buildEntryPropsFromNormalized(normalized) {
+  try {
+    const pos = String(normalized?.partOfSpeech || normalized?.canonicalPos || '').trim();
+
+    const noun_gender = String(normalized?.gender || '').trim() || null;
+    const noun_plural = String(normalized?.plural || '').trim() || null;
+
+    const verb_separable = typeof normalized?.separable === 'boolean' ? normalized.separable : null;
+
+    // normalize 內 irregular 是 { enabled, type }；DB 欄位是 verb_irregular boolean
+    // - 若 enabled=true -> verb_irregular=true
+    // - 若 undefined -> null
+    let verb_irregular = null;
+    if (typeof normalized?.irregular?.enabled === 'boolean') {
+      verb_irregular = normalized.irregular.enabled;
+    }
+
+    const verb_reflexive = typeof normalized?.reflexive === 'boolean' ? normalized.reflexive : null;
+
+    const prep_case = String(normalized?.prep_case || '').trim() || null;
+
+    // extra_props：保留你 DB-first 還原要用的結構化欄位（白名單）
+    const extra_props = {
+      baseForm: normalized?.baseForm,
+      gender: normalized?.gender,
+      plural: normalized?.plural,
+      verbSubtype: normalized?.verbSubtype,
+      separable: normalized?.separable,
+      reflexive: normalized?.reflexive,
+      auxiliary: normalized?.auxiliary,
+      conjugation: normalized?.conjugation,
+      valenz: normalized?.valenz,
+      tenses: normalized?.tenses,
+      comparison: normalized?.comparison,
+      notes: normalized?.notes,
+      posOptions: normalized?.posOptions,
+      recommendations: normalized?.recommendations,
+      irregular: normalized?.irregular,
+      primaryPos: normalized?.primaryPos,
+      posKey: normalized?.posKey,
+      canonicalPos: normalized?.canonicalPos,
+      definition_de: normalized?.definition_de,
+      definition_de_translation: normalized?.definition_de_translation,
+      example: normalized?.example,
+      exampleTranslation: normalized?.exampleTranslation,
+      // 保留 trace：讓你 debug 好查（不影響 UI）
+      _requestedPosKey: normalized?._requestedPosKey,
+    };
+
+    // 小清理：移除 undefined（避免 extra_props 被塞滿 undefined）
+    Object.keys(extra_props).forEach((k) => {
+      if (extra_props[k] === undefined) delete extra_props[k];
+    });
+
+    // propsRow 不應該完全依賴 pos，但保持語意：只有在 Nomen/Verb/Präposition 時提供對應欄位
+    // - 不做推測：如果 normalized 有值就存，沒值就 null
+    const entryProps = {
+      noun_gender: pos === 'Nomen' ? noun_gender : noun_gender, // 不阻擋，避免資料丟失
+      noun_plural: pos === 'Nomen' ? noun_plural : noun_plural,
+      verb_separable: pos === 'Verb' ? verb_separable : verb_separable,
+      verb_irregular: pos === 'Verb' ? verb_irregular : verb_irregular,
+      verb_reflexive: pos === 'Verb' ? verb_reflexive : verb_reflexive,
+      prep_case: prep_case,
+      extra_props,
+    };
+
+    return entryProps;
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
+ * ✅ Phase 2-2（本次新增）
+ * 中文功能說明：
+ * - 從 normalized 組 senses（dict_senses）
+ * - 來源優先順序：
+ *   1) normalized.definitions（若是 array）
+ *   2) normalized.definition（若是 string）
+ *   3) 回傳空陣列（不寫 senses）
+ */
+function buildSensesFromNormalized(normalized) {
+  try {
+    const defs = normalized?.definitions;
+    if (Array.isArray(defs) && defs.length) {
+      return defs.map((x) => String(x || '').trim()).filter(Boolean);
+    }
+
+    const d = String(normalized?.definition || '').trim();
+    if (d) return [d];
+
+    return [];
+  } catch (e) {
+    return [];
+  }
+}
+
+/**
+ * ✅ Phase 2-2（本次新增）
+ * 中文功能說明：
+ * - LLM 查詢後落地寫入（用 dictEntryIO）
+ * - 注意：寫入失敗不應影響回應（避免查字整個報錯）
+ */
+async function persistDictionarySnapshotSafe({
+  word,
+  normalized,
+  explainLang,
+  targetPosKey,
+}) {
+  const sb = getSupabaseAdminClientSafe();
+
+  if (!sb) {
+    if (DEBUG_DICT_DB) {
+      // eslint-disable-next-line no-console
+      console.log('[dictionary][db] persist skip (no supabase client):', { word, explainLang });
+    }
+    return { skipped: true, reason: 'no_supabase_client' };
+  }
+
+  try {
+    const canonicalPos = String(normalized?.partOfSpeech || normalized?.canonicalPos || '').trim() || '';
+
+    // ✅ 若 canonicalPos 空字串，仍寫入會造成 unique key 行為不明確（你有 unique(headword, canonical_pos)）
+    // - 這裡保守：沒有 pos 就不落地，避免污染 DB
+    if (!canonicalPos) {
+      if (DEBUG_DICT_DB) {
+        // eslint-disable-next-line no-console
+        console.log('[dictionary][db] persist skip (missing canonicalPos):', { word, explainLang });
+      }
+      return { skipped: true, reason: 'missing_canonical_pos' };
+    }
+
+    // dict_entries：預設寫入 ok 狀態（你不做人工覆核；有問題用 needs_refresh=true 觸發 refresh）
+    const entryId = await upsertDictEntryAndGetIdCore({
+      supabaseAdmin: sb,
+      headword: word,
+      canonicalPos,
+      needs_refresh: false,
+      quality_status: 'ok',
+    });
+
+    // dict_entry_props
+    const entryProps = buildEntryPropsFromNormalized(normalized);
+    if (entryProps) {
+      await upsertDictEntryPropsCore({
+        supabaseAdmin: sb,
+        entryId,
+        entryProps,
+      });
+    }
+
+    // dict_senses（同語言覆蓋）
+    const senses = buildSensesFromNormalized(normalized);
+    if (senses.length) {
+      await upsertDictSensesForLangCore({
+        supabaseAdmin: sb,
+        entryId,
+        gloss_lang: explainLang,
+        senses,
+        source: 'llm',
+      });
+    }
+
+    if (DEBUG_DICT_DB) {
+      // eslint-disable-next-line no-console
+      console.log('[dictionary][db] persistDictionarySnapshot OK:', {
+        word,
+        explainLang,
+        canonicalPos,
+        entryId,
+        senses: senses.length,
+        hasProps: !!entryProps,
+        requestedPosKey: targetPosKey || null,
+      });
+    }
+
+    return { ok: true, entryId, senses: senses.length };
+  } catch (e) {
+    if (DEBUG_DICT_DB) {
+      // eslint-disable-next-line no-console
+      console.log('[dictionary][db] persistDictionarySnapshot FAILED (ignored):', e?.message || e);
+    }
+    return { ok: false, error: e?.message || String(e || '') };
+  }
+}
+
+/**
  * ✅ DB 查詢（命中回 normalized；miss 回 null）
  * - dict_entries：用 headword 找 entry_id（先不綁 pos，避免你目前 pos 格式/大小寫造成 miss）
  * - dict_senses：用 entry_id + gloss_lang 找 senses（依 sense_index 排序）
+ * - dict_entry_props：用 entry_id 找詞性屬性（noun/verb/prep + extra_props）
  *
  * 回傳格式：
  * - 會包成「類 LLM 結構」再丟 normalizeDictionaryResult，避免 UI 欄位不一致
@@ -226,7 +502,7 @@ async function tryLookupFromDB(word, explainLang) {
     // 1) entries
     const entryRes = await sb
       .from('dict_entries')
-      .select('id, headword, canonical_pos')
+      .select('id, headword, canonical_pos, needs_refresh, quality_status, refresh_reason, refresh_count, last_refreshed_at')
       .eq('headword', word)
       .limit(1);
 
@@ -243,6 +519,23 @@ async function tryLookupFromDB(word, explainLang) {
       if (DEBUG_DICT_DB) {
         // eslint-disable-next-line no-console
         console.log('[dictionary][db] tryLookupFromDB miss (no entry):', { word, explainLang });
+      }
+      return null;
+    }
+
+    // ✅ Phase 2：needs_refresh=true → 視為 miss（允許走 LLM refresh）
+    // - 注意：依你需求，只有回報才會打開 needs_refresh
+    if (entry?.needs_refresh) {
+      if (DEBUG_DICT_DB) {
+        // eslint-disable-next-line no-console
+        console.log('[dictionary][db] tryLookupFromDB miss (needs_refresh=true):', {
+          word,
+          explainLang,
+          entryId: entry.id,
+          quality_status: entry.quality_status || null,
+          refresh_reason: entry.refresh_reason || null,
+          refresh_count: typeof entry.refresh_count === 'number' ? entry.refresh_count : null,
+        });
       }
       return null;
     }
@@ -272,6 +565,31 @@ async function tryLookupFromDB(word, explainLang) {
       return null;
     }
 
+    // 2-1) props（optional but recommended）
+    // - 若 props 不存在：仍可命中（避免卡住），但 normalized 會較不完整
+    let propsRow = null;
+    try {
+      const propsRes = await sb
+        .from('dict_entry_props')
+        .select('noun_gender, noun_plural, verb_separable, verb_irregular, verb_reflexive, prep_case, extra_props')
+        .eq('entry_id', entry.id)
+        .limit(1);
+
+      if (propsRes?.error) {
+        if (DEBUG_DICT_DB) {
+          // eslint-disable-next-line no-console
+          console.log('[dictionary][db] props query error (ignored):', propsRes.error);
+        }
+      } else {
+        propsRow = Array.isArray(propsRes?.data) ? propsRes.data[0] : null;
+      }
+    } catch (e) {
+      if (DEBUG_DICT_DB) {
+        // eslint-disable-next-line no-console
+        console.log('[dictionary][db] props query exception (ignored):', e?.message || e);
+      }
+    }
+
     // 3) 組成類 LLM 結構交給 normalize（維持既有 UI 相容）
     const parsedLike = {
       word: entry.headword,
@@ -289,7 +607,64 @@ async function tryLookupFromDB(word, explainLang) {
       explainLang,
     };
 
+    // ✅ Phase 2：把 props 補進 parsedLike（不覆寫既有 key）
+    // - 固定欄位：noun_gender / noun_plural / verb_* / prep_case
+    // - 其餘走 extra_props 白名單 merge
+    if (propsRow && typeof propsRow === 'object') {
+      const eg = String(propsRow.noun_gender || '').trim();
+      const ep = String(propsRow.noun_plural || '').trim();
+      const pc = String(propsRow.prep_case || '').trim();
+
+      if (eg && parsedLike.gender === undefined) {
+        parsedLike.gender = eg;
+      }
+      if (ep && parsedLike.plural === undefined) {
+        parsedLike.plural = ep;
+      }
+
+      // verb flags（只在還沒定義時才補）
+      if (parsedLike.separable === undefined && typeof propsRow.verb_separable === 'boolean') {
+        parsedLike.separable = propsRow.verb_separable;
+      }
+      if (parsedLike.reflexive === undefined && typeof propsRow.verb_reflexive === 'boolean') {
+        parsedLike.reflexive = propsRow.verb_reflexive;
+      }
+
+      // verb_irregular（保持向下相容：若 normalize/上游用得到，這裡只是補 meta，不強行改 irregular 結構）
+      if (parsedLike.verb_irregular === undefined && typeof propsRow.verb_irregular === 'boolean') {
+        parsedLike.verb_irregular = propsRow.verb_irregular;
+      }
+
+      if (pc && parsedLike.prep_case === undefined) {
+        parsedLike.prep_case = pc;
+      }
+
+      // extra_props 白名單 merge
+      const extraProps = propsRow.extra_props && typeof propsRow.extra_props === 'object'
+        ? propsRow.extra_props
+        : null;
+
+      if (extraProps) {
+        mergeExtraPropsWhitelistIntoParsedLike(parsedLike, extraProps);
+      }
+    }
+
     const normalized = normalizeDictionaryResult(parsedLike, word);
+
+    // ✅ Phase 2：把 DB entry 的狀態 meta 附加回去（不影響 UI，方便 trace）
+    // - 注意：這不是覆核機制，只是讓上游可看到當前狀態
+    try {
+      normalized._dbEntryMeta = {
+        entryId: entry.id,
+        quality_status: entry.quality_status || 'ok',
+        needs_refresh: !!entry.needs_refresh,
+        refresh_reason: entry.refresh_reason || null,
+        refresh_count: typeof entry.refresh_count === 'number' ? entry.refresh_count : 0,
+        last_refreshed_at: entry.last_refreshed_at || null,
+      };
+    } catch (e) {
+      // ignore
+    }
 
     // 保底：避免 normalize 沒帶出 definition（讓 UI 不會空白）
     if (!normalized.definition && sensesRows[0]?.gloss) {
@@ -306,6 +681,7 @@ async function tryLookupFromDB(word, explainLang) {
         explainLang,
         entryId: entry.id,
         senses: sensesRows.length,
+        hasProps: !!propsRow,
       });
     }
 
@@ -788,6 +1164,15 @@ async function lookupWord(rawWord, explainLang = 'zh-TW', options = {}) {
         posOptions: Array.isArray(normalized.posOptions) ? normalized.posOptions : null,
       });
     }
+
+    // ✅ Phase 2-2：LLM 查詢後落地（失敗不影響回傳）
+    // - 目的：讓第二次查詢能 DB-first HIT，真正 skip LLM
+    await persistDictionarySnapshotSafe({
+      word,
+      normalized,
+      explainLang,
+      targetPosKey,
+    });
 
     return normalized;
   } catch (err) {

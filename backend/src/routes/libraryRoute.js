@@ -89,9 +89,6 @@ const INIT_STATUS = {
 
     // ✅ 新增（2025-12-30）：enrich dict_senses（Production 排查用）
     enrichDictSenses: { enabled: true, lastError: null, lastHitAt: null },
-
-    // ✅ 新增（2026-01-07）：Learning sets（下拉選單來源）
-    getLearningSets: { enabled: true, lastError: null, lastHitAt: null },
   },
 
   // ✅ Supabase admin 初始化狀態
@@ -278,6 +275,19 @@ function parseIsHiddenNullable(v) {
   return parseIsHidden(v);
 }
 
+
+/** ✅ 新增（2026-01-12）：解析 category_id（nullable） */
+function parseCategoryIdNullable(v) {
+  if (v == null) return null;
+
+  // 允許 string / number
+  const n = Number.parseInt(String(v ?? ""), 10);
+  if (!Number.isFinite(n)) return null;
+  // category_id 是 bigint，但前端/後端一律用安全整數範圍
+  if (n <= 0) return null;
+  return n;
+}
+
 /** ✅ 新增：安全裁切 gloss（避免超長） */
 function normalizeGloss(v) {
   if (v == null) return null;
@@ -442,6 +452,17 @@ function validateWordPayload(body) {
   // ✅ 支援多義字 + gloss（向後相容：沒帶就用預設）
   const senseIndex = parseSenseIndex(body?.senseIndex);
 
+  // ✅ 任務 3（2026-01-12）：可選分類（favorites category）
+  // - 前端可能傳 category_id / categoryId
+  // - 若未傳（或 categories 尚未載入），後端可用預設分類策略（我的最愛1）
+  const categoryId = parseCategoryIdNullable(body?.category_id ?? body?.categoryId);
+  const __hasRawCategoryId =
+    !(body?.category_id == null && body?.categoryId == null);
+  if (__hasRawCategoryId && categoryId == null) {
+    return { ok: false, error: "category_id is invalid" };
+  }
+
+
   // ✅ 本次：改成 alias 讀取（避免只寫入 lang、gloss 變 null）
   const rawGloss = pickGlossFromPayload(body, senseIndex);
   const rawGlossLang = pickGlossLangFromPayload(body);
@@ -485,6 +506,7 @@ function validateWordPayload(body) {
     senseIndex,
     headwordGloss,
     headwordGlossLang,
+    categoryId,
     entryProps,
     hasSenseStatusUpdate,
     familiarity,
@@ -544,6 +566,37 @@ function buildPagedQueryV2({ supabaseAdmin, userId, limit, cursor, includeStatus
 }
 
 /** 功能：轉換分頁 response */
+
+/**
+ * ✅ 新增（2026-01-12）：以 id 清單建立分頁查詢（給 favorites category 篩選用）
+ *
+ * 需求：GET /api/library?category_id=...
+ * - 仍維持 cursor 規則：created_at DESC, id DESC（雙鍵）
+ * - 仍維持 limit+1 拿 nextCursor
+ * - 權限：一定要鎖 user_id=userId（即使 links 已鎖，也要雙保險）
+ */
+function buildPagedQueryByIdsV2({ supabaseAdmin, userId, limit, cursor, includeStatusCols, userWordIds }) {
+  const baseSelect = "id, headword, canonical_pos, sense_index, headword_gloss, headword_gloss_lang, created_at";
+  const statusSelect = includeStatusCols ? baseSelect + ", familiarity, is_hidden" : baseSelect;
+
+  let q = supabaseAdmin
+    .from("user_words")
+    .select(statusSelect)
+    .eq("user_id", userId)
+    .in("id", Array.isArray(userWordIds) ? userWordIds : [])
+    .order("created_at", { ascending: false })
+    .order("id", { ascending: false })
+    .limit(limit + 1);
+
+  if (cursor) {
+    q = q.or(
+      [`created_at.lt.${cursor.createdAt}`, `and(created_at.eq.${cursor.createdAt},id.lt.${cursor.id})`].join(",")
+    );
+  }
+
+  return q;
+}
+
 function toResponsePayload({ rows, limit }) {
   const hasMore = rows.length > limit;
   const slice = hasMore ? rows.slice(0, limit) : rows;
@@ -872,13 +925,17 @@ async function upsertUserWord({
   // ✅ 分兩段寫入：先嘗試帶新欄位，失敗（例如欄位不存在）就回退舊行為
   if (shouldWriteSenseStatus()) {
     try {
-      const { error } = await supabaseAdmin
+      const { data, error } = await supabaseAdmin
         .from("user_words")
-        .upsert(statusPayload, { onConflict: "user_id,headword,canonical_pos,sense_index" });
+        .upsert(statusPayload, { onConflict: "user_id,headword,canonical_pos,sense_index" })
+        .select("id");
 
       if (error) throw error;
 
-      return;
+      const rowId =
+        Array.isArray(data) && data[0] && typeof data[0].id === "number" ? data[0].id : null;
+
+      return rowId;
     } catch (e) {
       // ✅ 回退前記錄（僅在 debug 模式開啟時印出）
       if (shouldDebugPayload()) {
@@ -897,11 +954,92 @@ async function upsertUserWord({
   }
 
   // ✅ 舊行為（永遠保留）
-  const { error } = await supabaseAdmin
+  const { data, error } = await supabaseAdmin
     .from("user_words")
-    .upsert(basePayload, { onConflict: "user_id,headword,canonical_pos,sense_index" });
+    .upsert(basePayload, { onConflict: "user_id,headword,canonical_pos,sense_index" })
+    .select("id");
 
   if (error) throw error;
+
+  const rowId =
+    Array.isArray(data) && data[0] && typeof data[0].id === "number" ? data[0].id : null;
+
+  return rowId;
+}
+
+
+
+/** =========================================================
+ * ✅ 任務 3（2026-01-12）：Favorites 分類 link 寫入
+ * ========================================================= */
+
+/** 功能：取得預設分類 id（我的最愛1） */
+async function getDefaultFavoriteCategoryId({ supabaseAdmin, userId }) {
+  const EP = "getDefaultFavoriteCategoryId";
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("user_word_categories")
+      .select("id, name, is_archived")
+      .eq("user_id", userId)
+      .eq("name", "我的最愛1")
+      .eq("is_archived", false)
+      .order("order_index", { ascending: true })
+      .order("id", { ascending: true })
+      .limit(1);
+
+    if (error) throw error;
+    const row = Array.isArray(data) && data[0] ? data[0] : null;
+    return row && typeof row.id === "number" ? row.id : null;
+  } catch (err) {
+    markEndpointError(EP, err);
+    return null; // fallback：允許收藏成功但不建立 link
+  }
+}
+
+/** 功能：驗證 category_id 必須屬於該 user 且未封存 */
+async function assertValidFavoriteCategoryId({ supabaseAdmin, userId, categoryId }) {
+  const EP = "assertValidFavoriteCategoryId";
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("user_word_categories")
+      .select("id, is_archived")
+      .eq("user_id", userId)
+      .eq("id", categoryId)
+      .limit(1);
+
+    if (error) throw error;
+    const row = Array.isArray(data) && data[0] ? data[0] : null;
+    if (!row || typeof row.id !== "number") return { ok: false, error: "category_id not found" };
+    if (row.is_archived === true) return { ok: false, error: "category_id is archived" };
+    return { ok: true };
+  } catch (err) {
+    markEndpointError(EP, err);
+    return { ok: false, error: "category_id validation failed" };
+  }
+}
+
+/** 功能：建立（或忽略）user_word_category_links */
+async function upsertUserWordCategoryLink({ supabaseAdmin, userId, categoryId, userWordId }) {
+  const EP = "upsertUserWordCategoryLink";
+  try {
+    if (!userId || !categoryId || !userWordId) return { ok: false, error: "missing args" };
+
+    const payload = {
+      user_id: userId,
+      category_id: categoryId,
+      user_word_id: userWordId,
+    };
+
+    const { error } = await supabaseAdmin.from("user_word_category_links").upsert(payload, {
+      onConflict: "user_id,category_id,user_word_id",
+    });
+
+    if (error) throw error;
+    return { ok: true };
+  } catch (err) {
+    markEndpointError(EP, err);
+    return { ok: false, error: String(err?.message || err) };
+  }
 }
 
 /**
@@ -990,6 +1128,46 @@ function markUnfavoriteAll({ headword, canonicalPos, deletedCount, err }) {
  * Routes
  * ========================= */
 
+
+/** GET /api/library/favorites/categories（Favorites 分類清單） */
+router.get("/favorites/categories", async (req, res, next) => {
+  const EP = "getFavoriteCategories";
+  try {
+    markEndpointHit(EP);
+
+    const supabaseAdmin = getSupabaseAdmin();
+    const userId = await requireUserId(req, supabaseAdmin);
+    if (!userId) return res.status(401).json({ error: "Unauthorized" });
+
+    // ✅ 只回登入使用者的分類（下拉選單用）
+    // - 依需求：is_archived=false
+    // - 排序：order_index ASC, name ASC
+    const { data, error } = await supabaseAdmin
+      .from("user_word_categories")
+      .select("id, name, order_index")
+      .eq("user_id", userId)
+      .eq("is_archived", false)
+      .order("order_index", { ascending: true })
+      .order("name", { ascending: true });
+
+    if (error) throw error;
+
+    return res.json({
+      ok: true,
+      categories: Array.isArray(data)
+        ? data.map((r) => ({
+            id: r.id,
+            name: r.name,
+            order_index: typeof r.order_index === "number" ? r.order_index : 0,
+          }))
+        : [],
+    });
+  } catch (err) {
+    markEndpointError(EP, err);
+    next(err);
+  }
+});
+
 /** GET /api/library（分頁） */
 router.get("/", async (req, res, next) => {
   const EP = "getPaged";
@@ -1004,6 +1182,66 @@ router.get("/", async (req, res, next) => {
 
     const rawCursor = decodeCursor(req.query.cursor);
     const cursor = isValidCursor(rawCursor) ? rawCursor : null;
+
+
+    // ✅ 新增（2026-01-12）：Favorites 分類篩選（category_id）
+    // - 不帶 category_id：行為與既有完全一致（回歸保證）
+    // - 帶 category_id：只回該分類底下的收藏 items（cursor 分頁仍可用）
+    const rawCategoryId = req.query.category_id;
+    const hasCategoryId =
+      rawCategoryId !== undefined && rawCategoryId !== null && String(rawCategoryId).trim() !== "";
+
+    if (hasCategoryId) {
+      const categoryId = Number.parseInt(String(rawCategoryId).trim(), 10);
+      if (!Number.isFinite(categoryId) || Number.isNaN(categoryId)) {
+        return res.status(400).json({ error: "Bad Request: category_id must be an integer" });
+      }
+
+      // ✅ 權限固定策略：回 200 + items:[]（前端最穩）
+      // - 即使使用者拿到別人的 category_id，也因為 links 查詢鎖 user_id=userId 而回空
+      const { data: links, error: linkErr } = await supabaseAdmin
+        .from("user_word_category_links")
+        .select("user_word_id")
+        .eq("user_id", userId)
+        .eq("category_id", categoryId);
+
+      if (linkErr) throw linkErr;
+
+      const userWordIds = Array.isArray(links) ? links.map((r) => r.user_word_id).filter(Boolean) : [];
+      if (!userWordIds.length) {
+        // ✅ 無任何關聯：直接回空（維持 response schema：items/nextCursor/limit）
+        return res.json({ items: [], nextCursor: null, limit });
+      }
+
+      // ✅ 仍維持既有「狀態欄位可選回傳」策略
+      const includeStatusCols = shouldSelectSenseStatus();
+
+      const { data: dCat, error: eCat } = await buildPagedQueryByIdsV2({
+        supabaseAdmin,
+        userId,
+        limit,
+        cursor,
+        includeStatusCols,
+        userWordIds,
+      });
+
+      if (eCat) throw eCat;
+
+      let payload = toResponsePayload({ rows: dCat || [], limit });
+
+      // ✅ 既有行為：以 dict_senses 覆蓋釋義（DB 權威）
+      if (shouldUseDictSenses()) {
+        const patchedItems = await enrichLibraryItemsByDictSenses({
+          supabaseAdmin,
+          items: payload.items,
+        });
+
+        payload = { ...payload, items: patchedItems };
+      }
+
+      return res.json(payload);
+    }
+
 
     // ✅ 既有行為：只讀 user_words（快照欄位）
     // ✅ 新增（2025-12-30）：可選讀取狀態欄位（若 DB 尚未 migration，會自動回退）
@@ -1121,7 +1359,7 @@ router.post("/", async (req, res, next) => {
       throw e;
     }
 
-    await upsertUserWord({
+    const userWordId = await upsertUserWord({
       supabaseAdmin,
       userId,
       headword: v.headword,
@@ -1139,7 +1377,36 @@ router.post("/", async (req, res, next) => {
       isStatusUpdateMode: v.hasSenseStatusUpdate === true,
     });
 
-    res.json({ ok: true, entry_id: entryId });
+    // ✅ 任務 3（2026-01-12）：收藏時可選分類（category_id）
+    // 策略：
+    // - 前端有帶 category_id：必須為該 user 的有效分類（未封存），否則 400
+    // - 前端未帶（或 categories 尚未載入）：後端嘗試用預設分類「我的最愛1」
+    // - 若找不到預設分類：允許收藏成功，但不建立 links（避免阻塞收藏）
+    let categoryIdUsed = null;
+
+    if (typeof v.categoryId === "number" && v.categoryId > 0) {
+      const vCat = await assertValidFavoriteCategoryId({
+        supabaseAdmin,
+        userId,
+        categoryId: v.categoryId,
+      });
+      if (!vCat.ok) return res.status(400).json({ error: vCat.error || "category_id is invalid" });
+      categoryIdUsed = v.categoryId;
+    } else {
+      categoryIdUsed = await getDefaultFavoriteCategoryId({ supabaseAdmin, userId });
+    }
+
+    if (typeof categoryIdUsed === "number" && categoryIdUsed > 0 && typeof userWordId === "number") {
+      // link 已存在時會被 upsert 忽略（符合 unique 行為）
+      await upsertUserWordCategoryLink({
+        supabaseAdmin,
+        userId,
+        categoryId: categoryIdUsed,
+        userWordId,
+      });
+    }
+
+    res.json({ ok: true, entry_id: entryId, user_word_id: userWordId || null, category_id: categoryIdUsed || null });
   } catch (err) {
     markEndpointError(EP, err);
     next(err);
@@ -1223,46 +1490,6 @@ router.get("/__init", (req, res) => {
 });
 
 /* =========================================================
- * Learning Sets (Step 1)
- * - GET /api/library/sets：回傳下拉選單來源（learning_sets）
- *
- * 設計：
- * - guest（無 token）也可呼叫，但只回傳 system sets（不含 favorites）
- * - logged-in 才回傳全部（含 favorites）
- * - 不影響既有 /api/library 行為
- * ========================================================= */
-
-/** GET /api/library/sets（下拉選單集合） */
-router.get("/sets", async (req, res, next) => {
-  const EP = "getLearningSets";
-  try {
-    markEndpointHit(EP);
-
-    const supabaseAdmin = getSupabaseAdmin();
-
-    // ✅ 保守：此 endpoint 允許 guest（但只回 system）
-    const userId = await requireUserId(req, supabaseAdmin);
-
-    let q = supabaseAdmin.from("learning_sets").select("set_code, title, type, order_index").order("order_index", {
-      ascending: true,
-    });
-
-    // ✅ guest：只回 system（不含 favorites）
-    if (!userId) {
-      q = q.eq("type", "system");
-    }
-
-    const { data, error } = await q;
-    if (error) throw error;
-
-    return res.json({ ok: true, sets: data || [] });
-  } catch (err) {
-    markEndpointError(EP, err);
-    next(err);
-  }
-});
-
-/* =========================================================
  * Module init
  * ========================================================= */
 (() => {
@@ -1275,6 +1502,359 @@ router.get("/sets", async (req, res, next) => {
     INIT_STATUS.lastError = String(e?.message || e);
   }
 })();
+
+/* =========================================================
+ * Learning Sets（學習本 / A1 單字庫）
+ * =========================================================
+ *
+ * 需求回顧（你目前的行為設計）：
+ * - 進入單字庫後，上方下拉選單可切換學習內容：我的收藏 / A1 單字 / A1 文法 / 常用語...
+ * - 除了「我的收藏」之外，system sets 內容不可增減，只能維持狀態（完成度）
+ * - 完成度先做：imported_count / total_count（代表：已點擊查詢過並寫回 DB 的數量）
+ * - 未查詢過：只顯示單字殼（headword）
+ * - 點擊 headword：走既有 dictionary lookup，再把結果寫回你的 DB（後續 step 再接）
+ *
+ * 本檔案在此階段負責：
+ * - 提供可用的 REST endpoints，讓前端可以用 UI 方式驗證
+ * - 不做假資料：DB 有資料才回傳
+ *
+ * 你已建立的 table（你貼的 SQL）：
+ * - learning_sets（已存在，且你已成功 GET /api/library/sets）
+ * - learning_set_items（已存在）
+ * - user_learning_set_item_state（你前面 3-1 已用 query 驗證 join 方向）
+ *
+ * 注意：
+ * - 這裡「不碰」你既有收藏 / 分頁 / user_words 的路由邏輯
+ * - 新增 routes 不影響既有 /api/library 行為（只增加）
+ * ========================================================= */
+
+/** ✅ 新增：允許 guest 取得 userId（無登入回 null，不回 401） */
+async function getUserIdOrNull(req, supabaseAdmin) {
+  try {
+    const authHeader = req.headers.authorization || "";
+    const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
+    if (!token) return null;
+
+    const { data, error } = await supabaseAdmin.auth.getUser(token);
+    if (error) return null;
+    return data?.user?.id || null;
+  } catch {
+    return null;
+  }
+}
+
+/** ✅ 新增：保守抓 set（guest 只能看到 system） */
+async function safeGetLearningSetByCode({ supabaseAdmin, userId, setCode }) {
+  try {
+    const code = String(setCode || "").trim();
+    if (!code) return null;
+
+    let q = supabaseAdmin
+      .from("learning_sets")
+      .select("id, set_code, title, type, order_index")
+      .eq("set_code", code);
+
+    if (!userId) q = q.eq("type", "system");
+
+    const { data, error } = await q.limit(1);
+    if (error) throw error;
+
+    return Array.isArray(data) && data.length ? data[0] : null;
+  } catch (e) {
+    if (shouldDebugPayload()) {
+      console.log(
+        "[libraryRoute][safeGetLearningSetByCode] fallback null",
+        JSON.stringify({ setCode: safePreview(setCode), err: String(e?.message || e) })
+      );
+    }
+    return null;
+  }
+}
+
+/** ✅ 新增：保守抓 items（依你 learning_set_items 的 schema：set_id FK） */
+async function safeGetLearningSetItemsBySetId({ supabaseAdmin, setId }) {
+  try {
+    if (!setId) return [];
+
+    const { data, error } = await supabaseAdmin
+      .from("learning_set_items")
+      .select("id, set_id, item_type, item_ref, order_index, created_at")
+      .eq("set_id", setId)
+      .order("order_index", { ascending: true })
+      .order("id", { ascending: true });
+
+    if (error) throw error;
+    return Array.isArray(data) ? data : [];
+  } catch (e) {
+    if (shouldDebugPayload()) {
+      console.log(
+        "[libraryRoute][safeGetLearningSetItemsBySetId] fallback empty",
+        JSON.stringify({ setId: safePreview(setId), err: String(e?.message || e) })
+      );
+    }
+    return [];
+  }
+}
+
+/** ✅ 新增：完成度 summary（先做 imported_count / total_count；familiar_count 先保留 0） */
+async function safeGetLearningSetSummaryBySetItems({ supabaseAdmin, userId, setItems }) {
+  const total_count = Array.isArray(setItems) ? setItems.length : 0;
+
+  // guest：無法有 imported 狀態
+  if (!userId) return { familiar_count: 0, imported_count: 0, seen_count: 0, total_count };
+
+  if (!Array.isArray(setItems) || setItems.length === 0)
+    return { familiar_count: 0, imported_count: 0, seen_count: 0, total_count };
+
+  try {
+    const itemIds = setItems.map((x) => x?.id).filter((x) => x !== null && x !== undefined);
+    if (!itemIds.length) return { familiar_count: 0, imported_count: 0, seen_count: 0, total_count };
+
+    const { data, error } = await supabaseAdmin
+      .from("user_learning_set_item_state")
+      .select("id")
+      .eq("user_id", userId)
+      .in("set_item_id", itemIds)
+      .eq("is_imported", true);
+
+    if (error) throw error;
+
+    const imported_count = Array.isArray(data) ? data.length : 0;
+
+    // ✅ 2026-01-11：加入 seen_count / familiar_count（以 user_learning_progress 為權威）
+    // - 目的：讓 system sets（A1 單字等）可以用「點過 / 熟悉」去做最小完成度閉環
+    // - 注意：此階段不依賴 dict join，不會改變收藏（favorites）行為
+    let seen_count = 0;
+    let familiar_count = 0;
+    try {
+      const itemRefs = setItems.map((x) => String(x?.item_ref || "").trim()).filter(Boolean);
+      const itemTypes = setItems.map((x) => String(x?.item_type || "").trim()).filter(Boolean);
+
+      // 只要有一種 item_type 就用 eq；多種才用 in（避免 supabase in 參數太長）
+      const uniqueTypes = Array.from(new Set(itemTypes));
+      const uniqueRefs = Array.from(new Set(itemRefs));
+
+      if (uniqueRefs.length) {
+        let q2 = supabaseAdmin
+          .from("user_learning_progress")
+          .select("item_type, item_ref, familiar")
+          .eq("auth_user_id", userId)
+          .in("item_ref", uniqueRefs);
+
+        if (uniqueTypes.length === 1) q2 = q2.eq("item_type", uniqueTypes[0]);
+        if (uniqueTypes.length > 1) q2 = q2.in("item_type", uniqueTypes);
+
+        const { data: pData, error: pErr } = await q2;
+        if (pErr) throw pErr;
+
+        if (Array.isArray(pData)) {
+          seen_count = pData.length;
+          familiar_count = pData.filter((r) => !!r?.familiar).length;
+        }
+      }
+    } catch (e2) {
+      // fallback: seen/familiar = 0
+      if (shouldDebugPayload()) {
+        console.log(
+          "[libraryRoute][safeGetLearningSetSummaryBySetItems] seen/familiar fallback",
+          JSON.stringify({ err: String(e2?.message || e2) })
+        );
+      }
+    }
+
+    return { familiar_count, imported_count, seen_count, total_count };
+  } catch (e) {
+    if (shouldDebugPayload()) {
+      console.log(
+        "[libraryRoute][safeGetLearningSetSummaryBySetItems] fallback imported=0",
+        JSON.stringify({ err: String(e?.message || e) })
+      );
+    }
+    return { familiar_count: 0, imported_count: 0, seen_count: 0, total_count };
+  }
+}
+
+/** ✅ 2026-01-11：補上「點過 / 熟悉」狀態 map（供 GET /sets/:setCode/items 使用）
+ * - 以 user_learning_progress 為權威：
+ *   - is_seen = 該 (item_type,item_ref) 有 row
+ *   - familiar = 該 row.familiar
+ */
+async function safeGetUserLearningProgressMapForSetItems({ supabaseAdmin, userId, setItems }) {
+  // guest：一律空 map
+  if (!userId) return new Map();
+  if (!Array.isArray(setItems) || setItems.length === 0) return new Map();
+
+  try {
+    const itemRefs = setItems.map((x) => String(x?.item_ref || "").trim()).filter(Boolean);
+    const itemTypes = setItems.map((x) => String(x?.item_type || "").trim()).filter(Boolean);
+    const uniqueRefs = Array.from(new Set(itemRefs));
+    const uniqueTypes = Array.from(new Set(itemTypes));
+    if (!uniqueRefs.length) return new Map();
+
+    let q = supabaseAdmin
+      .from("user_learning_progress")
+      .select("item_type, item_ref, familiar")
+      .eq("auth_user_id", userId)
+      .in("item_ref", uniqueRefs);
+
+    if (uniqueTypes.length === 1) q = q.eq("item_type", uniqueTypes[0]);
+    if (uniqueTypes.length > 1) q = q.in("item_type", uniqueTypes);
+
+    const { data, error } = await q;
+    if (error) throw error;
+
+    const m = new Map();
+    if (Array.isArray(data)) {
+      for (const r of data) {
+        const k = `${String(r?.item_type || "").trim()}::${String(r?.item_ref || "").trim()}`;
+        if (!k || k === "::") continue;
+        m.set(k, { familiar: !!r?.familiar });
+      }
+    }
+    return m;
+  } catch (e) {
+    if (shouldDebugPayload()) {
+      console.log(
+        "[libraryRoute][safeGetUserLearningProgressMapForSetItems] fallback empty",
+        JSON.stringify({ err: String(e?.message || e) })
+      );
+    }
+    return new Map();
+  }
+}
+
+/* ---------------------------------------------------------
+ * Routes: Learning Sets
+ * --------------------------------------------------------- */
+
+/**
+ * GET /api/library/sets
+ * - guest：只回 system sets
+ * - logged-in：回 system + user（若你有 user sets）
+ *
+ * ✅ UI 驗證方式：
+ * - 進入單字庫頁 → dropdown 載入這個 endpoint
+ * - guest 狀態下也應該看得到 A1 單字/A1 文法/常用語（但無完成度）
+ */
+router.get("/sets", async (req, res, next) => {
+  const EP = "getLearningSets";
+  try {
+    markEndpointHit(EP);
+
+    const supabaseAdmin = getSupabaseAdmin();
+    const userId = await getUserIdOrNull(req, supabaseAdmin);
+
+    let q = supabaseAdmin
+      .from("learning_sets")
+      .select("set_code, title, type, order_index")
+      .order("order_index", { ascending: true })
+      .order("set_code", { ascending: true });
+
+    if (!userId) q = q.eq("type", "system");
+
+    const { data, error } = await q;
+    if (error) throw error;
+
+    return res.json({ ok: true, sets: Array.isArray(data) ? data : [] });
+  } catch (err) {
+    markEndpointError(EP, err);
+    next(err);
+  }
+});
+
+/**
+ * GET /api/library/sets/:setCode/items
+ * - 回「單字殼」清單（item_ref），不含 dict 詳細資料（符合你「未查詢只顯示單字」的想法）
+ */
+router.get("/sets/:setCode/items", async (req, res, next) => {
+  const EP = "getLearningSetItems";
+  try {
+    markEndpointHit(EP);
+
+    const supabaseAdmin = getSupabaseAdmin();
+    const userId = await getUserIdOrNull(req, supabaseAdmin);
+
+    const setCode = String(req.params?.setCode || "").trim();
+    if (!setCode) return res.status(400).json({ error: "setCode is required" });
+
+    const set = await safeGetLearningSetByCode({ supabaseAdmin, userId, setCode });
+    if (!set) return res.status(404).json({ error: "set not found" });
+
+    const rawItems = await safeGetLearningSetItemsBySetId({ supabaseAdmin, setId: set.id });
+
+    // ✅ 2026-01-11：補上 user 的「點過/熟悉」狀態（不做 dict join）
+    // - 目的：UI 可以用 is_seen / familiar 做最小閉環（點殼 → analyze → reload items → 出現狀態）
+    // - guest：map 為空，所有 item 預設 is_seen=false / familiar=false
+    const progressMap = await safeGetUserLearningProgressMapForSetItems({
+      supabaseAdmin,
+      userId,
+      setItems: rawItems,
+    });
+
+    const items = rawItems.map((r) => {
+      const k = `${String(r?.item_type || "").trim()}::${String(r?.item_ref || "").trim()}`;
+      const p = progressMap.get(k) || null;
+      const is_seen = !!p;
+      const familiar = !!p?.familiar;
+
+      return {
+        id: r.id,
+        item_type: r.item_type,
+        item_ref: r.item_ref,
+        order_index: typeof r.order_index === "number" ? r.order_index : 0,
+
+        // ✅ alias：A1 單字庫前端可直接用 headword
+        headword: r.item_type === "word" ? r.item_ref : null,
+
+        // ✅ user 狀態（最小閉環）
+        is_seen,
+        familiar,
+      };
+    });
+
+    return res.json({
+      ok: true,
+      set: { set_code: set.set_code, title: set.title, type: set.type, order_index: set.order_index },
+      items,
+    });
+  } catch (err) {
+    markEndpointError(EP, err);
+    next(err);
+  }
+});
+
+/**
+ * GET /api/library/sets/:setCode/summary
+ * - 完成度（先做 imported_count/total_count）
+ * - guest：imported_count=0
+ */
+router.get("/sets/:setCode/summary", async (req, res, next) => {
+  const EP = "getLearningSetSummary";
+  try {
+    markEndpointHit(EP);
+
+    const supabaseAdmin = getSupabaseAdmin();
+    const userId = await getUserIdOrNull(req, supabaseAdmin);
+
+    const setCode = String(req.params?.setCode || "").trim();
+    if (!setCode) return res.status(400).json({ error: "setCode is required" });
+
+    const set = await safeGetLearningSetByCode({ supabaseAdmin, userId, setCode });
+    if (!set) return res.status(404).json({ error: "set not found" });
+
+    const rawItems = await safeGetLearningSetItemsBySetId({ supabaseAdmin, setId: set.id });
+    const summary = await safeGetLearningSetSummaryBySetItems({ supabaseAdmin, userId, setItems: rawItems });
+
+    return res.json({
+      ok: true,
+      set: { set_code: set.set_code, title: set.title, type: set.type, order_index: set.order_index },
+      summary,
+    });
+  } catch (err) {
+    markEndpointError(EP, err);
+    next(err);
+  }
+});
 
 module.exports = router;
 

@@ -10,6 +10,8 @@
 // - 2026-01-04：新增 Adjektiv 多國字串 adjektivCard（嚴格多國模式；提供 nounPlaceholder；避免元件內寫死 Mann / 特定語言 fallback）
 // - 2026-01-05：新增 AI 免責聲明多國字串 aiDisclaimerLines（ResultPanel Raw JSON 上方提示）
 // - 2026-01-06：補齊 WordExampleBlock 多國字串：wordCard.exampleBlock（multi-ref / refs UI）
+// - 2026-01-09：新增 WordCard 問題回報（Report issue）多國字串：wordCard.reportIssue*（UI 入口與小視窗按鈕/標題）
+// - 2026-01-12：補齊 WordDefinitionBlock 多國字串：wordCard.definitionDeLabel / definitionDeTtsTitle / senseFallbackPrefix（hover/標題/義項 fallback）
 // -----------------------------------------------------------
 
 // =====================================================
@@ -131,6 +133,10 @@ const uiText = {
         multiRefLabel: "多重參考",
         refPlaceholder: "新增參考（名詞/動詞/文法）...",
         addRefBtn: "加入",
+        addRefValidating: "檢核中…",
+        confirmBtnLabel: "確認",
+        confirmBtnTitle: "確認",
+        confirmBtnAriaLabel: "確認",
         refsDirtyHint: "參考已變更，按重新產生才會套用",
         multiRefHint: "使用多個參考點產生例句",
         refInvalidHint: "不合理的參考（例如：xxx / ... / …），已阻擋加入",
@@ -142,6 +148,24 @@ const uiText = {
       // 連續對話（Conversation）
       conversationTitle: "連續對話",
       conversationCloseLabel: "關閉",
+
+      // ✅ 2026-01-09：WordCard 問題回報（NEW）
+      reportIssueLabel: "問題回報",
+      reportIssueTitle: "問題回報",
+      reportIssueCategoryLabel: "分類",
+      reportIssueCloseLabel: "關閉",
+      reportIssueCancelLabel: "取消",
+      reportIssueSubmitLabel: "送出",
+      reportIssueHint: "回報此單字資料問題",
+      reportIssueCatDefinitionWrong: "釋義不對 / 不自然",
+      reportIssueCatPosWrong: "詞性判斷有誤",
+      reportIssueCatFormsWrong: "變位 / 性別 / 複數 等屬性有誤",
+      reportIssueCatOther: "其他",
+
+      // ✅ 2026-01-12：WordDefinitionBlock（Definition (DE) 行尾端 / hover / fallback）
+      definitionDeLabel: "德語釋義",
+      definitionDeTtsTitle: "播放德語釋義",
+      senseFallbackPrefix: "義項 ",
 
       posLocalNameMap: {
         Nomen: "名詞",
@@ -287,7 +311,30 @@ const uiText = {
         glossEmpty: "—",
         // ✅ 新增
         headwordButtonTitle: "點此回到查詢頁複習",
-      },
+
+        // ✅ Favorites categories dropdown（新增：收藏分類下拉）
+        favoriteCategoryLabel: "分類",
+        favoriteCategoryLoading: "分類載入中…",
+        favoriteCategoryEmpty: "尚無分類",
+        favoriteCategoryAll: "全部",
+
+      
+
+// ✅ Alias keys (for backward compatibility with WordLibraryPanel.jsx; do not delete)
+setSelectLabel: "學習本",
+setSelectTitle: "選擇要學習的內容",
+setSelectAria: "學習本選單",
+setFavoritesLabel: "我的收藏",
+setNotReadyLine1: "此學習本內容尚未導入",
+setNotReadyLine2: "目前僅顯示選單，稍後會加入完成度與內容",
+testDisabledTitle: "尚未導入測驗功能",
+
+        // ✅ Learning set titles (NEW)
+        setTitleA1Vocab: "A1 單字",
+        setTitleA1Grammar: "A1 文法",
+        setTitleCommonPhrases: "常用語",
+        setTitleTest: "測驗",
+},
     },
   },
 
@@ -385,6 +432,10 @@ const uiText = {
         multiRefLabel: "Multi-ref",
         refPlaceholder: "Add reference (noun/verb/grammar)...",
         addRefBtn: "Add",
+        addRefValidating: "檢核中…",
+        confirmBtnLabel: "Confirm",
+        confirmBtnTitle: "Confirm",
+        confirmBtnAriaLabel: "Confirm",
         refsDirtyHint: "Refs changed — refresh to regenerate",
         multiRefHint: "Use multiple refs for examples",
         refInvalidHint: "Invalid reference (e.g., 'xxx' / '...' / '…').",
@@ -395,6 +446,19 @@ const uiText = {
 
       conversationTitle: "Conversation",
       conversationCloseLabel: "Close",
+
+      // ✅ 2026-01-09：WordCard issue report (NEW)
+      reportIssueLabel: "Report issue",
+      reportIssueTitle: "Report an issue",
+      reportIssueCategoryLabel: "Category",
+      reportIssueCloseLabel: "Close",
+      reportIssueCancelLabel: "Cancel",
+      reportIssueSubmitLabel: "Submit",
+      reportIssueHint: "Report an issue with this entry",
+      reportIssueCatDefinitionWrong: "Definition is wrong / unnatural",
+      reportIssueCatPosWrong: "Part of speech is wrong",
+      reportIssueCatFormsWrong: "Forms / gender / plural etc. are wrong",
+      reportIssueCatOther: "Other",
 
       posLocalNameMap: {
         Nomen: "Noun",
@@ -537,7 +601,30 @@ const uiText = {
         glossEmpty: "—",
         // ✅ 新增
         headwordButtonTitle: "Click to review in search",
-      },
+
+        // ✅ Favorites categories dropdown（NEW）
+        favoriteCategoryLabel: "Category",
+        favoriteCategoryLoading: "Loading categories…",
+        favoriteCategoryEmpty: "No categories",
+        favoriteCategoryAll: "All",
+
+      
+
+// ✅ Alias keys (for backward compatibility with WordLibraryPanel.jsx; do not delete)
+setSelectLabel: "Learning set",
+setSelectTitle: "Select what to study",
+setSelectAria: "Learning set menu",
+setFavoritesLabel: "My Favorites",
+setNotReadyLine1: "This learning set isn’t available yet.",
+setNotReadyLine2: "Only the menu is available for now; content and progress will be added later.",
+testDisabledTitle: "Test is not available yet.",
+
+        // ✅ Learning set titles (NEW)
+        setTitleA1Vocab: "A1 Vocabulary",
+        setTitleA1Grammar: "A1 Grammar",
+        setTitleCommonPhrases: "Common Phrases",
+        setTitleTest: "Test",
+},
     },
   },
 
@@ -635,6 +722,10 @@ const uiText = {
         multiRefLabel: "多重参考",
         refPlaceholder: "新增参考（名词/动词/文法）...",
         addRefBtn: "加入",
+        addRefValidating: "檢核中…",
+        confirmBtnLabel: "确认",
+        confirmBtnTitle: "确认",
+        confirmBtnAriaLabel: "确认",
         refsDirtyHint: "参考已变更，按重新生成才会套用",
         multiRefHint: "使用多个参考点生成例句",
         refInvalidHint: "不合理的参考（例如：xxx / ... / …），已阻挡加入",
@@ -645,6 +736,24 @@ const uiText = {
 
       conversationTitle: "对话",
       conversationCloseLabel: "关闭",
+
+      // ✅ 2026-01-09：WordCard 问题反馈（NEW）
+      reportIssueLabel: "问题反馈",
+      reportIssueTitle: "问题反馈",
+      reportIssueCategoryLabel: "分类",
+      reportIssueCloseLabel: "关闭",
+      reportIssueCancelLabel: "取消",
+      reportIssueSubmitLabel: "提交",
+      reportIssueHint: "反馈此词条数据问题",
+      reportIssueCatDefinitionWrong: "释义不对 / 不自然",
+      reportIssueCatPosWrong: "词性判断有误",
+      reportIssueCatFormsWrong: "变位 / 性别 / 复数 等属性有误",
+      reportIssueCatOther: "其他",
+
+      // ✅ 2026-01-12：WordDefinitionBlock（Definition (DE) 行尾端 / hover / fallback）
+      definitionDeLabel: "德语释义",
+      definitionDeTtsTitle: "播放德语释义",
+      senseFallbackPrefix: "义项 ",
 
       posLocalNameMap: {
         Nomen: "名词",
@@ -785,7 +894,30 @@ const uiText = {
         glossEmpty: "—",
         // ✅ 新增
         headwordButtonTitle: "点击返回查询页复习",
-      },
+
+        // ✅ 收藏分类下拉（新增）
+        favoriteCategoryLabel: "分类",
+        favoriteCategoryLoading: "分类加载中…",
+        favoriteCategoryEmpty: "暂无分类",
+        favoriteCategoryAll: "全部",
+
+      
+
+// ✅ Alias keys (for backward compatibility with WordLibraryPanel.jsx; do not delete)
+setSelectLabel: "学习本",
+setSelectTitle: "选择要学习的内容",
+setSelectAria: "学习本菜单",
+setFavoritesLabel: "我的收藏",
+setNotReadyLine1: "此学习本内容尚未导入",
+setNotReadyLine2: "目前仅显示菜单，稍后会加入完成度与内容",
+testDisabledTitle: "尚未导入测验功能",
+
+        // ✅ 学习本标题（新增）
+        setTitleA1Vocab: "A1 单词",
+        setTitleA1Grammar: "A1 语法",
+        setTitleCommonPhrases: "常用语",
+        setTitleTest: "测验",
+},
     },
   },
 
@@ -883,16 +1015,34 @@ const uiText = {
         multiRefLabel: "Multi-ref",
         refPlaceholder: "Referenz hinzufügen (Nomen/Verb/Grammatik)...",
         addRefBtn: "Hinzufügen",
+        addRefValidating: "檢核中…",
+        confirmBtnLabel: "Bestätigen",
+        confirmBtnTitle: "Bestätigen",
+        confirmBtnAriaLabel: "Bestätigen",
         refsDirtyHint: "Referenzen geändert — bitte neu erzeugen",
         multiRefHint: "Mehrere Referenzen für Beispiele nutzen",
         refInvalidHint: "Ungültige Referenz (z.B. 'xxx' / '...' / '…').",
         refStatusUsed: "verwendet",
         refStatusMissing: "fehlt",
-        missingRefsHint: "Einige Referenzen wurden nicht verwendet. Bitte neu erzeugen.",
+        missingRefsHint:
+          "Einige Referenzen wurden nicht verwendet. Bitte neu erzeugen.",
       },
 
       conversationTitle: "Konversation",
       conversationCloseLabel: "Schließen",
+
+      // ✅ 2026-01-09：WordCard Problem melden (NEW)
+      reportIssueLabel: "Problem melden",
+      reportIssueTitle: "Problem melden",
+      reportIssueCategoryLabel: "Kategorie",
+      reportIssueCloseLabel: "Schließen",
+      reportIssueCancelLabel: "Abbrechen",
+      reportIssueSubmitLabel: "Senden",
+      reportIssueHint: "Problem bei diesem Eintrag melden",
+      reportIssueCatDefinitionWrong: "Bedeutung/Übersetzung falsch oder unnatürlich",
+      reportIssueCatPosWrong: "Wortart falsch",
+      reportIssueCatFormsWrong: "Formen/Genus/Plural usw. falsch",
+      reportIssueCatOther: "Sonstiges",
 
       posLocalNameMap: {
         Nomen: "Nomen",
@@ -1035,7 +1185,30 @@ const uiText = {
         glossEmpty: "—",
         // ✅ 新增
         headwordButtonTitle: "Klicken, um im Suchmodus zu üben",
-      },
+
+        // ✅ Favoriten-Kategorien Dropdown（NEU）
+        favoriteCategoryLabel: "Kategorie",
+        favoriteCategoryLoading: "Kategorien werden geladen…",
+        favoriteCategoryEmpty: "Keine Kategorien",
+        favoriteCategoryAll: "Alle",
+
+      
+
+// ✅ Alias keys (for backward compatibility with WordLibraryPanel.jsx; do not delete)
+setSelectLabel: "Lernset",
+setSelectTitle: "Wähle, was du lernen möchtest",
+setSelectAria: "Lernset-Menü",
+setFavoritesLabel: "Meine Favoriten",
+setNotReadyLine1: "Dieses Lernset ist noch nicht verfügbar.",
+setNotReadyLine2: "Derzeit ist nur das Menü verfügbar; Inhalte und Fortschritt kommen später.",
+testDisabledTitle: "Test ist noch nicht verfügbar.",
+
+        // ✅ Lernset-Titel (NEU)
+        setTitleA1Vocab: "A1 Wortschatz",
+        setTitleA1Grammar: "A1 Grammatik",
+        setTitleCommonPhrases: "Häufige Redewendungen",
+        setTitleTest: "Test",
+},
     },
   },
 
@@ -1133,6 +1306,10 @@ const uiText = {
         multiRefLabel: "Multi-ref",
         refPlaceholder: "أضف مرجعًا (اسم/فعل/قواعد)...",
         addRefBtn: "إضافة",
+        addRefValidating: "檢核中…",
+        confirmBtnLabel: "تأكيد",
+        confirmBtnTitle: "تأكيد",
+        confirmBtnAriaLabel: "تأكيد",
         refsDirtyHint: "تم تغيير المراجع — حدّث لإعادة التوليد",
         multiRefHint: "استخدم عدة مراجع لتوليد الأمثلة",
         refInvalidHint: "مرجع غير صالح (مثل: 'xxx' / '...' / '…').",
@@ -1143,6 +1320,19 @@ const uiText = {
 
       conversationTitle: "محادثة",
       conversationCloseLabel: "إغلاق",
+
+      // ✅ 2026-01-09：WordCard الإبلاغ عن مشكلة (NEW)
+      reportIssueLabel: "الإبلاغ عن مشكلة",
+      reportIssueTitle: "الإبلاغ عن مشكلة",
+      reportIssueCategoryLabel: "الفئة",
+      reportIssueCloseLabel: "إغلاق",
+      reportIssueCancelLabel: "إلغاء",
+      reportIssueSubmitLabel: "إرسال",
+      reportIssueHint: "أبلِغ عن مشكلة في هذا المُدخل",
+      reportIssueCatDefinitionWrong: "التعريف/الترجمة غير صحيحة أو غير طبيعية",
+      reportIssueCatPosWrong: "نوع الكلمة غير صحيح",
+      reportIssueCatFormsWrong: "التصريف/الجنس/الجمع… غير صحيح",
+      reportIssueCatOther: "أخرى",
 
       posLocalNameMap: {
         Nomen: "اسم",
@@ -1275,8 +1465,7 @@ const uiText = {
         lemmaLabel: "Lemma",
         ariaFavorite: "مفضلة",
         reviewTitle: "انقر لمراجعة هذه الصيغة في البحث",
-        senseStatusTitle:
-          "حالة المعنى (عرض فقط؛ ستُضاف الإجراءات لاحقًا)",
+        senseStatusTitle: "حالة المعنى (عرض فقط؛ ستُضاف الإجراءات لاحقًا)",
         // ✅ 新增（2026-01-04）：hover tooltip 多國字串
         senseStatusDisabledTitle: "غير متصل بعد (عرض فقط)",
         senseLikeTitle: "وضع علامة: مألوف",
@@ -1285,7 +1474,30 @@ const uiText = {
         glossEmpty: "—",
         // ✅ 新增
         headwordButtonTitle: "انقر للمراجعة في البحث",
-      },
+
+        // ✅ قائمة فئات المفضلة（جديد）
+        favoriteCategoryLabel: "الفئة",
+        favoriteCategoryLoading: "جارٍ تحميل الفئات…",
+        favoriteCategoryEmpty: "لا توجد فئات",
+        favoriteCategoryAll: "الكل",
+
+      
+
+// ✅ Alias keys (for backward compatibility with WordLibraryPanel.jsx; do not delete)
+setSelectLabel: "مجموعة التعلّم",
+setSelectTitle: "اختر ما تريد تعلمه",
+setSelectAria: "قائمة مجموعة التعلّم",
+setFavoritesLabel: "مفضلاتي",
+setNotReadyLine1: "هذه المجموعة غير متاحة بعد.",
+setNotReadyLine2: "القائمة متاحة فقط حالياً؛ سيتم إضافة المحتوى والتقدم لاحقاً.",
+testDisabledTitle: "الاختبار غير متاح بعد.",
+
+        // ✅ عناوين مجموعات التعلّم (جديد)
+        setTitleA1Vocab: "مفردات A1",
+        setTitleA1Grammar: "قواعد A1",
+        setTitleCommonPhrases: "عبارات شائعة",
+        setTitleTest: "اختبار",
+},
     },
   },
 };

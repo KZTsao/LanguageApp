@@ -41,6 +41,16 @@
  *       - 新增 onSelectPosKey（可選）prop：由上層接住 posKey 以便後續觸發 re-query
  *       - WordHeader 增加 activePosKey / onSelectPosKey 傳遞：讓 posOptions 從「純文字」變成「可點 pills」
  *       - 未提供 onSelectPosKey 時，仍注入一個 fallback handler（只 console），確保 UI 可點與事件可驗證
+ * - 2026-01-09：
+ *   14) Phase X（問題回報入口）：新增低調「問題回報」入口（多國 uiText）
+ *       - 先提供分類下拉 + submit console.log（後續再串後端 needs_refresh / issue 記錄）
+ * - 2026-01-09：
+ *   15) Phase X（問題回報入口位置調整）：將入口移到「收藏 ⭐ 上方」，並改為小視窗 popover 呈現（不在釋義區塊右上角）
+ * - 2026-01-12：
+ *   16) Task 1（Entry 狀態：Header 可被置換）— Step A（僅接上層 state，不改例句邏輯）
+ *      - 新增 entryHeaderOverrideByEntryKey（純 UI state）：用 entryKey(text+pos+senseIndex) 分流記住 header override
+ *      - 提供 handleEntrySurfaceChange(surface, meta)：供下游（WordExampleBlock/WordPosInfoNoun）回拋選取的 surface 或 clear(null)
+ *      - 將 entryHeaderOverride 與 onEntrySurfaceChange prop 傳入 WordExampleBlock（下游尚未導入時不影響既有行為）
  */
 
 import { useMemo, useState } from "react";
@@ -79,6 +89,15 @@ function WordCard({
 
   const [senseIndex, setSenseIndex] = useState(0);
 
+  // ✅ 2026-01-09：Phase X（問題回報入口）
+  // 中文功能說明：
+  // - 需求：入口放在「收藏 ⭐ 的上面」，點擊後用小視窗（popover）呈現
+  // - 目前階段：前端先打通入口（展開下拉分類 + 送出先 console.log），避免一次串太多導致難以除錯
+  // - 後續階段：再串後端 API，將 dict_entries.needs_refresh 設為 true 並記錄 issue 分類
+  const [reportIssueOpen, setReportIssueOpen] = useState(false);
+  const [reportIssueCategory, setReportIssueCategory] = useState("definition_wrong");
+  const [reportIssueLastAt, setReportIssueLastAt] = useState(null);
+
   /**
    * 功能：建立收藏初始化狀態（Production 排查用）
    * - ready：是否已成功組出可用的 favoriteEntry
@@ -104,6 +123,81 @@ function WordCard({
   const lang = uiLang && uiText[uiLang] ? uiLang : DEFAULT_LANG;
   const wordUi = uiText[lang]?.wordCard || uiText[DEFAULT_LANG]?.wordCard || {};
   const verbUi = uiText[lang]?.verbCard || uiText[DEFAULT_LANG]?.verbCard || {};
+
+  // ✅ 2026-01-12：問題回報入口只對「已登入」使用者顯示（UI gating）
+  // 中文功能說明：
+  // - 後端已要求 Authorization；這裡避免未登入仍看得到入口造成困惑
+  // - 僅用於「顯示/不顯示」，不負責 auth 管理與寫入
+  const reportIssueAuthed = useMemo(() => {
+    try {
+      if (typeof window === "undefined") return false;
+      const ls = window && window.localStorage ? window.localStorage : null;
+      if (!ls) return false;
+      const key = Object.keys(ls).find((k) => String(k).includes("auth-token"));
+      if (!key) return false;
+      const raw = ls.getItem(key);
+      if (!raw) return false;
+      const parsed = JSON.parse(raw);
+      const token =
+        (parsed && parsed.access_token) ||
+        (parsed && parsed.currentSession && parsed.currentSession.access_token) ||
+        (parsed && parsed.session && parsed.session.access_token) ||
+        "";
+      return !!token;
+    } catch (e) {
+      return false;
+    }
+  }, []);
+
+  // ✅ 2026-01-09：Phase X（問題回報）— 多國文字 + 分類清單
+  const reportIssueLabel = wordUi.reportIssueLabel || wordUi.reportIssue || "-";
+  const reportIssueHint = wordUi.reportIssueHint || "-";
+  const reportIssueCategoryLabel = wordUi.reportIssueCategoryLabel || "-";
+  const reportIssueCancelLabel = wordUi.reportIssueCancelLabel || "-";
+  const reportIssueSubmitLabel = wordUi.reportIssueSubmitLabel || "-";
+  const reportIssueCloseLabel = wordUi.reportIssueCloseLabel || "-";
+
+  // ✅ 2026-01-09：Phase X（問題回報）— popover 額外文字（可選）
+  const reportIssueTitle =
+    wordUi.reportIssueTitle || wordUi.reportIssueDialogTitle || "-";
+
+  const reportIssueCategories = useMemo(
+    () => [
+      {
+        key: "definition_wrong",
+        label: wordUi.reportIssueCatDefinitionWrong || "-",
+      },
+      {
+        key: "pos_wrong",
+        label: wordUi.reportIssueCatPosWrong || "-",
+      },
+      {
+        key: "forms_wrong",
+        label: wordUi.reportIssueCatFormsWrong || "-",
+      },
+      {
+        key: "other",
+        label: wordUi.reportIssueCatOther || "-",
+      },
+    ],
+    [wordUi]
+  );
+
+  // ✅ 2026-01-12：Phase X（問題回報）— 提供 Definition 行尾端 icon 使用的開啟/提交 handler
+  // 中文功能說明：
+  // - WordDefinitionBlock 只負責 render 🚩 icon，點擊後呼叫 onOpenReportIssue
+  // - Popover 與送出 API 仍由 WordCard 管理（避免下游重複造輪子）
+  const handleOpenReportIssue = () => {
+    try {
+      setReportIssueOpen(true);
+      setReportIssueLastAt(new Date().toISOString());
+      console.log("[WordCard][reportIssue] open(fromDefinition)", {
+        headword,
+        canonicalPos,
+        senseIndex,
+      });
+    } catch (e) {}
+  };
 
   const {
     labelPlural = wordUi.labelPlural || "-",
@@ -136,6 +230,67 @@ function WordCard({
 
   const rawPos = d.partOfSpeech || "";
   const canonicalPos = normalizePos(rawPos);
+
+  // ✅ 2026-01-12：Task 1（Entry 狀態：Header 可被置換）— Step A（先建立上游 state 與分流 key）
+  // 中文功能說明：
+  // - 本任務只影響「例句區 header（headword badge）」顯示文字，不動 refs、不打 API、不觸發造句。
+  // - override 需「分 entry」保存：同一張卡切 sense（senseIndex）視為不同 entry，各自記住 override。
+  // - entryKey 目前用 text + canonicalPos + senseIndex 組合（WordCard 這層可取得且足夠穩定）。
+  const entryKeyForHeaderOverride = useMemo(() => {
+    const t = typeof data?.text === "string" ? data.text.trim() : "";
+    const p =
+      typeof canonicalPos === "string"
+        ? canonicalPos.trim()
+        : String(canonicalPos || "").trim();
+    const si = Number.isInteger(senseIndex) ? senseIndex : 0;
+    return `${t}__${p}__${si}`;
+  }, [data?.text, canonicalPos, senseIndex]);
+
+  // 以 entryKey 分流保存 header override（純 UI 暫態；不寫 DB）
+  const [entryHeaderOverrideByEntryKey, setEntryHeaderOverrideByEntryKey] =
+    useState(() => ({}));
+
+  // 目前 entry 的 override 值（空字串代表 fallback 到原本 headword）
+  const entryHeaderOverride = useMemo(() => {
+    try {
+      const m = entryHeaderOverrideByEntryKey || {};
+      const v =
+        m && Object.prototype.hasOwnProperty.call(m, entryKeyForHeaderOverride)
+          ? m[entryKeyForHeaderOverride]
+          : "";
+      return typeof v === "string" ? v : "";
+    } catch (e) {
+      return "";
+    }
+  }, [entryHeaderOverrideByEntryKey, entryKeyForHeaderOverride]);
+
+  // 下游回拋：surface 有值 → 覆蓋；null/空字串 → clear（回預設 headword）
+  const handleEntrySurfaceChange = (surface, meta) => {
+    const s = typeof surface === "string" ? surface.trim() : "";
+    setEntryHeaderOverrideByEntryKey((prev) => {
+      const base = prev && typeof prev === "object" ? prev : {};
+      const next = { ...base };
+      if (s) {
+        next[entryKeyForHeaderOverride] = s;
+      } else {
+        if (
+          Object.prototype.hasOwnProperty.call(next, entryKeyForHeaderOverride)
+        ) {
+          delete next[entryKeyForHeaderOverride];
+        }
+      }
+      return next;
+    });
+
+    // ✅ runtime log（排查用）：確認 cell 點擊是否有回拋 surface 與 entryKey 分流是否正確
+    try {
+      console.log("[WordCard][entryHeaderOverride] change", {
+        entryKey: entryKeyForHeaderOverride,
+        surface: s || null,
+        meta: meta || null,
+      });
+    } catch (e) {}
+  };
 
   // ✅ 新增：canonicalPos 異常判斷（避免 unknown 寫入 DB）
   const canonicalPosInvalid =
@@ -214,7 +369,9 @@ function WordCard({
     "";
 
   // ✅ 改動點：只保留名詞使用 lemma/baseForm
-  const shouldPreferLemma = canonicalPos === "Nomen";
+  // const shouldPreferLemma = canonicalPos === "Nomen";
+  // 20260109 改回一律優先 lemma/baseForm
+  const shouldPreferLemma = true;
 
   // ✅ 先得到原始 headword（可能是小寫）
   const headwordRaw = (
@@ -356,6 +513,17 @@ function WordCard({
     return "";
   }
 
+  /** 模組：從 localStorage 取得 supabase access token（不引入新 client） */
+  function getAccessTokenFromLocalStorage() {
+    try {
+      const key = Object.keys(localStorage).find((k) => k.includes("auth-token"));
+      if (!key) return "";
+      const raw = JSON.parse(localStorage.getItem(key));
+      return raw?.access_token || raw?.currentSession?.access_token || "";
+    } catch {
+      return "";
+    }
+  }
   const detectedPrefix = useMemo(() => {
     const lemma =
       (typeof d.baseForm === "string" && d.baseForm.trim()) ||
@@ -969,7 +1137,45 @@ function WordCard({
     onToggleFavorite(entry);
   };
 
-  // ✅ runtime log：render 時快速看 dict 結構是否含 senses 類
+
+const token = getAccessTokenFromLocalStorage();
+// =========================
+// Phase X：回報問題（Report Issue）
+// - 只負責送出 API request，讓 Network 可觀測
+// - 後端是否已接線、是否寫入 DB：交由後端實作（前端不阻擋 UI）
+// =========================
+const sendReportIssue = async (payload) => {
+  try {
+    const res = await fetch("/api/dictionary/reportIssue", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(payload || {}),
+    });
+
+    // ✅ 不阻擋 UI：僅做可觀測 log（避免影響使用者操作）
+    const ok = !!res && res.ok;
+    let data = null;
+    try {
+      data = await res.json();
+    } catch (e) {
+      data = null;
+    }
+
+    console.log("[WordCard][reportIssue] api_result", {
+      ok,
+      status: res ? res.status : null,
+      data,
+    });
+
+    return { ok, status: res ? res.status : null, data };
+  } catch (e) {
+    console.error("[WordCard][reportIssue] api_error", e);
+    return { ok: false, status: null, data: null, error: String(e) };
+  }
+};  // ✅ runtime log：render 時快速看 dict 結構是否含 senses 類
   try {
     console.log("[WordCard][render][dictShape]", {
       text: typeof data?.text === "string" ? data.text : "",
@@ -1035,14 +1241,211 @@ function WordCard({
           />
         </div>
 
-        {/* ⭐ 我的最愛（App 管） */}
-        <FavoriteStar
-          active={!!favoriteActive}
-          disabled={favDisabled}
-          onClick={handleFavoriteClick}
-          size={16}
-          ariaLabel="-"
-        />
+        {/* ✅ 2026-01-09：Phase X（問題回報入口）— 移到收藏 ⭐ 上方，並用 popover 呈現 */}
+        <div style={{ position: "relative", display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
+          {reportIssueAuthed ? (
+            <>
+          <div
+            role="button"
+            tabIndex={0}
+            title={reportIssueHint}
+            onClick={() => {
+              setReportIssueOpen((v) => !v);
+              setReportIssueLastAt(new Date().toISOString());
+              console.log("[WordCard][reportIssue] toggle", {
+                headword,
+                canonicalPos,
+                senseIndex,
+                opened: !reportIssueOpen,
+              });
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                setReportIssueOpen((v) => !v);
+                setReportIssueLastAt(new Date().toISOString());
+                console.log("[WordCard][reportIssue] toggle(key)", {
+                  headword,
+                  canonicalPos,
+                  senseIndex,
+                  opened: !reportIssueOpen,
+                });
+              }
+            }}
+            style={{
+              fontSize: 12,
+              color: "var(--text-muted)",
+              cursor: "pointer",
+              userSelect: "none",
+              padding: "2px 0",
+              opacity: 0.85,
+              lineHeight: "14px",
+            }}
+          >
+            {reportIssueLabel}
+          </div>
+
+          {reportIssueOpen ? (
+            <div
+              style={{
+                position: "absolute",
+                top: 0,
+                right: 0,
+                transform: "translateY(18px)",
+                zIndex: 50,
+                width: 260,
+                borderRadius: 14,
+                border: "1px solid var(--border-subtle)",
+                background: "var(--card-bg)",
+                boxShadow: "0 10px 30px rgba(0,0,0,0.12)",
+                padding: 10,
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 8 }}>
+                <div style={{ fontSize: 12, color: "var(--text-main)", fontWeight: 600 }}>
+                  {reportIssueTitle}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setReportIssueOpen(false);
+                    console.log("[WordCard][reportIssue] close(x)", {
+                      headword,
+                      canonicalPos,
+                      senseIndex,
+                      reportIssueCategory,
+                      reportIssueLastAt,
+                    });
+                  }}
+                  style={{
+                    fontSize: 12,
+                    width: 24,
+                    height: 24,
+                    lineHeight: "24px",
+                    borderRadius: 999,
+                    border: "1px solid var(--border-subtle)",
+                    background: "transparent",
+                    color: "var(--text-muted)",
+                    cursor: "pointer",
+                  }}
+                  aria-label={reportIssueCloseLabel}
+                  title={reportIssueCloseLabel}
+
+                >
+                  ×
+                </button>
+              </div>
+
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                  {reportIssueCategoryLabel}
+                </div>
+
+                <select
+                  value={reportIssueCategory}
+                  onChange={(e) => setReportIssueCategory(e.target.value)}
+                  style={{
+                    fontSize: 12,
+                    padding: "6px 10px",
+                    borderRadius: 12,
+                    border: "1px solid var(--border-subtle)",
+                    background: "var(--card-bg)",
+                    color: "var(--text-main)",
+                    width: "100%",
+                  }}
+                >
+                  {reportIssueCategories.map((c) => (
+                    <option key={c.key} value={c.key}>
+                      {c.label}
+                    </option>
+                  ))}
+                </select>
+
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8, marginTop: 4 }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setReportIssueOpen(false);
+                      console.log("[WordCard][reportIssue] cancel", {
+                        headword,
+                        canonicalPos,
+                        senseIndex,
+                        reportIssueCategory,
+                        reportIssueLastAt,
+                      });
+                    }}
+                    style={{
+                      fontSize: 12,
+                      padding: "6px 10px",
+                      borderRadius: 999,
+                      border: "1px solid var(--border-subtle)",
+                      background: "transparent",
+                      color: "var(--text-muted)",
+                      cursor: "pointer",
+                    }}
+                  >
+                    {reportIssueCancelLabel}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+
+// ✅ 目前先 console.log（保留），並同步送出 API 讓 Network 可觀測
+const __reportPayload = {
+  headword,
+  canonicalPos,
+  senseIndex,
+  reportIssueCategory,
+  reportIssueLastAt,
+  // 先把當下的釋義快照帶上，方便後端比對（可選）
+  definition_de: typeof d?.definition_de === "string" ? d.definition_de : "",
+  definition_de_translation:
+    typeof d?.definition_de_translation === "string"
+      ? d.definition_de_translation
+      : "",
+  definition: typeof d?.definition === "string" ? d.definition : "",
+};
+
+console.log("[WordCard][reportIssue] submit", __reportPayload);
+
+// fire-and-forget：不阻擋 UI（只要 Network 有 request 即可）
+try {
+  void sendReportIssue(__reportPayload);
+} catch (e) {
+  // ignore
+}
+setReportIssueOpen(false);
+                    }}
+                    style={{
+                      fontSize: 12,
+                      padding: "6px 10px",
+                      borderRadius: 999,
+                      border: "1px solid var(--border-subtle)",
+                      background: "var(--accent-soft, #e0f2fe)",
+                      color: "var(--accent, #0369a1)",
+                      cursor: "pointer",
+                    }}
+                  >
+                    {reportIssueSubmitLabel}
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : null}
+
+            </>
+          ) : null}
+
+          {/* ⭐ 我的最愛（App 管） */}
+          <FavoriteStar
+            active={!!favoriteActive}
+            disabled={favDisabled}
+            onClick={handleFavoriteClick}
+            size={16}
+            ariaLabel="-"
+          />
+        </div>
       </div>
 
       {(data.mode === "phrase" ||
@@ -1091,6 +1494,56 @@ function WordCard({
         />
       ) : null}
 
+      {/* ✅ 2026-01-09：DEPRECATED 釋義右上角入口（已移到收藏上方 popover）
+          - 保留原碼以利回溯；不再渲染（避免 UI 重複）
+          - 若未來想改回釋義區也可復用
+      */}
+      {false ? (
+        <div style={{ position: "relative" }}>
+          <div
+            role="button"
+            tabIndex={0}
+            title={reportIssueHint}
+            onClick={() => {
+              setReportIssueOpen((v) => !v);
+              setReportIssueLastAt(new Date().toISOString());
+              console.log("[WordCard][reportIssue] toggle(deprecated)", {
+                headword,
+                canonicalPos,
+                senseIndex,
+                opened: !reportIssueOpen,
+              });
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                setReportIssueOpen((v) => !v);
+                setReportIssueLastAt(new Date().toISOString());
+                console.log("[WordCard][reportIssue] toggle(key)(deprecated)", {
+                  headword,
+                  canonicalPos,
+                  senseIndex,
+                  opened: !reportIssueOpen,
+                });
+              }
+            }}
+            style={{
+              position: "absolute",
+              right: 0,
+              top: 0,
+              fontSize: 12,
+              color: "var(--text-muted)",
+              cursor: "pointer",
+              userSelect: "none",
+              padding: "2px 0",
+              opacity: 0.85,
+            }}
+          >
+            {reportIssueLabel}
+          </div>
+        </div>
+      ) : null}
+
       <WordDefinitionBlock
         d={d}
         labelDefinition={labelDefinition}
@@ -1099,11 +1552,21 @@ function WordCard({
         onWordClick={onWordClick}
         onSpeak={onSpeak}
         shouldShowGrammar={shouldShowGrammar}
+
+        // ✅ 2026-01-12：Phase X（問題回報入口）— Definition 行尾端 🚩 icon（未登入不顯示）
+        canReportIssue={reportIssueAuthed}
+        reportIssueHint={reportIssueHint}
+        onOpenReportIssue={handleOpenReportIssue}
+        setReportIssueOpen={setReportIssueOpen}
       />
 
       <WordExampleBlock
         d={d}
         senseIndex={senseIndex}
+        // ✅ 2026-01-12：Task 1（Entry 狀態：Header 可被置換）— 上游提供 header override（僅顯示用途）
+        entryHeaderOverride={entryHeaderOverride}
+        onEntrySurfaceChange={handleEntrySurfaceChange}
+        entryHeaderOverrideEntryKey={entryKeyForHeaderOverride}
         sectionExample={sectionExample}
         sectionExampleTranslation={sectionExampleTranslation}
         exampleTranslation={exampleTranslation}

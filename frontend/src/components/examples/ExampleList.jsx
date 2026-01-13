@@ -18,6 +18,10 @@ import useConversation from "../conversation/useConversation";
  * - 2026-01-06：UI 調整：將「多參考輸入匡 + badges」移到 multiRef button 上方（ExampleSentence 之前），並停用下方 render（保留原碼註解回滾）
  * - 2026-01-07：例句標題：新增 headword prop 接收並往 ExampleSentence 傳遞（讓標題可顯示 headword 方框）
  * - 2026-01-07：UI 調整：多重參考 refControls 改用小視窗（popover-like）浮層呈現，避免佔版面；顯示與否跟隨 multiRefEnabled（toggle）
+ * - 2026-01-09：Bugfix：停止在 ExampleList render refControls popover（避免畫面出現「方匡/面板」誤判為錯誤狀態）
+ *              改為僅將 refControls 往下傳到 ExampleSentence（讓控制列在 toggle 左側，由 ExampleSentence 負責呈現位置）
+ * - 2026-01-10：Phase 2-UX：新增可選 props（refBadgesInline / refActionInline），往下傳到 ExampleSentence，
+ *              用於把 badges / action 拆到不同 div（不影響 refControls 向後相容）
  *
  * 初始化狀態（Production 排查）
  * - component: ExampleList
@@ -61,6 +65,14 @@ export default function ExampleList({
   // - 用途：將「新增參考 / refs badges / dirty/used/missing 提示」下移到例句區塊內
   // - 規範：此插槽僅 UI，不得在這裡新增任何自動查詢行為
   refControls,
+
+  // ✅ 2026-01-10：可選插槽（更細分）
+  // - 用途：讓 ExampleSentence 可以把 badges/action 放在不同 div（不同列/不同位置）
+  // - 規範：此插槽僅 UI，不得在這裡新增任何自動查詢行為
+  // - 向後相容：若上游未提供，ExampleSentence 仍可使用 refControls
+  refBadgesInline,
+  refActionInline,
+  refConfirm,
 }) {
   // =========================
   // 初始化狀態（Production 排查）
@@ -77,8 +89,18 @@ export default function ExampleList({
 
       // ✅ 2026-01-07：multiRef presence
       multiRefEnabled: !!multiRefEnabled,
+
+      // ✅ 2026-01-09：refControls routing (debug only)
+      // - 目的：快速判斷 refControls 是否由 ExampleList 自己 render（應為 false）
+      // - 目的：快速判斷 refControls 是否往下傳到 ExampleSentence（應為 true）
+      refControlsAboveExampleSentence: false,
+      refControlsPassToExampleSentence: true,
+
+      // ✅ 2026-01-10：細分插槽 presence（debug only）
+      hasRefBadgesInline: !!refBadgesInline,
+      hasRefActionInline: !!refActionInline,
     }),
-    [refControls, headword, multiRefEnabled]
+    [refControls, headword, multiRefEnabled, refBadgesInline, refActionInline]
   );
 
   // DEPRECATED 2026-01-06：早期插入的控制旗標（避免重複宣告造成 syntax error）
@@ -101,18 +123,27 @@ export default function ExampleList({
   // - 需求：多重參考的輸入匡 + 說明，用小視窗呈現，不要一直佔版面
   // - 最小改動策略：不改 refControls 內容，只改呈現容器（absolute overlay）
   // - 顯示/隱藏：跟隨 multiRefEnabled（toggle 開 = 顯示）
-  const __RENDER_REFCONTROLS_ABOVE_EXAMPLESENTENCE = true;
-  const __PASS_REFCONTROLS_TO_EXAMPLESENTENCE = false;
+  //
+  // ✅ 2026-01-09（本次）：停止在 ExampleList 這層 render popover
+  // 中文功能說明：
+  // - 需求：目前畫面上看到的「方匡/面板」被誤判為錯誤狀態，需要先移除來源
+  // - 最小改動策略：不碰 refControls 內容，不改上游邏輯，只調整「由誰 render」：
+  //   - ExampleList：不 render refControls（避免出現方匡）
+  //   - ExampleSentence：接收 refControls，放在 toggle 左側（由 ExampleSentence 負責呈現位置）
+  const __RENDER_REFCONTROLS_ABOVE_EXAMPLESENTENCE = false; // ✅ 2026-01-09：關掉方匡來源
+  const __PASS_REFCONTROLS_TO_EXAMPLESENTENCE = true; // ✅ 2026-01-09：改為往下傳
   const __RENDER_REFCONTROLS_BELOW_EXAMPLESENTENCE = false;
 
   // ✅ 2026-01-07：Popover-like 浮層模式開關（純 UI，不影響任何查詢）
   // - 預設：啟用浮層
   // - 若需回滾：改成 false 會回到原本 inline render（保留原碼）
+  // ✅ 2026-01-09：雖保留此旗標與相關區塊原碼（避免大量改動/便於回滾），但上方 render 已停用
   const __USE_REFCONTROLS_POPOVER = true;
 
   // ✅ 2026-01-07：浮層顯示條件（最小規則）
   // - 目前使用 multiRefEnabled 直接控制（toggle 開才顯示）
   // - 若未來要改成「點一下才展開」，可再加入獨立 state（此處先不做，避免動太多）
+  // ✅ 2026-01-09：render 來源已停用，保留條件計算供 debug（不影響 UI）
   const __SHOULD_SHOW_REFCONTROLS_POPOVER = !!multiRefEnabled;
 
   // ✅ 開發用：確認 refControls/headword 是否有被上游傳入（不影響 production 行為）
@@ -125,13 +156,18 @@ export default function ExampleList({
         hasHeadword: !!headword,
         hasRefControls: !!refControls,
         multiRefEnabled: !!multiRefEnabled,
+
+        // ✅ 2026-01-10：細分插槽 presence
+        hasRefBadgesInline: !!refBadgesInline,
+        hasRefActionInline: !!refActionInline,
+
         __initState,
       });
     } catch (e) {
       // ignore
     }
     return null;
-  }, [refControls, headword, multiRefEnabled, __initState]);
+  }, [refControls, headword, multiRefEnabled, refBadgesInline, refActionInline, __initState]);
 
   const hasExamples = Array.isArray(examples) && examples.length > 0;
   const mainSentence = hasExamples ? examples[0] : "";
@@ -253,6 +289,12 @@ export default function ExampleList({
         // DEPRECATED 2026-01-06: refControls 可能在 ExampleSentence 與 ExampleList 兩邊重複 render
         // refControls={refControls}
         refControls={__PASS_REFCONTROLS_TO_EXAMPLESENTENCE ? refControls : null}
+      
+        // ✅ 2026-01-10：細分插槽（可選）
+        // - 向後相容：ExampleSentence 若未接，也不影響既有行為
+        refBadgesInline={refBadgesInline}
+        refActionInline={refActionInline}
+        refConfirm={refConfirm}
       />
 
       {/* ✅ Phase 2-UX：refs 控制區塊下移插槽（ExampleSentence 下方） */}

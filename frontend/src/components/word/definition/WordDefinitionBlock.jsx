@@ -1,4 +1,4 @@
-// frontend/src/components/WordDefinitionBlock.jsx
+// frontend/src/components/word/definition/WordDefinitionBlock.jsx
 
 import {
   normalizeDefinitionList,
@@ -10,20 +10,142 @@ import {
 
 import { playTTS } from "../../../utils/ttsClient";
 
+import uiText from "../../../uiText";
+
+// =========================
+// FlagIcon（純 UI / 行為元件，無語言責任）
+// - 以 currentColor 上色，暗亮版跟著 CSS var 走
+// - aria-label / title 由外層傳入
+// =========================
+function ReportFlagIcon({ onClick, title, ariaLabel, disabled }) {
+  const color = disabled ? "var(--text-muted)" : "var(--text-muted)";
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e?.preventDefault?.();
+        e?.stopPropagation?.();
+        if (disabled) return;
+        if (typeof onClick === "function") onClick(e);
+      }}
+      aria-label={ariaLabel}
+      title={title}
+      style={{
+        background: "none",
+        border: "none",
+        padding: 0,
+        lineHeight: 1,
+        cursor: disabled ? "default" : "pointer",
+        opacity: disabled ? 0.45 : 0.95,
+        pointerEvents: disabled ? "none" : "auto",
+        userSelect: "none",
+        color,
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+      }}
+    >
+      <svg
+        width="16"
+        height="16"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        xmlns="http://www.w3.org/2000/svg"
+      >
+        {/* pole */}
+        <path d="M6 3v18" />
+        {/* flag */}
+        <path d="M6 4h11l-2 4 2 4H6" />
+      </svg>
+    </button>
+  );
+}
+
 function WordDefinitionBlock({
   d,
   labelDefinition,
+  uiLang,
   onWordClick,
   senseIndex,
   onSenseChange,
+
+  // ✅ 2026-01-12：Phase X（問題回報入口）— 定義行尾端旗子按鈕（需要登入才顯示）
+  // - responsibility: WordDefinitionBlock 只負責「入口位置」與「popover UI」呈現
+  // - state/submit 邏輯仍由上層 WordCard 控制並傳入（避免多處重複）
+  canReportIssue,
+  reportIssueHint,
+  reportIssueOpen,
+  setReportIssueOpen,
+  reportIssueTitle,
+  reportIssueCloseLabel,
+  reportIssueCategoryLabel,
+  reportIssueCategory,
+  setReportIssueCategory,
+  reportIssueCategories,
+  reportIssueSubmitLabel,
+  reportIssueCancelLabel,
+  onSubmitReportIssue,
 }) {
   if (!d) return null;
+
+  // ✅ 2026-01-12: i18n glue (avoid hard-coded strings in this block)
+  // - prefer explicit uiLang
+  // - fallback: infer from labelDefinition (which is already localized by WordCard/uiText)
+  const __resolvedUiLang = (() => {
+    if (typeof uiLang === "string" && uiLang) return uiLang;
+    const ld = typeof labelDefinition === "string" ? labelDefinition.trim() : "";
+    if (!ld) return "zh-TW";
+    try {
+      const langs = Object.keys(uiText || {});
+      for (const k of langs) {
+        const v = uiText?.[k]?.wordCard?.labelDefinition;
+        if (typeof v === "string" && v.trim() === ld) return k;
+      }
+    } catch (e) {}
+    // heuristic fallback
+    if (ld.includes("释义")) return "zh-CN";
+    if (ld.includes("釋義")) return "zh-TW";
+    return "zh-TW";
+  })();
+
+  const t = uiText?.[__resolvedUiLang]?.wordCard || {};
+  const definitionDeLabel = typeof t.definitionDeLabel === "string" && t.definitionDeLabel
+    ? t.definitionDeLabel
+    : "Definition (DE)";
+  const definitionDeTtsTitle = typeof t.definitionDeTtsTitle === "string" && t.definitionDeTtsTitle
+    ? t.definitionDeTtsTitle
+    : "Play German definition";
+  const senseFallbackPrefix = typeof t.senseFallbackPrefix === "string" && t.senseFallbackPrefix
+    ? t.senseFallbackPrefix
+    : "Sense";
 
   // 中文釋義（多義）
   const definitionList = normalizeDefinitionList(d.definition);
 
   // Definition (DE)
-  const definitionDeList = normalizeDefinitionDe(d.definition_de);
+  const rawDefinitionDe = d.definition_de;
+  let definitionDeList = normalizeDefinitionDe(rawDefinitionDe);
+
+  // ✅ 2026-01-12: robustness (avoid DE block disappearing if backend returns a format
+  // that normalizeDefinitionDe doesn't recognize yet)
+  if (definitionDeList.length === 0 && rawDefinitionDe) {
+    if (Array.isArray(rawDefinitionDe)) {
+      const xs = rawDefinitionDe
+        .map((x) => (typeof x === "string" ? x.trim() : String(x || "").trim()))
+        .filter(Boolean);
+      if (xs.length > 0) definitionDeList = xs;
+    } else if (typeof rawDefinitionDe === "string") {
+      const s = rawDefinitionDe.trim();
+      if (s) definitionDeList = [s];
+    } else {
+      const s = String(rawDefinitionDe || "").trim();
+      if (s) definitionDeList = [s];
+    }
+  }
   let definitionDeTransList = normalizeDefinitionDeTranslation(
     d.definition_de_translation
   );
@@ -137,7 +259,7 @@ function WordDefinitionBlock({
             const labelText =
               typeof labelSource === "string" && labelSource.trim()
                 ? labelSource.trim()
-                : `義項 ${idx + 1}`;
+                : `${senseFallbackPrefix} ${idx + 1}`;
 
             const shortLabel = labelText;
             const isActive = idx === safeIndex;
@@ -184,15 +306,18 @@ function WordDefinitionBlock({
               marginBottom: 2,
               display: "flex",
               alignItems: "center",
+              justifyContent: "space-between",
               gap: 6,
+              position: "relative",
             }}
           >
-            <span>Definition (DE)：</span>
+            <div style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+              <span>{definitionDeLabel}：</span>
 
-            <button
+              <button
               className="icon-button sound-button"
               onClick={() => playTTS(currentDe, "de-DE")}
-              title="播放德語釋義"
+              title={definitionDeTtsTitle}
             >
               <svg
                 className="sound-icon"
@@ -213,6 +338,157 @@ function WordDefinitionBlock({
                 <polygon points="10,8 10,16 16,12" />
               </svg>
             </button>
+            </div>
+
+            {/* 🚩 回報問題（需要登入才顯示） */}
+            {canReportIssue &&
+            typeof setReportIssueOpen === "function" ? (
+              <ReportFlagIcon
+                title={reportIssueHint}
+                ariaLabel={reportIssueHint}
+                onClick={() => {
+                  setReportIssueOpen((v) => !v);
+                }}
+                disabled={false}
+              />
+            ) : null}
+
+            {/* popover（由上層狀態控制） */}
+            {canReportIssue &&
+            typeof setReportIssueOpen === "function" &&
+            !!reportIssueOpen ? (
+              <div
+                style={{
+                  position: "absolute",
+                  top: 0,
+                  right: 0,
+                  transform: "translateY(18px)",
+                  zIndex: 50,
+                  width: 260,
+                  borderRadius: 14,
+                  border: "1px solid var(--border-subtle)",
+                  background: "var(--card-bg)",
+                  boxShadow: "0 10px 30px rgba(0,0,0,0.12)",
+                  padding: 10,
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 8,
+                    marginBottom: 8,
+                  }}
+                >
+                  <div
+                    style={{
+                      fontSize: 12,
+                      color: "var(--text-main)",
+                      fontWeight: 600,
+                    }}
+                  >
+                    {reportIssueTitle}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setReportIssueOpen(false)}
+                    style={{
+                      fontSize: 12,
+                      width: 24,
+                      height: 24,
+                      lineHeight: "24px",
+                      borderRadius: 999,
+                      border: "1px solid var(--border-subtle)",
+                      background: "transparent",
+                      color: "var(--text-muted)",
+                      cursor: "pointer",
+                    }}
+                    aria-label={reportIssueCloseLabel}
+                    title={reportIssueCloseLabel}
+                  >
+                    ×
+                  </button>
+                </div>
+
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                    {reportIssueCategoryLabel}
+                  </div>
+
+                  <select
+                    value={reportIssueCategory}
+                    onChange={(e) => setReportIssueCategory?.(e.target.value)}
+                    style={{
+                      fontSize: 12,
+                      padding: "6px 10px",
+                      borderRadius: 12,
+                      border: "1px solid var(--border-subtle)",
+                      background: "var(--card-bg)",
+                      color: "var(--text-main)",
+                      width: "100%",
+                    }}
+                  >
+                    {(Array.isArray(reportIssueCategories)
+                      ? reportIssueCategories
+                      : []
+                    ).map((c) => (
+                      <option key={c.key} value={c.key}>
+                        {c.label}
+                      </option>
+                    ))}
+                  </select>
+
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "flex-end",
+                      gap: 8,
+                      marginTop: 4,
+                    }}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setReportIssueOpen(false)}
+                      style={{
+                        fontSize: 12,
+                        padding: "6px 10px",
+                        borderRadius: 999,
+                        border: "1px solid var(--border-subtle)",
+                        background: "transparent",
+                        color: "var(--text-muted)",
+                        cursor: "pointer",
+                      }}
+                    >
+                      {reportIssueCancelLabel}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (typeof onSubmitReportIssue === "function") {
+                          onSubmitReportIssue();
+                        } else {
+                          setReportIssueOpen(false);
+                        }
+                      }}
+                      style={{
+                        fontSize: 12,
+                        padding: "6px 10px",
+                        borderRadius: 999,
+                        border: "1px solid var(--border-subtle)",
+                        background: "var(--accent-soft, #e0f2fe)",
+                        color: "var(--accent, #0369a1)",
+                        cursor: "pointer",
+                      }}
+                    >
+                      {reportIssueSubmitLabel}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
           </div>
 
           {/* 主體文字，可點擊 */}

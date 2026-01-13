@@ -12,101 +12,30 @@
  * ✅ 本次異動（2026/01/03）
  * - UI｜義項熟悉度（讚/倒讚）按鈕：移除外匡（不顯示邊框/底色/外圈）
  *
- * ✅ 本次異動（2025/12/19）
- * - B｜單字庫 UI（合併呈現）
- *   1) 將 libraryItems(raw rows) -> groupedItems
- *   2) group key：headword + "::" + canonicalPos
- *   3) group 內依 sense_index ASC 排序，顯示 ①②… + headword_gloss（空顯示 —）
- *   4) 顯示義項狀態 icon：👍(familiarity=1) / 👎(familiarity=-1) / 🚫(is_excluded=true)
+ * ✅ 本次異動（2026/01/12）
+ * - UI｜非 favorites sets（system set items）：顯示學習狀態
+ *   - unseen：空白
+ *   - seen：✓
+ *   - familiar：✓✓
  *
- * ✅ 本次異動（2025/12/19）
- * - UI 密度調整 + 修正重疊來源（不改收藏流程、不改後端）
- *   1) 移除「日期資訊」顯示（保留原碼但不渲染：deprecated）
- *   2) 字卡變薄：降低 padding / minHeight / 區塊間距，讓同畫面可顯示更多字卡
- *   3) 修正 DOM 重疊主因：避免 <button> 內再巢狀 <button>
- *      - 外層字卡維持 <button>（符合你退回的版型）
- *      - 內層星星控制改為 <span role="button">（避免瀏覽器自動修正 DOM 造成視覺錯位）
- *
- * ✅ 本次異動（2025/12/23）
- * - F｜灰色外框不再是 button：只讓 headword「字」可點擊回查詢
- *   1) 將單張卡片外層從 <button class="wl-item"> 改成 <div class="wl-item">
- *   2) headword 改成無樣式 <button>，onClick 觸發 onReview(g.headword)
- *   3) 這樣即便 FavoriteStar 內部是 <button> 也不會再觸發巢狀 button 的瀏覽器自動修正
- *
- * ✅ 本次異動（2025/12/23）
- * - G｜文案調整：移除上方註釋 + headword 下方改顯示合併釋義（單行＋序號）
- *
- * ✅ 本次異動（2025/12/24）
- * - I｜修正「我的最愛」無法取消：onToggleFavorite 參數型態修正（不改收藏流程/後端）
- *
- * ✅ 本次異動（2025/12/25）
- * - J｜修正「星星點了沒反應」：FavoriteStar 內層 button 可能阻擋事件冒泡
- *
- * ✅ 本次異動（2025/12/25）
- * - M｜星星改為「單一 button 包含星星＋文字」：收藏/取消收藏（由狀態切換）
- *
- * ✅ 本次異動（2025/12/29）
- * - N｜修正單字庫義項序號顯示：自動判斷 sense_index 基底（0-based / 1-based）
- *
- * ✅ 本次異動（2025/12/31）
- * - O｜導入「義項狀態 UI v0」（最小可操作）
- *
- * ✅ 本次異動（2025/12/31）
- * - P｜義項狀態 icon 改版（與收藏按鈕風格一致，但不使用星星語意）
- *
- * ✅ 本次異動（2026/01/02）
- * - 修正 HTML 巢狀 <button> 警告（hydration error 風險）
- *
- * ✅ 本次異動（2026/01/02）
- * - R｜收藏切換安全包裝（避免「異常結束但資料未動」）
- *
- * ✅ 本次異動（2026/01/03）
- * - S｜義項狀態 UI 即時更新 + 顏色對齊收藏星星
- *
- * ✅ 本次異動（2026/01/03）
- * - T｜版型微調（WordLibraryPanel）
- *
- * ✅ 本次異動（2026/01/03）
- * - U｜icon 風格統一（亮/暗版）
- *
- * ✅ 本次異動（2026/01/03）
- * - V｜義項狀態 icon 顏色與倒讚造型修正（亮/暗版一致）
- *
- * ✅ 本次異動（2026/01/03）
- * - W｜👍 icon 風格統一：改為與 👎 同系列的拇指造型（只動 SVG path，不動任何互動/狀態邏輯）
- *
- * ✅ 本次異動（2026/01/03）
- * - X｜CSS/邏輯去重：把重複 selector 合併成單一權威版本
- *   1) 重複 selector 保留為 DEPRECATED 註解（不刪除，避免回溯困難）
- *   2) 實際生效 CSS 集中在「FINAL AUTHORITY」區塊（只剩一份）
- *   3) familiarity 切換邏輯集中到單一 helper，舊 function 保留為 wrapper（避免改動呼叫點）
- *
- * ※ 重要：不改收藏流程 / 不改後端 / 不改 API 行為
- * ※ 重要：保留舊渲染（deprecated）以利回溯，不移除既有 function，不合併 useEffect（本檔無 useEffect）
-  * 
- * ✅ 本次異動（2026/01/03）
- * - Y｜熟悉度二元化（👍/👎 同時顯示、只能擇一；不再提供「－」按鈕）
- *   1) UI：兩顆按鈕永遠存在，點擊只會設定為 1 或 -1（不回到 0）
- *   2) 移除：🚫「排除/禁止出現」按鈕與互動（舊碼保留為 DEPRECATED、不渲染）
- *   3) 狀態：muted 透明度更淡（讓選中狀態更突出）
-
- * ✅ 本次異動（2026/01/04）
- * - Z｜多國：hover 提示字串改為只讀 uiText（本檔不允許自建多國 fallback）
- *   1) WordLibraryPanel 只會從 uiText[uiLang].app.libraryPanel 取字串
- *   2) 若 uiText 未注入或 key 缺漏：顯示空字串（避免 runtime error），但不在本檔自行翻譯
- *   3) 保留舊 fallback 內容為 DEPRECATED 註解（不參與 runtime），方便回溯
- * 
- * 
 */
 
 // frontend/src/features/library/WordLibraryPanel.jsx
 
 import React from "react";
+import { apiFetch } from "../../utils/apiClient";
 import FavoriteStar from "../../components/common/FavoriteStar";
 
 export default function WordLibraryPanel({
   libraryItems,
   onReview,
+
+  // ✅ 任務 2：收藏分類（由上游 App.jsx 注入；本檔只負責 UI）
+  favoriteCategories,
+  favoriteCategoriesLoading = false,
+  selectedFavoriteCategoryId,
+  onSelectFavoriteCategory,
+
 
   // ✅ 由 App.jsx 注入：單字庫內可直接取消收藏
   onToggleFavorite,
@@ -199,6 +128,183 @@ function getLibraryPanelTextFromUiText(_uiText, _lang) {
 
 // ✅ 最終文字來源（只能來自 uiText；缺漏時回傳空物件避免 runtime error）
 const t = getLibraryPanelTextFromUiText(uiText, effectiveLang) || {};
+
+
+// ✅ Set 顯示名稱：優先使用 uiText 的多國；若 uiText 缺漏，保底用後端 title（避免空白）
+// NOTE: 這裡只做「顯示層」名稱對應，不改變 set_code（set_code 才是資料識別碼）
+function resolveLibrarySetTitle(setCode, backendTitle, t, effectiveLang) {
+  // 1) uiText 優先
+  if (t) {
+    // favorites（我的收藏）
+    if (setCode === "favorites") {
+      if (t.setFavoritesLabel) return t.setFavoritesLabel;
+      if (t.favoritesLabel) return t.favoritesLabel; // legacy key
+    }
+
+    // system sets（後端 set_code → uiText key）
+    // 你可以在 uiText 補上：setTitleA1Vocab / setTitleA1Grammar / setTitleCommonPhrases
+    if (setCode === "a1_vocab" && t.setTitleA1Vocab) return t.setTitleA1Vocab;
+    if (setCode === "a1_grammar" && t.setTitleA1Grammar) return t.setTitleA1Grammar;
+    if (setCode === "common_phrases" && t.setTitleCommonPhrases) return t.setTitleCommonPhrases;
+  }
+
+  // 2) 保底：後端 title（避免畫面出現空白選項）
+  if (backendTitle) return backendTitle;
+
+  // 3) 最後保底：極小 fallback（避免 UI 無法操作）
+  // eslint-disable-next-line no-nested-ternary
+  return (String(effectiveLang || "").startsWith("zh") ? "我的收藏" : "Favorites");
+}
+
+  // ✅ S｜學習本（Set）選擇：只提供 UI 選單（不做假資料）
+  // - favorites：使用者可編輯（收藏）
+  // - system sets：只顯示完成度（熟悉量/總量）與後續測驗入口（內容不可增減）
+  const WL_SELECTED_SET_KEY = "langapp::library::selectedSetCode";
+
+  const [librarySets, setLibrarySets] = React.useState(() => []);
+  const [selectedSetCode, setSelectedSetCode] = React.useState(() => {
+    try {
+      if (typeof window !== "undefined" && window.localStorage) {
+        const v = window.localStorage.getItem(WL_SELECTED_SET_KEY);
+        return v || "favorites";
+      }
+    } catch (e) {
+      // no-op
+    }
+    return "favorites";
+  });
+
+  // ✅ S｜拉取學習本清單（system sets）
+  React.useEffect(() => {
+    let cancelled = false;
+    async function fetchSets() {
+      try {
+        const res = await apiFetch("/api/library/sets", { method: "GET" });
+        const json = await res.json();
+        const sets = (json && json.ok && Array.isArray(json.sets)) ? json.sets : [];
+
+        // ✅ favorites 永遠存在於 UI（使用者可編輯）
+        const favorites = {
+          set_code: "favorites",
+          title: resolveLibrarySetTitle("favorites", null, t, effectiveLang),
+          type: "user",
+          order_index: 0,
+        };
+
+
+        // ✅ system sets：把顯示用 title 套用 uiText（多國）
+        const normalizedSets = (sets || []).map((s) => {
+          const setCode = s && s.set_code;
+          const backendTitle = s && s.title;
+          return {
+            ...s,
+            title: resolveLibrarySetTitle(setCode, backendTitle, t, effectiveLang),
+          };
+        });
+
+        const merged = [favorites].concat(normalizedSets);
+
+        if (!cancelled) {
+          setLibrarySets(merged);
+        }
+      } catch (e) {
+        // no-op（UI 仍可用 favorites）
+        const favorites = {
+          set_code: "favorites",
+          title: (t && t.setFavoritesLabel) || "",
+          type: "user",
+          order_index: 0,
+        };
+        if (!cancelled) {
+          setLibrarySets([favorites]);
+        }
+      }
+    }
+
+    // ⚠️ t 可能晚於第一次 render 才就緒；這裡允許 re-run（不合併 useEffect）
+    fetchSets();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [t]);
+
+  // ✅ S｜記住上次選擇（localStorage）
+  React.useEffect(() => {
+    try {
+      if (typeof window !== "undefined" && window.localStorage) {
+        window.localStorage.setItem(WL_SELECTED_SET_KEY, selectedSetCode || "favorites");
+      }
+    } catch (e) {
+      // no-op
+    }
+  }, [selectedSetCode]);
+
+  // ============================================================
+  // ✅ 2026/01/10（新增）：非 favorites set 的 items 載入（UI 可驗證）
+  // - 目的：切換 set 時，Network 會看到 /api/library/sets/:setCode/items
+  // - 不做假資料：items 來源只來自 API
+  // - 不碰「匯入 / dictionary lookup / 長肉」：這一步只負責「能載出殼清單」
+  // ============================================================
+  const [activeSetItems, setActiveSetItems] = React.useState(() => []);
+  const [activeSetItemsLoading, setActiveSetItemsLoading] = React.useState(() => false);
+  const [activeSetItemsError, setActiveSetItemsError] = React.useState(() => null);
+
+  React.useEffect(() => {
+    let cancelled = false;
+
+    async function fetchSetItems(setCode) {
+      const code = setCode || "favorites";
+
+      // ✅ favorites 不走 items API（維持原本：直接用 libraryItems）
+      if (code === "favorites") {
+        try {
+          if (!cancelled) {
+            setActiveSetItems([]);
+            setActiveSetItemsLoading(false);
+            setActiveSetItemsError(null);
+          }
+        } catch (e) {
+          // no-op
+        }
+        return;
+      }
+
+      try {
+        if (!cancelled) {
+          setActiveSetItemsLoading(true);
+          setActiveSetItemsError(null);
+        }
+
+        const safeCode = encodeURIComponent(code);
+        const url = `/api/library/sets/${safeCode}/items`;
+
+        // ✅ UI 驗證點：Network 會看到這支 GET
+        const res = await apiFetch(url, { method: "GET" });
+        const json = await res.json();
+
+        const items = (json && json.ok && Array.isArray(json.items)) ? json.items : [];
+
+        if (!cancelled) {
+          setActiveSetItems(items);
+          setActiveSetItemsLoading(false);
+          setActiveSetItemsError(null);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setActiveSetItems([]);
+          setActiveSetItemsLoading(false);
+          setActiveSetItemsError(err || new Error("fetchSetItems failed"));
+        }
+      }
+    }
+
+    fetchSetItems(selectedSetCode || "favorites");
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedSetCode]);
 
 // ------------------------------------------------------------------
 // ❌ DEPRECATED：本檔內建多國 fallback（禁止使用）
@@ -386,7 +492,71 @@ const t = getLibraryPanelTextFromUiText(uiText, effectiveLang) || {};
     return grouped;
   }
 
-  const groupedItems = buildGroupedItems(libraryItems);
+  // ✅ S｜目前選取的學習本（Set）
+  const isFavoritesSet = (selectedSetCode || "favorites") === "favorites";
+
+  // ✅ 任務 2：收藏分類下拉（只有在 favorites set 才顯示）
+  const hasFavoriteCategories =
+    Array.isArray(favoriteCategories) && favoriteCategories.length > 0;
+
+  const activeLibraryItems = isFavoritesSet ? (libraryItems || []) : [];
+  const groupedItems = buildGroupedItems(activeLibraryItems);
+
+  // ✅ 2026/01/10（新增）：system set 的「殼清單」顯示用 helper（不做假資料）
+  function getSetItemLabel(item) {
+    if (!item) return "";
+    const t1 = pickRowField(item, "itemRef", "item_ref");
+    if (typeof t1 === "string" && t1.trim()) return t1.trim();
+
+    const t2 = pickRowField(item, "headword", "headword");
+    if (typeof t2 === "string" && t2.trim()) return t2.trim();
+
+    return "";
+  }
+
+  // ✅ 2026/01/12（新增）：system set item 學習狀態符號（unseen/seen/familiar）
+  // - unseen：空白
+  // - seen：✓
+  // - familiar：✓✓
+  function getSetItemLearningMark(item) {
+    if (!item) return "";
+    const isSeenRaw = pickRowField(item, "isSeen", "is_seen");
+    const familiarRaw = pickRowField(item, "familiar", "familiar");
+
+    const isSeen = !!isSeenRaw;
+    const familiar = !!familiarRaw;
+
+    if (familiar) return "✓✓";
+    if (isSeen) return "✓";
+    return "";
+  }
+
+  // ✅ 2026/01/12（新增）：system set item 狀態 title（不自建多國，缺漏就空字串）
+  function getSetItemLearningMarkTitle(mark, t) {
+    if (!mark) return "";
+    // 若 uiText 之後補 key，可直接啟用（本次先不強制）
+    // e.g. t.setItemSeenTitle / t.setItemFamiliarTitle
+    if (mark === "✓✓") return (t && t.setItemFamiliarTitle) || "";
+    if (mark === "✓") return (t && t.setItemSeenTitle) || "";
+    return "";
+  }
+
+  // ✅ 2026/01/10（新增）：system set item 點擊 → 直接走既有 onReview（查字流程沿用）
+  function handleSetItemClick(e, label) {
+    try {
+      if (e) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    } catch (err) {
+      // no-op
+    }
+
+    const q = typeof label === "string" ? label.trim() : "";
+    if (!q) return;
+
+    if (typeof onReview === "function") onReview(q);
+  }
 
   // =========================
   // ✅ Production 排查：初始化狀態（只寫一次）
@@ -406,6 +576,12 @@ const t = getLibraryPanelTextFromUiText(uiText, effectiveLang) || {};
         canUpdateSenseStatus,
         iconThemePatchV: "2026-01-03_V_icon-theme-fix",
         cssDedupPatchX: "2026-01-03_X_css-dedup-final-authority",
+
+        // ✅ 2026/01/10：system set items 載入資訊（只做觀測，不影響功能）
+        systemSetItemsFeature: true,
+
+        // ✅ 2026/01/12：system set items 狀態符號顯示
+        systemSetItemsLearningMarkFeature: true,
       };
     }
   } catch (e) {
@@ -1042,7 +1218,7 @@ const t = getLibraryPanelTextFromUiText(uiText, effectiveLang) || {};
         }
 
         @media (prefers-color-scheme: dark) {
-          .wl-senseActionBtn--active[data-kind="exclude"] {
+          .wl-senseActionBtn--active[data-kind="exclude"]) {
             color: var(--text-main, var(--text-color, rgba(255,255,255,0.92))) !important;
             opacity: 1;
           }
@@ -1131,7 +1307,55 @@ const t = getLibraryPanelTextFromUiText(uiText, effectiveLang) || {};
            - 已被合併到 FINAL AUTHORITY，上線行為不再受它們影響
            - 如果你要回溯，從 Git 歷史看即可；這裡不再保留重複 selector（避免繼續打架）
            ============================================================ */
-      
+
+
+        /* ✅ 2026/01/10（新增）：system set 的殼清單樣式（不影響 favorites 卡片） */
+        .wl-setItemRow {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 10px;
+          padding: 10px 12px;
+          border-radius: 14px;
+          border: 1px solid rgba(255,255,255,0.10);
+          background: rgba(0,0,0,0.08);
+        }
+        .wl-setItemRow:hover {
+          background: rgba(255,255,255,0.06);
+          border-color: rgba(255,255,255,0.18);
+        }
+        .wl-setItemLabel {
+          font-size: 15px;
+          font-weight: 700;
+          letter-spacing: 0.15px;
+          opacity: 0.92;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        .wl-setItemBadge {
+          font-size: 12px;
+          opacity: 0.66;
+          padding: 4px 8px;
+          border-radius: 999px;
+          border: 1px solid rgba(255,255,255,0.10);
+          background: rgba(255,255,255,0.03);
+          flex: 0 0 auto;
+        }
+
+        /* ✅ 2026/01/12（新增）：system set items 狀態符號 badge（✓ / ✓✓） */
+        .wl-setItemLearnMark {
+          font-size: 12px;
+          opacity: 0.86;
+          padding: 4px 8px;
+          border-radius: 999px;
+          border: 1px solid rgba(255,255,255,0.14);
+          background: rgba(255,255,255,0.04);
+          flex: 0 0 auto;
+          min-width: 34px;
+          text-align: center;
+        }
+
 
         /* ✅ 2026/01/03：依需求「讚 / 倒讚」不要外匡（不顯示圓框/邊框/底色）
            - 說明：wl-senseActionBtn 原本是「icon button」樣式，含 border/background
@@ -1185,6 +1409,165 @@ const t = getLibraryPanelTextFromUiText(uiText, effectiveLang) || {};
           </div>
         )}
 
+
+        {/* ✅ S｜學習本選單 + 測驗入口 */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            flexWrap: "wrap",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+            }}
+          >
+            <span
+              style={{
+                fontSize: 12,
+                opacity: 0.72,
+              }}
+            >
+              {t.setSelectLabel}
+            </span>
+
+            <select
+              value={selectedSetCode || "favorites"}
+              aria-label={t.setSelectAria}
+              title={t.setSelectTitle}
+              onChange={(e) => {
+                const v = (e && e.target && e.target.value) ? e.target.value : "favorites";
+                setSelectedSetCode(v);
+              }}
+              style={{
+                fontSize: 12,
+                padding: "6px 10px",
+                borderRadius: 10,
+                border: "1px solid rgba(255,255,255,0.10)",
+                background: "rgba(255,255,255,0.04)",
+                color: "inherit",
+                outline: "none",
+              }}
+            >
+              {(librarySets || [])
+                .slice()
+                .sort((a, b) => {
+                  const a1 = typeof a?.order_index === "number" ? a.order_index : 999999;
+                  const b1 = typeof b?.order_index === "number" ? b.order_index : 999999;
+                  return a1 - b1;
+                })
+                .map((s) => {
+                  const code = s && s.set_code ? s.set_code : "";
+                  const label = s && s.title ? s.title : "";
+                  return (
+                    <option key={code || label} value={code}>
+                      {label}
+                    </option>
+                  );
+                })}
+            </select>
+
+          {/* ✅ 任務 2：收藏分類下拉（只在「我的收藏」時顯示） */}
+          {isFavoritesSet && (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+              }}
+            >
+              <span
+                style={{
+                  fontSize: 12,
+                  opacity: 0.72,
+                }}
+              >
+                {t.favoriteCategoryLabel || ""}
+              </span>
+
+              <select
+                data-ref="favoritesCategorySelect"
+                value={
+                  selectedFavoriteCategoryId !== null &&
+                  typeof selectedFavoriteCategoryId !== "undefined"
+                    ? String(selectedFavoriteCategoryId)
+                    : ""
+                }
+                aria-label={t.favoriteCategoryAria || ""}
+                title={t.favoriteCategoryTitle || ""}
+                disabled={
+                  !!favoriteCategoriesLoading ||
+                  !hasFavoriteCategories ||
+                  typeof onSelectFavoriteCategory !== "function"
+                }
+                onChange={(e) => {
+                  const v =
+                    e && e.target && typeof e.target.value === "string"
+                      ? e.target.value
+                      : "";
+                  if (typeof onSelectFavoriteCategory === "function") {
+                    onSelectFavoriteCategory(v || null);
+                  }
+                }}
+                style={{
+                  fontSize: 12,
+                  padding: "6px 10px",
+                  borderRadius: 10,
+                  border: "1px solid rgba(255,255,255,0.10)",
+                  background: "rgba(255,255,255,0.04)",
+                  color: "inherit",
+                  outline: "none",
+                  minWidth: 160,
+                }}
+              >
+                {favoriteCategoriesLoading && (
+                  <option value="">{t.loadingText || "…"}</option>
+                )}
+
+                {!favoriteCategoriesLoading && !hasFavoriteCategories && (
+                  <option value="">{t.noCategoriesText || "—"}</option>
+                )}
+
+                {!favoriteCategoriesLoading &&
+                  hasFavoriteCategories &&
+                  (favoriteCategories || []).map((c) => {
+                    const id = c && (c.id ?? null) !== null ? String(c.id) : "";
+                    const name = c && c.name ? String(c.name) : "";
+                    return (
+                      <option key={id || name} value={id}>
+                        {name || "—"}
+                      </option>
+                    );
+                  })}
+              </select>
+            </div>
+          )}
+
+          </div>
+
+          <button
+            type="button"
+            disabled={true}
+            title={t.testDisabledTitle}
+            style={{
+              fontSize: 12,
+              padding: "6px 10px",
+              borderRadius: 10,
+              border: "1px solid rgba(255,255,255,0.08)",
+              background: "rgba(255,255,255,0.02)",
+              color: "inherit",
+              opacity: 0.65,
+              cursor: "not-allowed",
+            }}
+          >
+            {t.testButtonLabel}
+          </button>
+        </div>
+
         <div
           style={{
             fontSize: 12,
@@ -1196,11 +1579,142 @@ const t = getLibraryPanelTextFromUiText(uiText, effectiveLang) || {};
             flexShrink: 0,
           }}
         >
-          {groupedItems.length > 0 ? `${groupedItems.length} ${t.countSuffix}` : ""}
+          {isFavoritesSet && groupedItems.length > 0 ? `${groupedItems.length} ${t.countSuffix}` : ""}
+          {!isFavoritesSet && Array.isArray(activeSetItems) && activeSetItems.length > 0 ? `${activeSetItems.length} ${t.countSuffix}` : ""}
         </div>
       </div>
 
-      {libraryItems.length === 0 ? (
+      {/* ============================================================
+          ✅ 2026/01/10：非 favorites set → 顯示 items（UI 可驗證）
+          - Loading 時：顯示 loading 文案
+          - Empty 時：顯示 empty 文案（不再顯示「not ready」）
+          - 有 items：顯示 item_ref 殼清單
+         ============================================================ */}
+      {!isFavoritesSet ? (
+        <div>
+          {activeSetItemsLoading ? (
+            <div
+              style={{
+                opacity: 0.78,
+                fontSize: 13,
+                lineHeight: 1.65,
+                padding: "10px 2px",
+              }}
+            >
+              {t.setItemsLoadingLine1}
+              <br />
+              {t.setItemsLoadingLine2}
+            </div>
+          ) : activeSetItemsError ? (
+            <div
+              style={{
+                opacity: 0
+              }}
+            >
+              {t.setItemsErrorLine1}
+              <br />
+              {t.setItemsErrorLine2}
+            </div>
+          ) : !activeSetItems || activeSetItems.length === 0 ? (
+            <div
+              style={{
+                opacity: 0.78,
+                fontSize: 13,
+                lineHeight: 1.65,
+                padding: "10px 2px",
+              }}
+            >
+              {t.setItemsEmptyLine1}
+              <br />
+              {t.setItemsEmptyLine2}
+            </div>
+          ) : (
+            <div
+              className="wl-list"
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: 8,
+                maxHeight: "calc(72vh - 32px)",
+                overflowY: "auto",
+                overscrollBehavior: "contain",
+                paddingRight: 2,
+                paddingTop: 0,
+                paddingBottom: 0,
+              }}
+            >
+              {(activeSetItems || []).map((it, idx) => {
+                const label = getSetItemLabel(it);
+                const typeLabel = pickRowField(it, "itemType", "item_type") || "";
+
+                // ✅ 2026/01/12：學習狀態符號（✓ / ✓✓ / 空白）
+                const learnMark = getSetItemLearningMark(it);
+                const learnMarkTitle = getSetItemLearningMarkTitle(learnMark, t);
+
+                return (
+                  <div
+                    key={`setItem__${selectedSetCode || "set"}__${label || idx}__${idx}`}
+                    className="wl-setItemRow"
+                    title={t.setItemRowTitle || ""}
+                    onClick={(e) => handleSetItemClick(e, label)}
+                    style={{
+                      cursor: "pointer",
+                    }}
+                  >
+                    <div
+                      className="wl-setItemLabel"
+                      title={label || ""}
+                      style={{
+                        minWidth: 0,
+                      }}
+                    >
+                      {label}
+                    </div>
+
+                    {/* ✅ 右側區：狀態符號（✓/✓✓）+ type badge（維持原本顯示） */}
+                    <div
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 8,
+                        flex: "0 0 auto",
+                      }}
+                    >
+                      {learnMark ? (
+                        <div
+                          className="wl-setItemLearnMark"
+                          title={learnMarkTitle}
+                          aria-label={learnMarkTitle}
+                        >
+                          {learnMark}
+                        </div>
+                      ) : (
+                        <div
+                          className="wl-setItemLearnMark"
+                          style={{ opacity: 0.0 }}
+                          aria-hidden="true"
+                        >
+                          _
+                        </div>
+                      )}
+
+                      {typeLabel ? (
+                        <div className="wl-setItemBadge" title={String(typeLabel)}>
+                          {String(typeLabel)}
+                        </div>
+                      ) : (
+                        <div className="wl-setItemBadge" style={{ opacity: 0.0 }}>
+                          _
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      ) : activeLibraryItems.length === 0 ? (
         <div
           style={{
             opacity: 0.78,
@@ -1463,11 +1977,11 @@ const t = getLibraryPanelTextFromUiText(uiText, effectiveLang) || {};
 
                             aria-label={t.senseLikeTitle}
 
-                            // DEPRECATED 2026/01/04: hardcoded zh aria-label removed: "標記為熟悉（👍）" 
+                            // DEPRECATED 2026/01/04: hardcoded zh aria-label removed: "標記為熟悉（👍）"
 
                             title={t.senseLikeTitle}
 
-                            // DEPRECATED 2026/01/04: hardcoded zh title removed: "標記為熟悉（👍）" 
+                            // DEPRECATED 2026/01/04: hardcoded zh title removed: "標記為熟悉（👍）"
 
                             onClick={(e) =>
 
@@ -1506,11 +2020,11 @@ const t = getLibraryPanelTextFromUiText(uiText, effectiveLang) || {};
 
                             aria-label={t.senseDislikeTitle}
 
-                            // DEPRECATED 2026/01/04: hardcoded zh aria-label removed: "標記為不熟悉（👎）" 
+                            // DEPRECATED 2026/01/04: hardcoded zh aria-label removed: "標記為不熟悉（👎）"
 
                             title={t.senseDislikeTitle}
 
-                            // DEPRECATED 2026/01/04: hardcoded zh title removed: "標記為不熟悉（👎）" 
+                            // DEPRECATED 2026/01/04: hardcoded zh title removed: "標記為不熟悉（👎）"
 
                             onClick={(e) =>
 

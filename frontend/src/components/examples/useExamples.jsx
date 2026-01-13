@@ -23,6 +23,16 @@
  * - 新增：同步 d.usedRefs / d.missingRefs（若存在）到 hook state，支援 history snapshot 回放
  * - 新增：refreshExamples() 後將 data.usedRefs/data.missingRefs 存入 state 並 return 給 UI render
  *
+ * ✅ 本次異動（2026/01/11 - Phase X-0 surfaceForms 導入管線）
+ * - 新增：buildEffectiveRefs()（預設 passthrough，不改 refs）
+ * - 新增：refreshExamples() 送出前將 refs 轉為 effectiveRefs（passthrough）
+ *
+ * ✅ 本次異動（2026/01/11 - Phase X-1 noun surfaceForms）
+ * - 新增：名詞在 UI 選 caseOpt + articleType=def 時，僅對 kind==="entry" 補 surfaceForms
+ * - 原則：
+ *   - kind==="custom"（手動新增 badge）永遠不動，避免干擾手動 refs 機制
+ *   - surfaceForms 用「加法」：[key, `${article} ${key}`]，避免命中判定過嚴
+ *
  * ⚠️ 開發規範備註
  * - 不刪除既有 function
  * - 不合併 useEffect
@@ -54,6 +64,136 @@ function diagLog(...args) {
   if (!USE_EXAMPLES_PROD_DIAG.enabled) return;
   // eslint-disable-next-line no-console
   console.log(USE_EXAMPLES_PROD_DIAG.tag, ...args);
+}
+
+/**
+ * ✅ Phase X-1：Noun（Definite article）→ surfaceForms helper
+ * 中文功能說明：
+ * - 目前僅支援 articleType="def" 的四格基本冠詞（不處理複數變化、genitiv -s/-es 等詞尾）
+ * - 性別接受值：m/f/n/pl（也容忍 "masc" "fem" "neut" "plural" 之類字首）
+ */
+function normalizeGender(g) {
+  const s = String(g || "").toLowerCase().trim();
+  if (!s) return "";
+  if (s === "m" || s.startsWith("m")) return "m";
+  if (s === "f" || s.startsWith("f")) return "f";
+  if (s === "n" || s.startsWith("n")) return "n";
+  if (s === "pl" || s.startsWith("pl") || s.startsWith("p")) return "pl";
+  return "";
+}
+
+function getDefiniteArticleForNoun({ caseOpt, gender }) {
+  const c = String(caseOpt || "").toLowerCase().trim();
+  const g = normalizeGender(gender);
+
+  // 支援：nominativ/akkusativ/dativ/genitiv（也容忍縮寫 nom/akk/dat/gen）
+  const cc =
+    c === "nom" ? "nominativ"
+    : c === "akk" ? "akkusativ"
+    : c === "dat" ? "dativ"
+    : c === "gen" ? "genitiv"
+    : c;
+
+  if (!cc || !g) return "";
+
+  if (cc === "nominativ") {
+    if (g === "m") return "der";
+    if (g === "f") return "die";
+    if (g === "n") return "das";
+    if (g === "pl") return "die";
+  }
+
+  if (cc === "akkusativ") {
+    if (g === "m") return "den";
+    if (g === "f") return "die";
+    if (g === "n") return "das";
+    if (g === "pl") return "die";
+  }
+
+  if (cc === "dativ") {
+    if (g === "m") return "dem";
+    if (g === "f") return "der";
+    if (g === "n") return "dem";
+    if (g === "pl") return "den";
+  }
+
+  if (cc === "genitiv") {
+    if (g === "m") return "des";
+    if (g === "f") return "der";
+    if (g === "n") return "des";
+    if (g === "pl") return "der";
+  }
+
+  return "";
+}
+
+/**
+ * ✅ Phase X-0/X-1：surfaceForms 導入管線
+ * 中文功能說明：
+ * - buildEffectiveRefs：把 UI 當下的 refs 轉成「這次 refresh 要送出的 refs」
+ * - 原則：
+ *   - kind==="custom"（手動新增 badge）永遠不動，避免干擾手動 refs 機制
+ *   - 目前僅導入：Noun + articleType="def" + caseOpt 有值 → 對 entry refs 補 surfaceForms
+ */
+function buildEffectiveRefs(rawRefs, ctx) {
+  if (!Array.isArray(rawRefs)) return [];
+
+  const pos = String(ctx?.partOfSpeech || "").toLowerCase().trim();
+  const caseOpt = ctx?.caseOpt;
+  const articleType = String(ctx?.articleType || "").toLowerCase().trim();
+  const gender = ctx?.gender;
+
+  // 目前只處理名詞（noun / substantiv）
+  const isNoun =
+    pos === "noun" ||
+    pos === "substantiv" ||
+    pos === "nomen" ||
+    pos === "n";
+
+  // 目前只處理 definite article（def）
+  const isDef = articleType === "def";
+
+  const article = isNoun && isDef && caseOpt
+    ? getDefiniteArticleForNoun({ caseOpt, gender })
+    : "";
+
+  // 沒有可用冠詞 → passthrough（不改）
+  if (!article) return rawRefs;
+
+  return rawRefs.map((ref) => {
+    if (!ref) return ref;
+
+    // ✅ 手動 badge 完全不動
+    if (ref.kind === "custom") return ref;
+
+    // ✅ 只針對 entry refs
+    if (ref.kind !== "entry") return ref;
+
+    const key = typeof ref.key === "string" ? ref.key.trim() : "";
+    if (!key) return ref;
+
+    const phrase = `${article} ${key}`.trim();
+
+    // ✅ surfaceForms 用「加法」，避免命中判定過嚴
+    const nextSurfaceForms = [key, phrase];
+
+    // 若原本已經有 surfaceForms，保守合併（不覆蓋）
+    const existing = Array.isArray(ref.surfaceForms) ? ref.surfaceForms : [];
+    const merged = [...existing, ...nextSurfaceForms]
+      .filter((s) => typeof s === "string" && s.trim().length > 0)
+      .map((s) => s.trim());
+
+    // 去重（保持順序）
+    const dedup = [];
+    for (const s of merged) {
+      if (!dedup.includes(s)) dedup.push(s);
+    }
+
+    return {
+      ...ref,
+      surfaceForms: dedup,
+    };
+  });
 }
 
 export default function useExamples({
@@ -213,6 +353,21 @@ export default function useExamples({
         refs: [],
       };
 
+      // ✅ Phase X-0/X-1：建立 effective refs（Noun + Definite article 時補 surfaceForms）
+      const effectiveRefs = buildEffectiveRefs(
+        Array.isArray(multiRefPayload.refs) ? multiRefPayload.refs : [],
+        {
+          word: d.word,
+          baseForm: d.baseForm,
+          partOfSpeech: d.partOfSpeech,
+          gender: d.gender,
+          senseIndex,
+          explainLang,
+          caseOpt,
+          articleType,
+        }
+      );
+
       const resp = await apiFetch("/api/dictionary/examples", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -238,9 +393,7 @@ export default function useExamples({
 
           // ✅ 新增：多重參考 payload（後端可忽略，不影響舊邏輯）
           multiRef: !!multiRefPayload.multiRefEnabled,
-          refs: Array.isArray(multiRefPayload.refs)
-            ? multiRefPayload.refs
-            : [],
+          refs: Array.isArray(effectiveRefs) ? effectiveRefs : [],
 
           // ⚠️ 既有行為保留（不可刪）
           _ts: Date.now(),
