@@ -282,11 +282,28 @@ export default function ExampleSentence({
   };
 
   // ✅ 2026-01-13: click headword to regenerate (UI-only)
+  // ✅ 2026-01-13 (hotfix): support both signatures
+  // - some upstream may pass onHeadwordClick() (no args)
+  // - some upstream may pass onHeadwordClick(headword) (1 arg)
   const handleHeadwordClick = () => {
     if (!canClickHeadword) return;
     if (!!loading) return;
     if (typeof onHeadwordClick === "function") {
-      onHeadwordClick(safeHeadword);
+      try {
+        // Prefer calling with arg only when upstream expects it
+        if (typeof onHeadwordClick.length === "number" && onHeadwordClick.length >= 1) {
+          onHeadwordClick(safeHeadword);
+        } else {
+          onHeadwordClick();
+        }
+      } catch (e) {
+        // fallback: try no-arg
+        try {
+          onHeadwordClick();
+        } catch (e2) {
+          // ignore
+        }
+      }
     }
   };
 

@@ -8,6 +8,10 @@
  * 異動紀錄：
  * - 2025/12/18：改為以 TTS_PROVIDER 為唯一決策來源；cache key 納入 provider/voice；修正 audioBase64 未定義；回傳 provider 改為實際 provider；保留 legacy ELEVEN_* 但標示 deprecated；強化 log 方便排查
  * - 2026/01/06：累加 TTS 使用量到 profiles.tts_chars_total（read → +add → update），失敗不擋 TTS 主流程；補齊 Service Role Supabase Admin Client；加入 [TTS_PROFILE] 關鍵 log
+ * - 2026/01/13：✅ 修正計費語意：profiles.tts_chars_total 代表「你被 Google 計費的字元」
+ *              - Cache HIT：不記費（不寫 usage / 不累加 profiles）
+ *              - Cache MISS + synth 成功：才記費（寫 usage + 累加 profiles）
+ *              - Cache MISS + synth 失敗：不記費
  *
  * 初始化狀態（Production 排查）：
  * - [/api/tts][init] 會輸出 provider / lang / voice 的「是否存在」與當前值（不輸出 key 內容）
@@ -90,7 +94,8 @@ function getAdminSupabase() {
  * ✅ 功能：確保 profiles row 存在（若沒有就補一筆最小欄位）
  */
 async function ensureProfileRowExists(supabase, userId, email, nowIso) {
-  if (!supabase || !userId) return { ok: false, reason: "missing supabase or userId" };
+  if (!supabase || !userId)
+    return { ok: false, reason: "missing supabase or userId" };
 
   const { data: existing, error: selErr } = await supabase
     .from("profiles")
@@ -124,6 +129,11 @@ async function ensureProfileRowExists(supabase, userId, email, nowIso) {
 
 /**
  * ✅ 功能：累加 profiles.tts_chars_total（不影響主流程：失敗只 log）
+ *
+ * ✅ 2026/01/13（重要）：
+ * - profiles.tts_chars_total 定義為「你被 Google 計費的字元」
+ * - 因此本函式只允許在「Cache MISS 且 synth 成功」時呼叫
+ * - Cache HIT / synth 失敗都不應呼叫（避免誤記費）
  */
 async function addTtsCharsToProfile({ userId, email, addChars, traceId }) {
   const tag = "[TTS_PROFILE]";
@@ -135,18 +145,27 @@ async function addTtsCharsToProfile({ userId, email, addChars, traceId }) {
 
   const supabase = getAdminSupabase();
   if (!supabase) {
-    console.warn(`${tag} skipped: missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY`);
+    console.warn(
+      `${tag} skipped: missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY`
+    );
     return { ok: false, skipped: true, reason: "missing supabase env" };
   }
 
   const nowIso = new Date().toISOString();
 
   // 1) 確保 profiles row 存在
-  const ensureRes = await ensureProfileRowExists(supabase, userId, email, nowIso);
+  const ensureRes = await ensureProfileRowExists(
+    supabase,
+    userId,
+    email,
+    nowIso
+  );
   if (!ensureRes.ok) {
     console.warn(`${tag} ensureProfileRowExists failed`, {
       traceId,
-      detail: ensureRes.error?.message || String(ensureRes.error || ensureRes.reason),
+      detail:
+        ensureRes.error?.message ||
+        String(ensureRes.error || ensureRes.reason),
     });
     return { ok: false, error: ensureRes.error || ensureRes.reason };
   }
@@ -159,7 +178,10 @@ async function addTtsCharsToProfile({ userId, email, addChars, traceId }) {
     .maybeSingle();
 
   if (selErr) {
-    console.warn(`${tag} select failed`, { traceId, detail: selErr.message || String(selErr) });
+    console.warn(`${tag} select failed`, {
+      traceId,
+      detail: selErr.message || String(selErr),
+    });
     return { ok: false, error: selErr };
   }
 
@@ -180,11 +202,19 @@ async function addTtsCharsToProfile({ userId, email, addChars, traceId }) {
     .single();
 
   if (updErr) {
-    console.warn(`${tag} update failed`, { traceId, detail: updErr.message || String(updErr) });
+    console.warn(`${tag} update failed`, {
+      traceId,
+      detail: updErr.message || String(updErr),
+    });
     return { ok: false, error: updErr };
   }
 
-  console.log(`${tag} ok`, { traceId, userId, addChars: inc, tts_chars_total: updated.tts_chars_total });
+  console.log(`${tag} ok`, {
+    traceId,
+    userId,
+    addChars: inc,
+    tts_chars_total: updated.tts_chars_total,
+  });
   return { ok: true, tts_chars_total: updated.tts_chars_total };
 }
 
@@ -266,6 +296,51 @@ function logInitOnce() {
   );
 }
 
+/**
+ * ✅ 功能：計費記錄（你被 Google 計費的字元）
+ *
+ * ✅ 2026/01/13（重要）：
+ * - 只在 Cache MISS 且 synthesize 成功後呼叫
+ * - Cache HIT / synthesize 失敗：不得呼叫
+ *
+ * 說明：
+ * - 你原本是在 cache 判斷之前就 logUsage + addTtsCharsToProfile，
+ *   會造成「Cache HIT 也一直加 tts_chars_total」→ 與“計費字元”的定義衝突
+ * - 此 helper 讓主流程更乾淨，也避免未來又不小心放回 cache 前面
+ */
+async function recordTtsBillingAfterSynthesizeSuccess({
+  authUser,
+  text,
+  req,
+}) {
+  // ★ 記錄用量（若有登入，順便記 userId）
+  logUsage({
+    endpoint: "/api/tts",
+    charCount: text.length,
+    kind: "tts",
+    ip: req.ip,
+    userId: authUser?.id || "",
+    email: authUser?.email || "",
+  });
+
+  // ★ 累加用量到 profiles.tts_chars_total（失敗不擋主流程）
+  // traceId：用來對照後端 log（不需要前端改動）
+  const traceId = `tts_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  try {
+    await addTtsCharsToProfile({
+      userId: authUser?.id || "",
+      email: authUser?.email || "",
+      addChars: text.length,
+      traceId,
+    });
+  } catch (e) {
+    console.warn("[TTS_PROFILE] unexpected error", {
+      traceId,
+      detail: e?.message || String(e),
+    });
+  }
+}
+
 router.post("/", async (req, res) => {
   console.log("[/api/tts] hit");
   logInitOnce();
@@ -289,33 +364,6 @@ router.post("/", async (req, res) => {
 
     const authUser = tryGetAuthUser(req);
 
-    // ★ 記錄用量（若有登入，順便記 userId）
-    logUsage({
-      endpoint: "/api/tts",
-      charCount: text.length,
-      kind: "tts",
-      ip: req.ip,
-      userId: authUser?.id || "",
-      email: authUser?.email || "",
-    });
-
-    // ★ 累加用量到 profiles.tts_chars_total（失敗不擋主流程）
-    // traceId：用來對照後端 log（不需要前端改動）
-    const traceId = `tts_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-    try {
-      await addTtsCharsToProfile({
-        userId: authUser?.id || "",
-        email: authUser?.email || "",
-        addChars: text.length,
-        traceId,
-      });
-    } catch (e) {
-      console.warn("[TTS_PROFILE] unexpected error", {
-        traceId,
-        detail: e?.message || String(e),
-      });
-    }
-
     // ✅ 目前 provider（唯一真相）
     const activeProvider = getActiveTtsProvider();
 
@@ -331,6 +379,16 @@ router.post("/", async (req, res) => {
     const cached = ttsMemoryCache.get(cacheKey);
     if (cached) {
       console.log("[/api/tts] TTS CACHE HIT");
+
+      // ✅ 2026/01/13：Cache HIT 不記費（tts_chars_total = 你被 Google 計費的字元）
+      // - 不呼叫 logUsage
+      // - 不呼叫 addTtsCharsToProfile
+      // - 只回傳 cache 結果
+      //
+      // DEPRECATED：舊行為（HIT 也記費）如下，已移除：
+      // logUsage({...});
+      // addTtsCharsToProfile({...});
+
       return res.json({
         audioContent: cached,
         provider: activeProvider,
@@ -356,14 +414,25 @@ router.post("/", async (req, res) => {
       console.warn(
         `[/api/tts] TTS not available (provider=${provider || activeProvider})`
       );
+
+      // ✅ 2026/01/13：MISS 但 synthesize 失敗 → 不記費（因為你也不會被 Google 計費）
+      // - 不呼叫 logUsage
+      // - 不呼叫 addTtsCharsToProfile
       return res.status(503).json({ error: "TTS not available" });
     }
 
     // DEPRECATED：原本寫入 audioBase64（未定義，會造成 runtime error）
     // ttsMemoryCache.set(cacheKey, audioBase64);
 
-    // ✅ 修正：寫入實際 audioContent
+    // ✅ 修正：寫入實際 audioContent（成功才 cache）
     ttsMemoryCache.set(cacheKey, audioContent);
+
+    // ✅ 2026/01/13：只有「Cache MISS + synth 成功」才記費（你被 Google 計費字元）
+    await recordTtsBillingAfterSynthesizeSuccess({
+      authUser,
+      text,
+      req,
+    });
 
     // DEPRECATED：原本回傳 audioBase64 / provider 固定 elevenlabs
     // return res.json({

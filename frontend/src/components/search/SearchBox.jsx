@@ -41,6 +41,70 @@
  */
 
 import React, { useEffect, useRef } from "react";
+import ExamIcon from "../icons/ExamIcon";
+
+// ============================================================
+// Task 1（UI）：全域模式切換按鈕（Search / Learning）
+// - 需求：兩個按鈕風格一致；亮版線條白；背景同主色調
+// - 注意：SearchBox 本身不改 mode，只呼叫 onEnterSearch/onEnterLearning
+// - 2026/01/13：新增（MVP）
+// ============================================================
+
+const MODE_BTN_SIZE = 34; // 兩顆按鈕一致大小
+const MODE_ICON_SIZE = 19; // 兩個 icon 一致大小（視覺略放大） // 兩個 icon 一致大小
+
+function SearchModeIcon({ size = MODE_ICON_SIZE, ariaLabel = "" }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width={size}
+      height={size}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      role="img"
+      aria-label={ariaLabel || undefined}
+      xmlns="http://www.w3.org/2000/svg"
+      style={{ display: "block" }}
+    >
+      <circle cx="11" cy="11" r="7" />
+      <path d="M20 20L16.6 16.6" />
+    </svg>
+  );
+}
+
+function LearningModeIcon({ size = MODE_ICON_SIZE, ariaLabel = "" }) {
+  // ✅ 依使用者指示：直接參考既有的 ExamIcon（ResultPanel 同款）
+  // - 不自行發明新的 SVG
+  // - 顏色由外層 button 的 color（currentColor）控制
+  return <ExamIcon size={size} color="currentColor" title="" ariaLabel={ariaLabel} />;
+  /*
+  DEPRECATED (2026/01/13):
+  - 原本的 LearningModeIcon（自製 SVG）已停用。
+  - 依使用者指示改為直接使用 ExamIcon，確保與 ResultPanel/單字庫入口 icon 同風格。
+  - 以下保留舊 SVG 供日後比對（勿刪）。
+
+<svg
+      viewBox="0 0 24 24"
+      width={size}
+      height={size}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      role="img"
+      aria-label={ariaLabel || undefined}
+      xmlns="http://www.w3.org/2000/svg"
+      style={{ display: "block" }}
+    >
+      <circle cx="11" cy="11" r="7" />
+      <path d="M20 20L16.6 16.6" />
+    </svg>
+*/
+}
 
 function SearchBox({
   text,
@@ -50,6 +114,14 @@ function SearchBox({
   uiLang,
   onUiLangChange,
   uiText,
+
+  // Task 1：全域模式（由 App.jsx 傳入）
+  appMode, // "search" | "learning"
+  learningContext, // { title, ... }（MVP）
+  onEnterSearch,
+  onEnterLearning,
+  // ✅ 2026/01/13：將 ResultPanel 單字庫入口移到 SearchBox（學習按鈕）
+  onOpenLibrary,
 }) {
   // ============================================================
   // 功能初始化狀態（Production 排查）
@@ -152,6 +224,53 @@ function SearchBox({
     getDefaultAnalyzeLabel(uiLang);
 
   const inputLabel = safeText.inputLabel || "";
+
+  // ============================================================
+  // Task 1（UI）：模式按鈕狀態（高光/灰階）
+  // ============================================================
+  const resolvedMode = appMode === "learning" ? "learning" : "search";
+
+  const canEnterSearch = typeof onEnterSearch === "function";
+  const canEnterLearning = typeof onEnterLearning === "function";
+
+  const modeBtnBaseStyle = {
+    width: MODE_BTN_SIZE,
+    height: MODE_BTN_SIZE,
+    borderRadius: 999,
+    border: "1px solid var(--border-subtle)",
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    lineHeight: 0,
+    padding: 0,
+    cursor: "pointer",
+    userSelect: "none",
+    flex: "0 0 auto",
+  };
+
+  const getModeBtnStyle = (isActive) => {
+    // ✅ 規範：兩顆按鈕同一套規則
+    // - active：背景 var(--accent)；icon 線條白（color=#fff）
+    // - inactive：背景透明；icon 灰階（color=var(--text-muted)）
+    if (isActive) {
+      return {
+        ...modeBtnBaseStyle,
+        background: "var(--accent)",
+        color: "#fff",
+        boxShadow: "rgba(0,0,0,0.10) 0px 6px 16px",
+      };
+    }
+    return {
+      ...modeBtnBaseStyle,
+      background: "var(--accent)",
+      color: "#fff",
+    };
+  };
+
+  const learningTitle =
+    learningContext && typeof learningContext.title === "string"
+      ? learningContext.title
+      : "";
   // 目前下方不要再顯示 UI Language，只保留這個值，不用
   const langLabel = safeText.langLabel || "UI Language";
 
@@ -564,6 +683,7 @@ function SearchBox({
         </div>
       )}
 
+
       <div style={{ display: "flex", gap: 8 }}>
         <input
           type="text"
@@ -584,22 +704,75 @@ function SearchBox({
             outline: "none",
           }}
         />
-        <button
-          onClick={() => triggerAnalyzeWithPreprocess("button")}
-          disabled={loading}
-          style={{
-            padding: "8px 16px",
-            borderRadius: 999,
-            border: "none",
-            background: "var(--accent)",
-            color: "#fff",
-            cursor: loading ? "wait" : "pointer",
-            whiteSpace: "nowrap",
-          }}
-        >
-          {loading ? "Loading..." : analyzeLabel}
-        </button>
+
+        {/* Task 1：模式切換（Search / Learning） */}
+        {(canEnterSearch || canEnterLearning) && (
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            {canEnterSearch && (
+              <button
+                type="button"
+                onClick={() => {
+                  // ✅ 2026/01/13：查詢功能改到放大鏡（使用者要求）
+                  // - 點放大鏡：先切回 search mode（若有提供 handler）
+                  // - 再觸發一次手動查詢（與右側查詢按鈕同邏輯）
+                  if (typeof onEnterSearch === "function") onEnterSearch();
+                  triggerAnalyzeWithPreprocess("searchIcon");
+                }}
+                aria-label="Enter search mode"
+                title="Search"
+                style={getModeBtnStyle(resolvedMode === "search")}
+              >
+                <SearchModeIcon ariaLabel="Search" />
+              </button>
+            )}
+
+            {canEnterLearning && (
+              <button
+                type="button"
+                onClick={() => {
+                  if (typeof onEnterLearning === "function") {
+                    onEnterLearning(learningTitle ? { title: learningTitle } : undefined);
+                  }
+                  // ✅ 2026/01/13：學習按鈕同時作為「單字庫入口」（從 ResultPanel 搬移）
+                  if (typeof onOpenLibrary === "function") {
+                    onOpenLibrary();
+                  }
+                }}
+                aria-label="Enter learning mode"
+                title={learningTitle ? `Learning: ${learningTitle}` : "Learning"}
+                style={getModeBtnStyle(resolvedMode === "learning")}
+              >
+                <LearningModeIcon ariaLabel="Learning" />
+              </button>
+            )}
+          </div>
+        )}
+
+        {/*
+          DEPRECATED (2026/01/13):
+          - 使用者確認放大鏡可完全取代「查詢」按鈕後，移除右側查詢按鈕。
+          - 後續查詢入口：放大鏡按鈕（search icon）與 Enter 鍵。
+          - 為避免 UI/行為回退，保留原按鈕 JSX 供日後回溯（勿刪）。
+        */}
+        {false && (
+          <button
+            onClick={() => triggerAnalyzeWithPreprocess("button")}
+            disabled={loading}
+            style={{
+              padding: "8px 16px",
+              borderRadius: 999,
+              border: "none",
+              background: "var(--accent)",
+              color: "#fff",
+              cursor: loading ? "wait" : "pointer",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {loading ? "Loading..." : analyzeLabel}
+          </button>
+        )}
       </div>
+
 
       {/* 原本這裡有 UI 語言切換，下方查詢匡不再顯示 UI Language */}
     </div>

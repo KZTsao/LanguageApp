@@ -51,6 +51,12 @@
  *      - 新增 entryHeaderOverrideByEntryKey（純 UI state）：用 entryKey(text+pos+senseIndex) 分流記住 header override
  *      - 提供 handleEntrySurfaceChange(surface, meta)：供下游（WordExampleBlock/WordPosInfoNoun）回拋選取的 surface 或 clear(null)
  *      - 將 entryHeaderOverride 與 onEntrySurfaceChange prop 傳入 WordExampleBlock（下游尚未導入時不影響既有行為）
+ *
+ * - 2026-01-13：
+ *   17) Task 1（ResultPanel 收藏分類下拉搬移）— Step B（WordCard 接 slot）
+ *      - 新增 favoriteCategorySelectNode（ReactNode）prop：由上層傳入收藏分類下拉 JSX
+ *      - 將下拉渲染在收藏 ⭐ 的正上方（同一個右側垂直欄位）
+ *      - 不改資料流：select 的 value/onChange 仍由上層控制；WordCard 只負責擺放位置
  */
 
 import { useMemo, useState } from "react";
@@ -78,6 +84,12 @@ function WordCard({
   favoriteDisabled = false,
   onToggleFavorite,
 
+  // ✅ 2026-01-13：Task 1（收藏分類下拉搬移）— 從 ResultPanel 傳入的下拉 UI slot
+  // 中文功能說明：
+  // - WordCard 不負責下拉的資料流，只負責把它擺在「收藏 ⭐ 上方」
+  // - 下拉的 value/onChange 仍由上層（ResultPanel/App）控制
+  favoriteCategorySelectNode,
+
   // ✅ 2026-01-06：Step 4-1（多詞性切換：先打通點擊事件）
   // 中文功能說明：
   // - onSelectPosKey：由上層接住 posKey（例如 "Adverb" / "Adjektiv"），後續 Step 4-2 再做 re-query
@@ -95,7 +107,9 @@ function WordCard({
   // - 目前階段：前端先打通入口（展開下拉分類 + 送出先 console.log），避免一次串太多導致難以除錯
   // - 後續階段：再串後端 API，將 dict_entries.needs_refresh 設為 true 並記錄 issue 分類
   const [reportIssueOpen, setReportIssueOpen] = useState(false);
-  const [reportIssueCategory, setReportIssueCategory] = useState("definition_wrong");
+  const [reportIssueCategory, setReportIssueCategory] = useState(
+    "definition_wrong"
+  );
   const [reportIssueLastAt, setReportIssueLastAt] = useState(null);
 
   /**
@@ -309,7 +323,11 @@ function WordCard({
   // - 這裡只做正規化，不做任何業務邏輯決策
   const posOptionsFromDict = (() => {
     const a =
-      Array.isArray(d.posOptions) ? d.posOptions : Array.isArray(d.pos_options) ? d.pos_options : null;
+      Array.isArray(d.posOptions)
+        ? d.posOptions
+        : Array.isArray(d.pos_options)
+        ? d.pos_options
+        : null;
     if (!Array.isArray(a)) return [];
     return a
       .map((x) => (x == null ? "" : String(x)))
@@ -516,7 +534,9 @@ function WordCard({
   /** 模組：從 localStorage 取得 supabase access token（不引入新 client） */
   function getAccessTokenFromLocalStorage() {
     try {
-      const key = Object.keys(localStorage).find((k) => k.includes("auth-token"));
+      const key = Object.keys(localStorage).find((k) =>
+        k.includes("auth-token")
+      );
       if (!key) return "";
       const raw = JSON.parse(localStorage.getItem(key));
       return raw?.access_token || raw?.currentSession?.access_token || "";
@@ -1137,45 +1157,46 @@ function WordCard({
     onToggleFavorite(entry);
   };
 
-
-const token = getAccessTokenFromLocalStorage();
-// =========================
-// Phase X：回報問題（Report Issue）
-// - 只負責送出 API request，讓 Network 可觀測
-// - 後端是否已接線、是否寫入 DB：交由後端實作（前端不阻擋 UI）
-// =========================
-const sendReportIssue = async (payload) => {
-  try {
-    const res = await fetch("/api/dictionary/reportIssue", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify(payload || {}),
-    });
-
-    // ✅ 不阻擋 UI：僅做可觀測 log（避免影響使用者操作）
-    const ok = !!res && res.ok;
-    let data = null;
+  const token = getAccessTokenFromLocalStorage();
+  // =========================
+  // Phase X：回報問題（Report Issue）
+  // - 只負責送出 API request，讓 Network 可觀測
+  // - 後端是否已接線、是否寫入 DB：交由後端實作（前端不阻擋 UI）
+  // =========================
+  const sendReportIssue = async (payload) => {
     try {
-      data = await res.json();
+      const res = await fetch("/api/dictionary/reportIssue", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(payload || {}),
+      });
+
+      // ✅ 不阻擋 UI：僅做可觀測 log（避免影響使用者操作）
+      const ok = !!res && res.ok;
+      let data = null;
+      try {
+        data = await res.json();
+      } catch (e) {
+        data = null;
+      }
+
+      console.log("[WordCard][reportIssue] api_result", {
+        ok,
+        status: res ? res.status : null,
+        data,
+      });
+
+      return { ok, status: res ? res.status : null, data };
     } catch (e) {
-      data = null;
+      console.error("[WordCard][reportIssue] api_error", e);
+      return { ok: false, status: null, data: null, error: String(e) };
     }
+  };
 
-    console.log("[WordCard][reportIssue] api_result", {
-      ok,
-      status: res ? res.status : null,
-      data,
-    });
-
-    return { ok, status: res ? res.status : null, data };
-  } catch (e) {
-    console.error("[WordCard][reportIssue] api_error", e);
-    return { ok: false, status: null, data: null, error: String(e) };
-  }
-};  // ✅ runtime log：render 時快速看 dict 結構是否含 senses 類
+  // ✅ runtime log：render 時快速看 dict 結構是否含 senses 類
   try {
     console.log("[WordCard][render][dictShape]", {
       text: typeof data?.text === "string" ? data.text : "",
@@ -1229,10 +1250,8 @@ const sendReportIssue = async (payload) => {
             posDisplay={posDisplay}
             onWordClick={onWordClick}
             onSpeak={onSpeak}
-
             // ✅ 2026-01-05：Step 3（多詞性顯示資料流）— 只傳遞，不在此處切換
             posOptions={posOptionsFromDict}
-
             // ✅ 2026-01-06：Step 4-1（多詞性切換）— 先打通事件（可點 pills）
             // - activePosKey：目前選中的詞性 key（用於 UI 標示）
             // - onSelectPosKey：點擊回呼（若上層沒傳，WordCard 仍會 fallback 印 console）
@@ -1242,198 +1261,207 @@ const sendReportIssue = async (payload) => {
         </div>
 
         {/* ✅ 2026-01-09：Phase X（問題回報入口）— 移到收藏 ⭐ 上方，並用 popover 呈現 */}
-        <div style={{ position: "relative", display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
-          {reportIssueAuthed ? (
-            <>
-          <div
-            role="button"
-            tabIndex={0}
-            title={reportIssueHint}
-            onClick={() => {
-              setReportIssueOpen((v) => !v);
-              setReportIssueLastAt(new Date().toISOString());
-              console.log("[WordCard][reportIssue] toggle", {
-                headword,
-                canonicalPos,
-                senseIndex,
-                opened: !reportIssueOpen,
-              });
-            }}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                setReportIssueOpen((v) => !v);
-                setReportIssueLastAt(new Date().toISOString());
-                console.log("[WordCard][reportIssue] toggle(key)", {
-                  headword,
-                  canonicalPos,
-                  senseIndex,
-                  opened: !reportIssueOpen,
-                });
-              }
-            }}
-            style={{
-              fontSize: 12,
-              color: "var(--text-muted)",
-              cursor: "pointer",
-              userSelect: "none",
-              padding: "2px 0",
-              opacity: 0.85,
-              lineHeight: "14px",
-            }}
-          >
-            {reportIssueLabel}
-          </div>
-
-          {reportIssueOpen ? (
+        <div
+          style={{
+            position: "relative",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "flex-end",
+            gap: 6,
+          }}
+        >
+          {/* ✅ 2026-01-13：Task 1（收藏分類下拉搬移）— 下拉放在收藏 ⭐ 上方 */}
+          {!!favoriteCategorySelectNode && (
             <div
+              data-ref="wordCardFavoriteCategorySlot"
               style={{
-                position: "absolute",
-                top: 0,
-                right: 0,
-                transform: "translateY(18px)",
-                zIndex: 50,
-                width: 260,
-                borderRadius: 14,
-                border: "1px solid var(--border-subtle)",
-                background: "var(--card-bg)",
-                boxShadow: "0 10px 30px rgba(0,0,0,0.12)",
-                padding: 10,
+                display: "flex",
+                justifyContent: "flex-end",
+                alignItems: "center",
               }}
             >
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 8 }}>
-                <div style={{ fontSize: 12, color: "var(--text-main)", fontWeight: 600 }}>
-                  {reportIssueTitle}
-                </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setReportIssueOpen(false);
-                    console.log("[WordCard][reportIssue] close(x)", {
-                      headword,
-                      canonicalPos,
-                      senseIndex,
-                      reportIssueCategory,
-                      reportIssueLastAt,
-                    });
-                  }}
+              {favoriteCategorySelectNode}
+            </div>
+          )}
+
+          {reportIssueAuthed ? (
+            <>
+              {/* ✅ 2026-01-13：移除 WordCard 文字問題回報入口（保留 DefinitionBlock 🚩觸發 + popover） */}
+
+              {reportIssueOpen ? (
+                <div
                   style={{
-                    fontSize: 12,
-                    width: 24,
-                    height: 24,
-                    lineHeight: "24px",
-                    borderRadius: 999,
-                    border: "1px solid var(--border-subtle)",
-                    background: "transparent",
-                    color: "var(--text-muted)",
-                    cursor: "pointer",
-                  }}
-                  aria-label={reportIssueCloseLabel}
-                  title={reportIssueCloseLabel}
-
-                >
-                  ×
-                </button>
-              </div>
-
-              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
-                  {reportIssueCategoryLabel}
-                </div>
-
-                <select
-                  value={reportIssueCategory}
-                  onChange={(e) => setReportIssueCategory(e.target.value)}
-                  style={{
-                    fontSize: 12,
-                    padding: "6px 10px",
-                    borderRadius: 12,
+                    position: "absolute",
+                    top: 0,
+                    right: 0,
+                    transform: "translateY(18px)",
+                    zIndex: 50,
+                    width: 260,
+                    borderRadius: 14,
                     border: "1px solid var(--border-subtle)",
                     background: "var(--card-bg)",
-                    color: "var(--text-main)",
-                    width: "100%",
+                    boxShadow: "0 10px 30px rgba(0,0,0,0.12)",
+                    padding: 10,
                   }}
                 >
-                  {reportIssueCategories.map((c) => (
-                    <option key={c.key} value={c.key}>
-                      {c.label}
-                    </option>
-                  ))}
-                </select>
-
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8, marginTop: 4 }}>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setReportIssueOpen(false);
-                      console.log("[WordCard][reportIssue] cancel", {
-                        headword,
-                        canonicalPos,
-                        senseIndex,
-                        reportIssueCategory,
-                        reportIssueLastAt,
-                      });
-                    }}
+                  <div
                     style={{
-                      fontSize: 12,
-                      padding: "6px 10px",
-                      borderRadius: 999,
-                      border: "1px solid var(--border-subtle)",
-                      background: "transparent",
-                      color: "var(--text-muted)",
-                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: 8,
+                      marginBottom: 8,
                     }}
                   >
-                    {reportIssueCancelLabel}
-                  </button>
+                    <div
+                      style={{
+                        fontSize: 12,
+                        color: "var(--text-main)",
+                        fontWeight: 600,
+                      }}
+                    >
+                      {reportIssueTitle}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setReportIssueOpen(false);
+                        console.log("[WordCard][reportIssue] close(x)", {
+                          headword,
+                          canonicalPos,
+                          senseIndex,
+                          reportIssueCategory,
+                          reportIssueLastAt,
+                        });
+                      }}
+                      style={{
+                        fontSize: 12,
+                        width: 24,
+                        height: 24,
+                        lineHeight: "24px",
+                        borderRadius: 999,
+                        border: "1px solid var(--border-subtle)",
+                        background: "transparent",
+                        color: "var(--text-muted)",
+                        cursor: "pointer",
+                      }}
+                      aria-label={reportIssueCloseLabel}
+                      title={reportIssueCloseLabel}
+                    >
+                      ×
+                    </button>
+                  </div>
 
-                  <button
-                    type="button"
-                    onClick={() => {
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                      {reportIssueCategoryLabel}
+                    </div>
 
-// ✅ 目前先 console.log（保留），並同步送出 API 讓 Network 可觀測
-const __reportPayload = {
-  headword,
-  canonicalPos,
-  senseIndex,
-  reportIssueCategory,
-  reportIssueLastAt,
-  // 先把當下的釋義快照帶上，方便後端比對（可選）
-  definition_de: typeof d?.definition_de === "string" ? d.definition_de : "",
-  definition_de_translation:
-    typeof d?.definition_de_translation === "string"
-      ? d.definition_de_translation
-      : "",
-  definition: typeof d?.definition === "string" ? d.definition : "",
-};
+                    <select
+                      value={reportIssueCategory}
+                      onChange={(e) => setReportIssueCategory(e.target.value)}
+                      style={{
+                        fontSize: 12,
+                        padding: "6px 10px",
+                        borderRadius: 12,
+                        border: "1px solid var(--border-subtle)",
+                        background: "var(--card-bg)",
+                        color: "var(--text-main)",
+                        width: "100%",
+                      }}
+                    >
+                      {reportIssueCategories.map((c) => (
+                        <option key={c.key} value={c.key}>
+                          {c.label}
+                        </option>
+                      ))}
+                    </select>
 
-console.log("[WordCard][reportIssue] submit", __reportPayload);
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "flex-end",
+                        gap: 8,
+                        marginTop: 4,
+                      }}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setReportIssueOpen(false);
+                          console.log("[WordCard][reportIssue] cancel", {
+                            headword,
+                            canonicalPos,
+                            senseIndex,
+                            reportIssueCategory,
+                            reportIssueLastAt,
+                          });
+                        }}
+                        style={{
+                          fontSize: 12,
+                          padding: "6px 10px",
+                          borderRadius: 999,
+                          border: "1px solid var(--border-subtle)",
+                          background: "transparent",
+                          color: "var(--text-muted)",
+                          cursor: "pointer",
+                        }}
+                      >
+                        {reportIssueCancelLabel}
+                      </button>
 
-// fire-and-forget：不阻擋 UI（只要 Network 有 request 即可）
-try {
-  void sendReportIssue(__reportPayload);
-} catch (e) {
-  // ignore
-}
-setReportIssueOpen(false);
-                    }}
-                    style={{
-                      fontSize: 12,
-                      padding: "6px 10px",
-                      borderRadius: 999,
-                      border: "1px solid var(--border-subtle)",
-                      background: "var(--accent-soft, #e0f2fe)",
-                      color: "var(--accent, #0369a1)",
-                      cursor: "pointer",
-                    }}
-                  >
-                    {reportIssueSubmitLabel}
-                  </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          // ✅ 目前先 console.log（保留），並同步送出 API 讓 Network 可觀測
+                          const __reportPayload = {
+                            headword,
+                            canonicalPos,
+                            senseIndex,
+                            reportIssueCategory,
+                            reportIssueLastAt,
+                            // 先把當下的釋義快照帶上，方便後端比對（可選）
+                            definition_de:
+                              typeof d?.definition_de === "string"
+                                ? d.definition_de
+                                : "",
+                            definition_de_translation:
+                              typeof d?.definition_de_translation === "string"
+                                ? d.definition_de_translation
+                                : "",
+                            definition:
+                              typeof d?.definition === "string"
+                                ? d.definition
+                                : "",
+                          };
+
+                          console.log("[WordCard][reportIssue] submit", __reportPayload);
+
+                          // fire-and-forget：不阻擋 UI（只要 Network 有 request 即可）
+                          try {
+                            void sendReportIssue(__reportPayload);
+                          } catch (e) {
+                            // ignore
+                          }
+                          setReportIssueOpen(false);
+                        }}
+                        style={{
+                          fontSize: 12,
+                          padding: "6px 10px",
+                          borderRadius: 999,
+                          border: "1px solid var(--border-subtle)",
+                          background: "var(--accent-soft, #e0f2fe)",
+                          color: "var(--accent, #0369a1)",
+                          cursor: "pointer",
+                        }}
+                      >
+                        {reportIssueSubmitLabel}
+                      </button>
+                    </div>
+                  </div>
                 </div>
-              </div>
-            </div>
-          ) : null}
-
+              ) : null}
             </>
           ) : null}
 
@@ -1463,14 +1491,10 @@ setReportIssueOpen(false);
             flexWrap: "wrap",
           }}
         >
-          {data.mode === "phrase" && (
-            <div style={badgeStyle}>{phraseBadgeText}</div>
-          )}
+          {data.mode === "phrase" && <div style={badgeStyle}>{phraseBadgeText}</div>}
           {isSeparable && <div style={badgeStyle}>{separableBadgeText}</div>}
           {isReflexive && <div style={badgeStyle}>{reflexiveBadgeText}</div>}
-          {verbSubtypeBadgeText && (
-            <div style={badgeStyle}>{verbSubtypeBadgeText}</div>
-          )}
+          {verbSubtypeBadgeText && <div style={badgeStyle}>{verbSubtypeBadgeText}</div>}
           {isIrregular && <div style={badgeStyle}>{irregularBadgeText}</div>}
         </div>
       )}
@@ -1494,7 +1518,7 @@ setReportIssueOpen(false);
         />
       ) : null}
 
-      {/* ✅ 2026-01-09：DEPRECATED 釋義右上角入口（已移到收藏上方 popover）
+      {/* ✅ 2026-01-09：DEPRECATED 釋義右上角入口（已移到收藏上方 popover)
           - 保留原碼以利回溯；不再渲染（避免 UI 重複）
           - 若未來想改回釋義區也可復用
       */}
@@ -1552,7 +1576,6 @@ setReportIssueOpen(false);
         onWordClick={onWordClick}
         onSpeak={onSpeak}
         shouldShowGrammar={shouldShowGrammar}
-
         // ✅ 2026-01-12：Phase X（問題回報入口）— Definition 行尾端 🚩 icon（未登入不顯示）
         canReportIssue={reportIssueAuthed}
         reportIssueHint={reportIssueHint}

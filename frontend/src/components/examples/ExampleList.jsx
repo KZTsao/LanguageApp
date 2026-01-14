@@ -167,7 +167,14 @@ export default function ExampleList({
       // ignore
     }
     return null;
-  }, [refControls, headword, multiRefEnabled, refBadgesInline, refActionInline, __initState]);
+  }, [
+    refControls,
+    headword,
+    multiRefEnabled,
+    refBadgesInline,
+    refActionInline,
+    __initState,
+  ]);
 
   const hasExamples = Array.isArray(examples) && examples.length > 0;
   const mainSentence = hasExamples ? examples[0] : "";
@@ -238,8 +245,7 @@ export default function ExampleList({
                     minWidth: 360,
                     maxWidth: 720,
 
-                    background:
-                      "var(--panel-bg, rgba(255, 255, 255, 0.98))",
+                    background: "var(--panel-bg, rgba(255, 255, 255, 0.98))",
                     border: "1px solid rgba(0, 0, 0, 0.12)",
                     boxShadow: "0 10px 28px rgba(0, 0, 0, 0.14)",
 
@@ -280,6 +286,17 @@ export default function ExampleList({
         conversationToggleTooltip={tConversationToggleTooltip}
         // ✅ 2026-01-07：headword 往下傳（例句標題顯示用）
         headword={headword}
+        // ✅ 2026-01-13：headword 可點擊（由 ExampleSentence 端決定是否使用）
+        // - 目的：讓「點 headword badge」可以重新產生例句（不改既有 onRefresh button 行為）
+        // - 注意：此處只做「把 handler 往下傳」；實際 click 行為要由 ExampleSentence 實作
+        onHeadwordClick={() => {
+          try {
+            if (typeof onRefresh === "function") onRefresh();
+          } catch (e) {
+            // ignore
+          }
+        }}
+        headwordClickTooltip={refreshTooltip || ""}
         // ✅ Phase 2-UX：Multi-ref toggle（呈現在例句標題旁）
         multiRefEnabled={multiRefEnabled}
         onToggleMultiRef={onToggleMultiRef}
@@ -289,7 +306,6 @@ export default function ExampleList({
         // DEPRECATED 2026-01-06: refControls 可能在 ExampleSentence 與 ExampleList 兩邊重複 render
         // refControls={refControls}
         refControls={__PASS_REFCONTROLS_TO_EXAMPLESENTENCE ? refControls : null}
-      
         // ✅ 2026-01-10：細分插槽（可選）
         // - 向後相容：ExampleSentence 若未接，也不影響既有行為
         refBadgesInline={refBadgesInline}

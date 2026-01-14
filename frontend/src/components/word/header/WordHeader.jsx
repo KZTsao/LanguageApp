@@ -13,6 +13,11 @@
  *   - posOptions >= 2 時以「可點擊 pills」呈現，點擊會 console.log 並呼叫 onSelectPosKey（若有）
  *   - 保留舊的 "Adverb / Adjektiv" 純文字顯示作為 fallback（向下相容）
  *
+ * - 2026-01-13：Task 1（收藏分類下拉搬移：打通 slot）
+ *   - 新增 favoriteCategorySelectNode（可選，ReactNode）
+ *   - 若父層傳入，會渲染於 WordHeader 主行區塊上方
+ *   - 注意：本檔案不直接依賴 FavoriteStar；下一步由父層（WordCard）把星號與下拉做同欄位垂直堆疊
+ *
  * 功能初始化狀態（Production 排查）：
  * - （本檔案不依賴 env）
  * - 若要觀察點擊事件：請在父層傳入 onSelectPosKey，並用 DevTools Console 觀察：
@@ -37,6 +42,8 @@ function debugWordHeaderInitOnce(props) {
       posOptionsLen: Array.isArray(props?.posOptions) ? props.posOptions.length : 0,
       hasOnSelectPosKey: typeof props?.onSelectPosKey === "function",
       activePosKey: props?.activePosKey || null,
+      // 2026-01-13 Task 1：新增 slot（僅 debug 顯示是否存在）
+      hasFavoriteCategorySelectNode: !!props?.favoriteCategorySelectNode,
     });
   } catch (e) {
     // noop
@@ -226,12 +233,33 @@ function WordHeader({
   posOptions, // ✅ Step 6：新增（多詞性清單，僅顯示）
   onSelectPosKey, // ✅ Step 4-1：新增（可選，點擊事件回呼）
   activePosKey, // ✅ Step 4-1：新增（可選，用於 UI active 標示）
+
+  // ✅ 2026-01-13 Task 1：收藏分類下拉 slot（由父層傳入 JSX）
+  favoriteCategorySelectNode,
 }) {
   // ✅ Step 4-1：初始化 debug（可選）
-  debugWordHeaderInitOnce({ posOptions, onSelectPosKey, activePosKey });
+  debugWordHeaderInitOnce({ posOptions, onSelectPosKey, activePosKey, favoriteCategorySelectNode });
 
   return (
     <>
+      {/* 2026-01-13 Task 1：
+          中文功能說明：父層可傳入「收藏分類下拉」的 JSX，
+          用來在字卡 header 區域內排版（下一步會與 FavoriteStar 同欄位垂直堆疊）
+      */}
+      {!!favoriteCategorySelectNode && (
+        <div
+          data-ref="wordHeaderFavoriteCategorySlot"
+          style={{
+            display: "flex",
+            justifyContent: "flex-end",
+            alignItems: "center",
+            marginBottom: 6,
+          }}
+        >
+          {favoriteCategorySelectNode}
+        </div>
+      )}
+
       <WordHeaderMainLine
         article={article}
         headword={headword}

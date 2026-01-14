@@ -13,6 +13,7 @@
  * - 2025-12-26
  * - 2025-12-30
  * - 2026-01-03
+ * - 2026-01-13
  *
  * 異動說明：
  * 1) 保留：GET /api/library（分頁，DB 唯一真相）
@@ -54,6 +55,11 @@
  *      → 修正程式中把 entry_id 當 number 的地方，改為以 string(UUID) 處理
  *      → 否則 enrichLibraryItemsByDictSenses 會永遠查不到 sense（型別不相容）
  *
+ * 14) 新增（2026-01-13）【任務 2-1】：
+ *    - 新增：GET /api/library/favorites/category-status
+ *      → 回答「某單字在某分類是否已收藏（inCategory）」
+ *      → 嚴格依 user_words unique key 找到 user_words.id，再查 user_word_category_links 判斷
+ *
  * 設計原則：
  * - DB 為唯一真相（source of truth）
  * - guest 不允許收藏（無 token 一律 401）
@@ -89,6 +95,9 @@ const INIT_STATUS = {
 
     // ✅ 新增（2025-12-30）：enrich dict_senses（Production 排查用）
     enrichDictSenses: { enabled: true, lastError: null, lastHitAt: null },
+
+    // ✅ 新增（2026-01-13）：favorites category status（Production 排查用）
+    getFavoriteCategoryStatus: { enabled: true, lastError: null, lastHitAt: null },
   },
 
   // ✅ Supabase admin 初始化狀態
@@ -275,7 +284,6 @@ function parseIsHiddenNullable(v) {
   return parseIsHidden(v);
 }
 
-
 /** ✅ 新增（2026-01-12）：解析 category_id（nullable） */
 function parseCategoryIdNullable(v) {
   if (v == null) return null;
@@ -456,12 +464,10 @@ function validateWordPayload(body) {
   // - 前端可能傳 category_id / categoryId
   // - 若未傳（或 categories 尚未載入），後端可用預設分類策略（我的最愛1）
   const categoryId = parseCategoryIdNullable(body?.category_id ?? body?.categoryId);
-  const __hasRawCategoryId =
-    !(body?.category_id == null && body?.categoryId == null);
+  const __hasRawCategoryId = !(body?.category_id == null && body?.categoryId == null);
   if (__hasRawCategoryId && categoryId == null) {
     return { ok: false, error: "category_id is invalid" };
   }
-
 
   // ✅ 本次：改成 alias 讀取（避免只寫入 lang、gloss 變 null）
   const rawGloss = pickGlossFromPayload(body, senseIndex);
@@ -564,8 +570,6 @@ function buildPagedQueryV2({ supabaseAdmin, userId, limit, cursor, includeStatus
 
   return q;
 }
-
-/** 功能：轉換分頁 response */
 
 /**
  * ✅ 新增（2026-01-12）：以 id 清單建立分頁查詢（給 favorites category 篩選用）
@@ -932,8 +936,7 @@ async function upsertUserWord({
 
       if (error) throw error;
 
-      const rowId =
-        Array.isArray(data) && data[0] && typeof data[0].id === "number" ? data[0].id : null;
+      const rowId = Array.isArray(data) && data[0] && typeof data[0].id === "number" ? data[0].id : null;
 
       return rowId;
     } catch (e) {
@@ -961,13 +964,10 @@ async function upsertUserWord({
 
   if (error) throw error;
 
-  const rowId =
-    Array.isArray(data) && data[0] && typeof data[0].id === "number" ? data[0].id : null;
+  const rowId = Array.isArray(data) && data[0] && typeof data[0].id === "number" ? data[0].id : null;
 
   return rowId;
 }
-
-
 
 /** =========================================================
  * ✅ 任務 3（2026-01-12）：Favorites 分類 link 寫入
@@ -1128,7 +1128,6 @@ function markUnfavoriteAll({ headword, canonicalPos, deletedCount, err }) {
  * Routes
  * ========================= */
 
-
 /** GET /api/library/favorites/categories（Favorites 分類清單） */
 router.get("/favorites/categories", async (req, res, next) => {
   const EP = "getFavoriteCategories";
@@ -1168,6 +1167,104 @@ router.get("/favorites/categories", async (req, res, next) => {
   }
 });
 
+/**
+ * ✅ 新增（2026-01-13）：
+ * GET /api/library/favorites/category-status
+ *
+ * 目的：
+ * - 回答「某單字在某分類是否已收藏（inCategory）」
+ *
+ * 規格：
+ * - 401：缺 token / token 無效
+ * - 400：參數缺漏或型別不對
+ * - 404（可選）：category 不屬於該 user（此處採用 404，較貼近語意）
+ *
+ * Query 參數（允許 alias，避免前端改名造成斷線）：
+ * - headword (string)
+ * - canonical_pos (string) 或 canonicalPos
+ * - sense_index (int) 或 senseIndex
+ * - category_id (int) 或 categoryId
+ *
+ * 回傳：
+ * { ok: true, inCategory: boolean }
+ */
+router.get("/favorites/category-status", async (req, res, next) => {
+  const EP = "getFavoriteCategoryStatus";
+  try {
+    markEndpointHit(EP);
+
+    const supabaseAdmin = getSupabaseAdmin();
+    const userId = await requireUserId(req, supabaseAdmin);
+    if (!userId) return res.status(401).json({ error: "Unauthorized" });
+
+    const headword = String(req.query?.headword ?? "").trim();
+    const canonicalPos = String(req.query?.canonical_pos ?? req.query?.canonicalPos ?? "").trim();
+
+    const rawSenseIndex = req.query?.sense_index ?? req.query?.senseIndex ?? null;
+    const rawCategoryId = req.query?.category_id ?? req.query?.categoryId ?? null;
+
+    if (!headword) return res.status(400).json({ error: "Bad Request: headword is required" });
+    if (!canonicalPos) return res.status(400).json({ error: "Bad Request: canonical_pos is required" });
+
+    const senseIndex = Number.parseInt(String(rawSenseIndex ?? ""), 10);
+    if (!Number.isFinite(senseIndex) || Number.isNaN(senseIndex) || senseIndex < 0) {
+      return res.status(400).json({ error: "Bad Request: sense_index must be a non-negative integer" });
+    }
+
+    const categoryId = Number.parseInt(String(rawCategoryId ?? ""), 10);
+    if (!Number.isFinite(categoryId) || Number.isNaN(categoryId) || categoryId <= 0) {
+      return res.status(400).json({ error: "Bad Request: category_id must be a positive integer" });
+    }
+
+    // ✅ 404（可選）：category 不屬於該 user
+    // - 舊任務已經有 assertValidFavoriteCategoryId（驗證 user_id + not archived）
+    // - 若不合法，這裡採用 404，避免洩漏其他 user 的 category_id 存在與否（同時也符合語意）
+    const vCat = await assertValidFavoriteCategoryId({ supabaseAdmin, userId, categoryId });
+    if (!vCat.ok) {
+      return res.status(404).json({ error: "Not Found: category_id is not accessible" });
+    }
+
+    // 1) 先找 user_words.id（依 unique key：user_id + headword + canonical_pos + sense_index）
+    const { data: uw, error: uwErr } = await supabaseAdmin
+      .from("user_words")
+      .select("id")
+      .eq("user_id", userId)
+      .eq("headword", headword)
+      .eq("canonical_pos", canonicalPos)
+      .eq("sense_index", senseIndex)
+      .limit(1)
+      .maybeSingle();
+
+    if (uwErr) throw uwErr;
+
+    if (!uw?.id) {
+      // 找不到 user_words：代表該單字根本沒收藏（至少此 sense_index 沒有）
+      return res.json({ ok: true, inCategory: false });
+    }
+
+    const userWordId = uw.id;
+
+    // 2) 檢查 links 是否存在（user_id + user_word_id + category_id）
+    const { data: link, error: linkErr } = await supabaseAdmin
+      .from("user_word_category_links")
+      .select("user_word_id")
+      .eq("user_id", userId)
+      .eq("user_word_id", userWordId)
+      .eq("category_id", categoryId)
+      .limit(1)
+      .maybeSingle();
+
+    if (linkErr) throw linkErr;
+
+    const inCategory = !!(link && link.user_word_id);
+
+    return res.json({ ok: true, inCategory });
+  } catch (err) {
+    markEndpointError(EP, err);
+    next(err);
+  }
+});
+
 /** GET /api/library（分頁） */
 router.get("/", async (req, res, next) => {
   const EP = "getPaged";
@@ -1182,7 +1279,6 @@ router.get("/", async (req, res, next) => {
 
     const rawCursor = decodeCursor(req.query.cursor);
     const cursor = isValidCursor(rawCursor) ? rawCursor : null;
-
 
     // ✅ 新增（2026-01-12）：Favorites 分類篩選（category_id）
     // - 不帶 category_id：行為與既有完全一致（回歸保證）
@@ -1241,7 +1337,6 @@ router.get("/", async (req, res, next) => {
 
       return res.json(payload);
     }
-
 
     // ✅ 既有行為：只讀 user_words（快照欄位）
     // ✅ 新增（2025-12-30）：可選讀取狀態欄位（若 DB 尚未 migration，會自動回退）
@@ -1549,10 +1644,7 @@ async function safeGetLearningSetByCode({ supabaseAdmin, userId, setCode }) {
     const code = String(setCode || "").trim();
     if (!code) return null;
 
-    let q = supabaseAdmin
-      .from("learning_sets")
-      .select("id, set_code, title, type, order_index")
-      .eq("set_code", code);
+    let q = supabaseAdmin.from("learning_sets").select("id, set_code, title, type, order_index").eq("set_code", code);
 
     if (!userId) q = q.eq("type", "system");
 

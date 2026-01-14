@@ -20,19 +20,14 @@
  *   2) 測驗/單字庫兩顆 icon：按鈕容器改為 display:flex + alignItems/justifyContent（修正垂直高度不一致）
  * - 2026-01-05：
  *   3) 視覺高度一致：測驗 icon 與單字庫 icon 統一使用 18px（避免看起來一大一小）
- * - 2026-01-05：
  *   4) ✅ 視覺高度再對齊：放大 W 的筆畫範圍（讓單字庫 icon 看起來高度更接近測驗 icon）
- * - 2026-01-05：
  *   5) ✅ AI 免責聲明多國漏接修正：支援 uiText.aiDisclaimerLines（array）與舊版 aiDisclaimerLine1/2（string）
  *   6) ✅ 免責聲明水平對齊：改為與 JSON 區塊一致的 padding/border/radius（白框外但視覺齊）
- * - 2026-01-05：
  *   7) ✅ 單字庫 icon 尺寸改為獨立常數（不再使用 TOOL_ICON_SIZE）
  *   8) ✅ W 不再佔滿版：調整 W path 內縮，讓上下留白更明顯
- * - 2026-01-05：
  *   9) ✅ 單字庫 icon：SVG 內容使用 g transform 非等比縮放（可獨立調整長寬比例，不影響按鈕外框）
  * - 2026-01-06：
  *   1) ✅ 兩顆 icon 視覺垂直對齊：新增統一 icon holder（固定盒 + lineHeight:0），避免 SVG 內容留白差造成「看起來不齊」
- * - 2026-01-06：
  *   2) ✅ POS 切換（多詞性）事件往下傳：插入 WordCard onSelectPosKey handler（先只做 console 驗證，不改既有查詢流程）
  * - 2026-01-07：
  *   1) ✅ 單字庫 icon（W）暫時註解隱藏（保留原碼，未來可恢復）
@@ -41,6 +36,11 @@
  *   1) ✅ 任務 3：收藏分類 UI 低調化，並移到「單字庫 icon」左邊（更直觀、靠近入口）
  *   2) ✅ 原本放在結果區下方的分類下拉改為 DEPRECATED（保留原碼但預設不顯示）
  *   3) ✅ UI 微調：移除「分類」兩字 label（只留 select）
+ * - 2026-01-13：
+ *   1) ✅ 任務 1：收藏分類下拉改由 WordCard slot 顯示在 FavoriteStar 上方（ResultPanel 不再放在單字庫 icon 旁）
+ *   2) ✅ 不改資料流：select value/onChange/disabled 與 onToggleFavorite(category_id) 行為維持
+ * - 2026-01-13：
+ *   3) ✅ 任務 2-1：星號渲染支援「分類內狀態」boolean（inCategory）/ function（舊版 isFavorited(entry)）兩種模式
  *
  * 功能初始化狀態（Production 排查）：
  * - 若 onEnterTestMode 未傳入：點擊測驗 icon 只會 console 提示，不會拋錯
@@ -80,9 +80,6 @@ function ResultPanel({
   favoriteCategoriesLoading = false,
   selectedFavoriteCategoryId,
   onSelectFavoriteCategory,
-
-  // ✅ 新增：單字庫彈窗入口
-  onOpenLibrary,
 
   // ✅ 新增：測驗入口（由 App 管 view）
   onEnterTestMode,
@@ -239,6 +236,11 @@ function ResultPanel({
     minWidth: 88,
     maxWidth: 140,
     cursor: "pointer",
+    // ResultPanel.jsx 裡的 FAVORITE_CATEGORY_INLINE_SELECT_STYLE 加上：
+    textAlign: "right",
+    textAlignLast: "right", // Firefox 常用
+    paddingRight: 2, // 讓右側不要貼邊
+    unicodeBidi: "plaintext",
   };
 
   // ✅ 2026-01-12：分類下拉（低調版）容器（讓它跟 icon 垂直對齊）
@@ -248,6 +250,86 @@ function ResultPanel({
     gap: 6,
     opacity: 0.85,
   };
+
+  // ✅ 2026-01-13：任務 1｜收藏分類下拉搬移到 FavoriteStar 上方（由 WordCard slot 渲染）
+  // 中文功能說明：
+  // - 這個 JSX node 由 ResultPanel 建立（保留原資料流：value/onChange/disabled 都不變）
+  // - 透過 WordCard 的 favoriteCategorySelectNode prop 放到收藏 ⭐ 上方
+  // - 不改收藏資料流：仍由 onToggleFavoriteWithCategory 決定 category_id
+  const favoriteCategorySelectNode =
+    typeof onToggleFavorite === "function" && canFavorite ? (
+      <div style={FAVORITE_CATEGORY_INLINE_WRAP_STYLE}>
+        {/* 2026-01-12: hide label "分類" per UI request */}
+        {/* placeholder */}
+        {/* placeholder */}
+        {/* placeholder */}
+        <select
+          data-ref="resultFavoriteCategorySelect"
+          value={
+            effectiveSelectedFavoriteCategoryId != null &&
+            Number.isFinite(
+              Number.parseInt(String(effectiveSelectedFavoriteCategoryId), 10)
+            )
+              ? String(effectiveSelectedFavoriteCategoryId)
+              : ""
+          }
+          aria-label={t.favoriteCategoryAria || ""}
+          title={t.favoriteCategoryTitle || ""}
+          disabled={
+            !!favoriteCategoriesLoading ||
+            !hasFavoriteCategories ||
+            typeof onSelectFavoriteCategory !== "function"
+          }
+          onChange={(e) => {
+            const v =
+              e && e.target && typeof e.target.value === "string"
+                ? e.target.value
+                : "";
+            const n = Number.parseInt(String(v ?? ""), 10);
+            const nextId = Number.isFinite(n) && n > 0 ? String(n) : "";
+            if (typeof onSelectFavoriteCategory === "function") {
+              // 上游規格：string / null（沿用任務2）
+              onSelectFavoriteCategory(nextId ? nextId : null);
+            }
+          }}
+          style={FAVORITE_CATEGORY_INLINE_SELECT_STYLE}
+          onFocus={(e) => {
+            try {
+              if (e && e.target && e.target.style) {
+                e.target.style.borderBottom =
+                  "1px solid rgba(255,255,255,0.24)";
+                e.target.style.color = "var(--text)";
+              }
+            } catch (err) {}
+          }}
+          onBlur={(e) => {
+            try {
+              if (e && e.target && e.target.style) {
+                e.target.style.borderBottom =
+                  "1px solid rgba(255,255,255,0.10)";
+                e.target.style.color = "var(--text-muted)";
+              }
+            } catch (err) {}
+          }}
+        >
+          {!hasFavoriteCategories && <option value="">(loading)</option>}
+
+          {hasFavoriteCategories &&
+            favoriteCategoryList.map((c) => {
+              const id = c && (c.id ?? c.category_id);
+              const name = c && c.name;
+              const n = Number.parseInt(String(id ?? ""), 10);
+              if (!Number.isFinite(n) || n <= 0 || typeof name !== "string")
+                return null;
+              return (
+                <option key={String(n)} value={String(n)}>
+                  {name}
+                </option>
+              );
+            })}
+        </select>
+      </div>
+    ) : null;
 
   // ✅ 2026-01-06：POS 切換（多詞性）驗證用 handler（先只做 console，不影響查詢流程）
   // 中文功能說明：
@@ -284,6 +366,24 @@ function ResultPanel({
       }
     }
   };
+
+  // ✅ 任務 2-1（2026-01-13）：星號亮/暗來源統一化
+  // 中文功能說明：
+  // - 舊版：isFavorited(entry) function（例如全域收藏 / 或其他策略）
+  // - 新版（分類即時連動）：上游 App 可能直接傳 boolean（inCategory），例如 isFavorited={inCategory}
+  // - 這裡做兼容：boolean 優先，其次 function(entry)，避免破壞既有行為
+  function resolveFavoriteActive(entry) {
+    if (typeof isFavorited === "boolean") return isFavorited;
+    if (typeof isFavorited === "function") {
+      try {
+        return !!isFavorited(entry);
+      } catch (err) {
+        console.error("[ResultPanel] isFavorited(entry) error", err);
+        return false;
+      }
+    }
+    return false;
+  }
 
   let wordItems = [];
   if (result) {
@@ -351,27 +451,6 @@ function ResultPanel({
     (typeof t.quizTitle === "string" && t.quizTitle.trim()) ||
     (typeof t.quiz === "string" && t.quiz.trim()) ||
     "";
-
-  // ✅ 中文功能說明：測驗入口 click handler（不中斷、可觀察）
-  // ✅ 2026-01-07：目前 UI 測驗 icon 已改作單字庫入口，但此 function 不刪除（保留既有行為與未來恢復測驗用）
-  const handleEnterTestModeClick = () => {
-    console.log("[ResultPanel] enter test mode clicked", {
-      hasHandler: typeof onEnterTestMode === "function",
-    });
-    if (typeof onEnterTestMode === "function") onEnterTestMode();
-  };
-
-  // ✅ 2026-01-07：測驗 icon 改作單字庫入口 click handler（不中斷、可觀察）
-  // 中文功能說明：
-  // - 需求：把小考 icon 暫時改成「連到單字庫功能」
-  // - 作法：不改 icon 視覺，只改 onClick → 呼叫 onOpenLibrary
-  // - Production 排查：印出 hasHandler，避免使用者點了沒反應時難追
-  const handleOpenLibraryFromExamClick = () => {
-    console.log("[ResultPanel] exam icon → open library clicked", {
-      hasHandler: typeof onOpenLibrary === "function",
-    });
-    if (typeof onOpenLibrary === "function") onOpenLibrary();
-  };
 
   return (
     <div
@@ -482,199 +561,6 @@ function ResultPanel({
                 </span>
               )}
             </div>
-          </div>
-
-          {/* 右側：分類（在單字庫 icon 左邊，低調） + 單字庫 icon */}
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            {/* ✅ 2026-01-12：分類下拉移到單字庫 icon 左邊（低調版） */}
-            <div style={FAVORITE_CATEGORY_INLINE_WRAP_STYLE}>
-              {/* 2026-01-12: hide label "分類" per UI request */}
-              {/* placeholder */}
-              {/* placeholder */}
-              {/* placeholder */}
-              <select
-                data-ref="resultFavoriteCategorySelect"
-                value={
-                  effectiveSelectedFavoriteCategoryId != null &&
-                  Number.isFinite(
-                    Number.parseInt(
-                      String(effectiveSelectedFavoriteCategoryId),
-                      10
-                    )
-                  )
-                    ? String(effectiveSelectedFavoriteCategoryId)
-                    : ""
-                }
-                aria-label={t.favoriteCategoryAria || ""}
-                title={t.favoriteCategoryTitle || ""}
-                disabled={
-                  !!favoriteCategoriesLoading ||
-                  !hasFavoriteCategories ||
-                  typeof onSelectFavoriteCategory !== "function"
-                }
-                onChange={(e) => {
-                  const v =
-                    e && e.target && typeof e.target.value === "string"
-                      ? e.target.value
-                      : "";
-                  const n = Number.parseInt(String(v ?? ""), 10);
-                  const nextId = Number.isFinite(n) && n > 0 ? String(n) : "";
-                  if (typeof onSelectFavoriteCategory === "function") {
-                    // 上游規格：string / null（沿用任務2）
-                    onSelectFavoriteCategory(nextId ? nextId : null);
-                  }
-                }}
-                style={FAVORITE_CATEGORY_INLINE_SELECT_STYLE}
-                onFocus={(e) => {
-                  try {
-                    if (e && e.target && e.target.style) {
-                      e.target.style.borderBottom =
-                        "1px solid rgba(255,255,255,0.24)";
-                      e.target.style.color = "var(--text)";
-                    }
-                  } catch (err) {}
-                }}
-                onBlur={(e) => {
-                  try {
-                    if (e && e.target && e.target.style) {
-                      e.target.style.borderBottom =
-                        "1px solid rgba(255,255,255,0.10)";
-                      e.target.style.color = "var(--text-muted)";
-                    }
-                  } catch (err) {}
-                }}
-              >
-                {!hasFavoriteCategories && <option value="">(loading)</option>}
-
-                {hasFavoriteCategories &&
-                  favoriteCategoryList.map((c) => {
-                    const id = c && (c.id ?? c.category_id);
-                    const name = c && c.name;
-                    const n = Number.parseInt(String(id ?? ""), 10);
-                    if (
-                      !Number.isFinite(n) ||
-                      n <= 0 ||
-                      typeof name !== "string"
-                    )
-                      return null;
-                    return (
-                      <option key={String(n)} value={String(n)}>
-                        {name}
-                      </option>
-                    );
-                  })}
-              </select>
-            </div>
-
-            {/* ✅ 2026-01-07：此 icon 暫時改作「單字庫入口」，不改 icon 外觀，只改 onClick */}
-            <button
-              onClick={handleOpenLibraryFromExamClick}
-              aria-label={testLabel || undefined}
-              title={testLabel || undefined}
-              className="icon-button sound-button"
-              style={{
-                width: 28,
-                height: 28,
-                borderRadius: 8,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                lineHeight: 0, // ✅ 2026-01-06：避免 inline baseline 造成視覺偏移
-                padding: 0, // ✅ 保持純置中
-              }}
-            >
-              <span
-                style={{
-                  width: ICON_HOLDER_SIZE,
-                  height: ICON_HOLDER_SIZE,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  lineHeight: 0,
-                  transform: `translateY(${EXAM_ICON_NUDGE_Y}px)`,
-                }}
-              >
-                <ExamIcon
-                  size={EXAM_ICON_SIZE}
-                  ariaLabel={testLabel || ""}
-                  title={testLabel || ""}
-                />
-              </span>
-            </button>
-
-            {/*
-              DEPRECATED 2026-01-07：單字庫 icon 暫時註解隱藏（保留原碼，不刪除）
-              中文功能說明：
-              - 需求：先把單字庫 icon 隱藏（未來可能會用到）
-              - 作法：整段 button 以 JSX 註解包住，保留原碼與 SVG（含 deprecated 區塊）
-              - 未來恢復：解除註解即可（不需要重寫）
-            */}
-            {/*
-            <button
-              onClick={() => {
-                if (typeof onOpenLibrary === "function") onOpenLibrary();
-              }}
-              aria-label={libraryLabel || "Open library"}
-              title={libraryLabel || undefined}
-              className="icon-button sound-button"
-              style={{
-                width: 28,
-                height: 28,
-                borderRadius: 8,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                lineHeight: 0,
-                padding: 0,
-              }}
-            >
-              <span
-                style={{
-                  width: LIB_ICON_WIDTH,
-                  height: ICON_HOLDER_SIZE,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  lineHeight: 0,
-                  transform: `translateY(${LIB_ICON_NUDGE_Y}px)`,
-                }}
-              >
-                <svg
-                  viewBox="0 0 24 24"
-                  width={LIB_ICON_WIDTH}
-                  height={LIB_ICON_HEIGHT}
-                  preserveAspectRatio="none"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.8"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  xmlns="http://www.w3.org/2000/svg"
-                  style={{
-                    display: "block",
-                    width: LIB_ICON_WIDTH,
-                    height: LIB_ICON_HEIGHT,
-                  }}
-                >
-                  <g transform="translate(0 3) scale(0.78 0.86)">
-                    <path
-                      d="M7 5H19V19H7Q4 19 4 16V8Q4 5 7 5Z"
-                      fill="currentColor"
-                      stroke="none"
-                    />
-                    <path
-                      d="M8.2 8.6L10.1 15.4L12 12.0L13.9 15.4L15.8 8.6"
-                      fill="none"
-                      stroke="var(--card-bg)"
-                      strokeWidth="2.0"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                  </g>
-                </svg>
-              </span>
-            </button>
-            */}
           </div>
         </div>
       )}
@@ -812,13 +698,10 @@ function ResultPanel({
                     onWordClick={onWordClick}
                     onSpeak={handleSpeak}
                     uiLang={uiLang}
-                    favoriteActive={
-                      typeof isFavorited === "function"
-                        ? isFavorited(entry)
-                        : false
-                    }
+                    favoriteActive={resolveFavoriteActive(entry)}
                     favoriteDisabled={!canFavorite}
                     onToggleFavorite={onToggleFavoriteWithCategory}
+                    favoriteCategorySelectNode={favoriteCategorySelectNode}
                     onSelectPosKey={(clickedPosKey, meta) => {
                       const activePosKey =
                         meta && typeof meta.activePosKey === "string"
