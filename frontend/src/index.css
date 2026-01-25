@@ -256,6 +256,44 @@ select {
   justify-content: center;
 }
 
+
+/* ==========================
+   POS pills (WordHeader)
+   - pill 顏色：亮暗版都使用既有 theme tokens
+   ========================== */
+
+.pos-pill {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  line-height: 16px;
+  border: 1px solid var(--border-subtle);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+  transition: background 120ms ease, border-color 120ms ease, opacity 120ms ease, color 120ms ease;
+}
+
+.pos-pill:hover {
+  opacity: 0.92;
+}
+
+.pos-pill:active {
+  opacity: 0.85;
+}
+
+.pos-pill.pos-pill--active {
+  color: var(--text-main);
+  background: var(--chip-bg);
+  border-color: var(--chip-border);
+}
+
+.pos-pill:focus,
+.pos-pill:focus-visible {
+  outline: none;
+}
+
 .sound-icon {
   width: 16px;
   height: 16px;
@@ -354,3 +392,247 @@ select {
     box-shadow: 0 0 0 10px rgba(255, 214, 102, 0);
   }
 }
+
+/* ======================================================================
+   Word Library Panel styles (scoped)
+   - moved from WordLibraryPanel.jsx <style>
+   - all selectors are prefixed with .wl-panel to avoid global leakage
+   ====================================================================== */
+
+        .wl-panel .wl-list {
+          scrollbar-width: thin;
+          scrollbar-color: rgba(255,255,255,0.22) transparent;
+        }
+        .wl-panel .wl-list::-webkit-scrollbar {
+          width: 10px;
+        }
+        .wl-panel .wl-list::-webkit-scrollbar-track {
+          background: transparent;
+        }
+        .wl-panel .wl-list::-webkit-scrollbar-thumb {
+          background: rgba(255,255,255,0.18);
+          border-radius: 999px;
+          border: 2px solid transparent;
+          background-clip: content-box;
+        }
+        .wl-panel .wl-list::-webkit-scrollbar-thumb:hover {
+          background: rgba(255,255,255,0.26);
+          border: 2px solid transparent;
+          background-clip: content-box;
+        }
+
+        .wl-panel .wl-item {
+          transition: background 120ms ease, border-color 120ms ease, transform 80ms ease;
+        }
+        .wl-panel .wl-item:hover {
+          background: rgba(255,255,255,0.05);
+          border-color: rgba(255,255,255,0.16);
+        }
+
+        .wl-panel .wl-headwordLine {
+          display: flex;
+          align-items: baseline;
+          gap: 8px;
+          min-width: 0;
+        }
+        .wl-panel .wl-headwordBtn {
+          border: none;
+          background: transparent;
+          color: inherit;
+          padding: 0;
+          margin: 0;
+          cursor: pointer;
+          text-align: left;
+          min-width: 0;
+        }
+        .wl-panel .wl-headwordBtn:hover {
+          text-decoration: underline;
+        }
+
+        .wl-panel .wl-posInline {
+          font-size: 12px;
+          opacity: 0.66;
+          padding: 3px 7px;
+          border-radius: 999px;
+          border: 1px solid rgba(255,255,255,0.10);
+          background: rgba(255,255,255,0.03);
+          white-space: nowrap;
+          flex: 0 0 auto;
+        }
+
+        .wl-panel .wl-favBtn {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          border: 1px solid rgba(255,255,255,0.10);
+          background: rgba(255,255,255,0.03);
+          padding: 8px 10px;
+          margin: 0;
+          cursor: pointer;
+          border-radius: 12px;
+          user-select: none;
+          transition: background 120ms ease, border-color 120ms ease, opacity 120ms ease;
+        }
+        .wl-panel .wl-favBtn:hover {
+          background: rgba(255,255,255,0.06);
+          border-color: rgba(255,255,255,0.16);
+        }
+        .wl-panel .wl-favBtn[data-disabled="1"] {
+          cursor: not-allowed;
+          opacity: 0.45;
+        }
+        .wl-panel .wl-favText {
+          font-size: 12px;
+          opacity: 0.76;
+        }
+
+        .wl-panel .wl-senseRow {
+          display: grid;
+          grid-template-columns: 28px 1fr auto;
+          align-items: center;
+          gap: 10px;
+          padding: 2px 0;
+        }
+        .wl-panel .wl-senseIdx {
+          font-size: 16px;
+          opacity: 0.70;
+          font-weight: 800;
+          width: 28px;
+          text-align: center;
+          flex: 0 0 auto;
+        }
+        .wl-panel .wl-senseGloss {
+          font-size: 16px;
+          opacity: 0.90;
+          line-height: 1.35;
+          min-width: 0;
+          white-space: normal;
+        }
+        .wl-panel .wl-senseStatus {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          flex: 0 0 auto;
+        }
+
+        .wl-panel .wl-senseActionBtn {
+          /* ✅ theme-aware color (light=orange, dark=blue) */
+          color: var(--text-muted);   /* 亮版灰 */
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          padding: 6px;
+          border-radius: 10px;
+
+          /* ✅ per requirement: no outer frame */
+          border: none;
+          background: transparent;
+          box-shadow: none;
+
+          cursor: pointer;
+          user-select: none;
+          transition: background 120ms ease, opacity 120ms ease, transform 80ms ease, color 120ms ease;
+        }
+
+        /* prevent browser default active/focus turning icons dark */
+        .wl-panel .wl-senseActionBtn:focus,
+        .wl-panel .wl-senseActionBtn:focus-visible {
+          outline: none;
+          box-shadow: none;
+          color: var(--accent);
+        }
+
+        .wl-panel .wl-senseActionBtn:hover {
+          background: var(--accent-soft);
+          opacity: 0.95;
+        }
+
+        .wl-panel .wl-senseActionBtn:active {
+          transform: scale(0.98);
+          background: var(--accent-soft);
+          color: var(--accent);
+        }
+
+        .wl-panel .wl-senseActionBtn--muted {
+          opacity: 0.20;
+        }
+
+        /* LIGHT: active uses accent (orange) */
+        :root:not(.dark) .wl-panel .wl-senseActionBtn--active,
+        .theme-light .wl-panel .wl-senseActionBtn--active {
+          color: var(--accent);
+          opacity: 1;
+        }
+
+        /* DARK: match app button language (blue bg + white icon) */
+        :root.dark .wl-panel .wl-senseActionBtn,
+        .theme-dark .wl-panel .wl-senseActionBtn,
+        .dark .wl-panel .wl-senseActionBtn {
+          color: rgba(255, 255, 255, 0.85);
+        }
+
+        :root.dark .wl-panel .wl-senseActionBtn:hover,
+        .theme-dark .wl-panel .wl-senseActionBtn:hover,
+        .dark .wl-panel .wl-senseActionBtn:hover {
+          background: var(--accent-soft);
+          color: #fff;
+        }
+
+        :root.dark .wl-panel .wl-senseActionBtn:active,
+        .theme-dark .wl-panel .wl-senseActionBtn:active,
+        .dark .wl-panel .wl-senseActionBtn:active {
+          background: var(--accent-soft);
+          color: #fff;
+        }
+
+        :root.dark .wl-panel .wl-senseActionBtn--active,
+        .theme-dark .wl-panel .wl-senseActionBtn--active,
+        .dark .wl-panel .wl-senseActionBtn--active {
+          color: #fff;
+          opacity: 1;
+        }
+
+        .wl-panel .wl-setItemRow {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 10px;
+          padding: 10px 12px;
+          border-radius: 14px;
+          border: 1px solid rgba(255,255,255,0.10);
+          background: rgba(0,0,0,0.08);
+        }
+        .wl-panel .wl-setItemRow:hover {
+          background: rgba(255,255,255,0.06);
+          border-color: rgba(255,255,255,0.18);
+        }
+        .wl-panel .wl-setItemLabel {
+          font-size: 15px;
+          font-weight: 700;
+          letter-spacing: 0.15px;
+          opacity: 0.92;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        .wl-panel .wl-setItemBadge {
+          font-size: 12px;
+          opacity: 0.66;
+          padding: 4px 8px;
+          border-radius: 999px;
+          border: 1px solid rgba(255,255,255,0.10);
+          background: rgba(255,255,255,0.03);
+          flex: 0 0 auto;
+        }
+
+        .wl-panel .wl-setItemLearnMark {
+          font-size: 12px;
+          opacity: 0.86;
+          padding: 4px 8px;
+          border-radius: 999px;
+          border: 1px solid rgba(255,255,255,0.14);
+          background: rgba(255,255,255,0.04);
+          flex: 0 0 auto;
+          min-width: 34px;
+          text-align: center;
+        }

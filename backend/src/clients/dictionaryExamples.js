@@ -12,10 +12,13 @@
  * - 2026-01-05：Phase 2-1：加入 refs/usedRefs/missingRefs/notes schema 與 prompt 強制；補初始化狀態（Production 排查）；所有回傳向後相容且 usedRefs/missingRefs 保證存在
  * - 2026-01-05：Phase 2-2：新增 kind:"custom" 後驗檢查（case-insensitive includes）；以後驗結果覆蓋 custom refs 的 used/missing，非 custom 仍保留 LLM 回報
  * - 2026-01-11：Phase 2-UX：強化「德文名詞大小寫」硬規則，避免 LLM 產生 hund 這類錯誤用法；新增後驗檢查 + 單次 retry（不改動 used/missing 邏輯）
+ * - 2026-01-14：Usage：將 Groq response.usage 以 _llmUsage 形式回傳（供 route 記錄真實 tokens）
+ * - 2026-01-14：Usage：在本檔案中直接記錄例句生成 tokens（logLLMUsage；只算最後一次回傳給使用者的那次）
  */
 
 const client = require("./groqClient");
 const { mapExplainLang } = require("./dictionaryUtils");
+const { logLLMUsage } = require("../utils/usageLogger");
 
 // =============================
 // 功能初始化狀態（Production 排障用）
@@ -59,6 +62,54 @@ function getInitStatus() {
 // 若你想在 production 立即看到狀態，可用環境變數開啟（避免平常噪音）
 if (process.env.DEBUG_INIT_STATUS === "1") {
   console.log("[dictionaryExamples] initStatus =", getInitStatus());
+}
+
+// =============================
+// Usage（回傳 _llmUsage 供 route 記帳）
+// =============================
+
+/**
+ * 中文功能說明：從 LLM response 抽取 usage（避免 SDK 差異造成 undefined）
+ * - 期望格式：{ prompt_tokens, completion_tokens, total_tokens }
+ * - 若不存在，回傳 null
+ */
+function pickLLMUsage(resp) {
+  try {
+    const u = resp && typeof resp === "object" ? resp.usage : null;
+    if (!u || typeof u !== "object") return null;
+
+    const total = Number(u.total_tokens);
+    const prompt = Number(u.prompt_tokens);
+    const completion = Number(u.completion_tokens);
+
+    // total_tokens 是最重要的判斷（usageLogger.logLLMUsage 也會看這個）
+    if (!Number.isFinite(total) || total <= 0) return null;
+
+    return {
+      prompt_tokens: Number.isFinite(prompt) ? prompt : 0,
+      completion_tokens: Number.isFinite(completion) ? completion : 0,
+      total_tokens: total,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 中文功能說明：把 _llmUsage 掛到回傳結果上（不影響前端 UI；route 可用來記帳）
+ */
+function attachLLMUsage(resultObj, usage) {
+  const r = resultObj && typeof resultObj === "object" ? resultObj : {};
+  const u = usage && typeof usage === "object" ? usage : null;
+  // 僅在有 total_tokens 的時候掛上，避免污染資料
+  if (
+    !u ||
+    !Number.isFinite(Number(u.total_tokens)) ||
+    Number(u.total_tokens) <= 0
+  ) {
+    return r;
+  }
+  return { ...r, _llmUsage: u };
 }
 
 // =============================
@@ -142,7 +193,9 @@ function escapeRegExp(input) {
  * 中文功能說明：判斷是否是「單字」ref（不含空白）
  */
 function isSingleTokenRefKey(refKey) {
-  return typeof refKey === "string" && refKey.trim() && !/\s/.test(refKey.trim());
+  return (
+    typeof refKey === "string" && refKey.trim() && !/\s/.test(refKey.trim())
+  );
 }
 
 /**
@@ -247,13 +300,13 @@ function buildNounCapitalizationRuleText(refKeys) {
   // 不想太冗長：只列出最多 10 個 noun refs
   const display = nounRefs.slice(0, 10);
   const bullet =
-    display.length > 0
-      ? display.map((k) => `- ${k}`).join("\n")
-      : "(keine)";
+    display.length > 0 ? display.map((k) => `- ${k}`).join("\n") : "(keine)";
 
   const extra =
     nounRefs.length > 10
-      ? `\n(weitere ${nounRefs.length - 10} Nomen-Refs sind ebenfalls zu beachten)`
+      ? `\n(weitere ${
+          nounRefs.length - 10
+        } Nomen-Refs sind ebenfalls zu beachten)`
       : "";
 
   return (
@@ -384,10 +437,23 @@ function applyPostCheckToRefs({
  *
  * Phase 2（向後相容擴充）：
  * - refs?: Array<{ key: string, kind?: "custom"|"entry"|"grammar", ... }> | string[]
+ *
+ * Usage（可選）：
+ * - userId?: string
+ * - email?: string
+ * - endpoint?: string
+ * - requestId?: string
  */
 async function generateExamples(params = {}) {
   const {
     word,
+
+    // ✅ Usage：由上游傳入（可選）
+    userId = "",
+    email = "",
+    endpoint = "/api/dictionary/examples",
+    requestId = "",
+
     baseForm,
     partOfSpeech,
     gender,
@@ -413,7 +479,46 @@ async function generateExamples(params = {}) {
     kinds: normalizedRefs.slice(0, 10).map((r) => r.kind || ""),
   });
 
-  const safeWord = String(word || baseForm || "").trim();
+  // =============================
+  // Usage 記帳：只計算「最後一次回傳給使用者」的那次 tokens
+  // - 無 retry：記 usage1
+  // - 有 retry：只記 usage2（避免重複計算）
+  // =============================
+  function logFinalLLMUsage(usage) {
+    try {
+      if (!userId) return;
+
+      const u = usage && typeof usage === "object" ? usage : null;
+      const total = Number(u && u.total_tokens);
+      if (!Number.isFinite(total) || total <= 0) return;
+
+      logLLMUsage({
+        endpoint: endpoint || "/api/dictionary/examples",
+        provider: "groq",
+        model: "llama-3.3-70b-versatile",
+        usage: {
+          prompt_tokens: Number(u.prompt_tokens) || 0,
+          completion_tokens: Number(u.completion_tokens) || 0,
+          total_tokens: total,
+        },
+        userId,
+        email,
+        ip: "",
+        requestId: requestId || "",
+      });
+    } catch (e) {
+      // best-effort：不要影響主要流程
+      console.warn(
+        "[dictionaryExamples] logFinalLLMUsage failed:",
+        e && e.message ? e.message : String(e)
+      );
+    }
+  }
+
+  const safeWord = (String(word || "").trim() || String(baseForm || "").trim());
+  // ✅ 2026/01/14：避免 headword 與 baseForm 同時影響 LLM
+  // - 預設只用 word（headword/表面型）
+  // - 僅在 word 為空時才 fallback 用 baseForm（供未來「清除 headword」機制使用）
   if (!safeWord) {
     return {
       word: "",
@@ -513,7 +618,7 @@ Output format (MUST be valid JSON, no comments, no trailing commas):
 
 {
   "word": "original word form you received",
-  "baseForm": "base form if provided or inferred, otherwise repeat the word",
+  "baseForm": "repeat the word",
   "partOfSpeech": "a short POS label, e.g. Nomen / Verb / Adjektiv, or empty string",
   "gender": "der / die / das / '' for nouns, otherwise empty string",
   "senseIndex": 0,
@@ -536,7 +641,6 @@ Output format (MUST be valid JSON, no comments, no trailing commas):
 Bitte erzeuge GENAU 1 deutschen Beispielsatz für das Wort:
 
 - Wort: "${safeWord}"
-- Grundform (baseForm): "${baseForm || ""}"
 - Wortart (partOfSpeech): "${partOfSpeech || ""}"
 - Genus (gender): "${gender || ""}"
 
@@ -666,8 +770,9 @@ Anforderungen:
   /**
    * ✅ 2026/01/11：把 LLM content parse + normalize 成統一結構
    * - 目的：retry 時也能重用
+   * - 2026/01/14：支援傳入 usage，並把 usage 掛在 _llmUsage
    */
-  function parseAndNormalizeLLMContent({ content, noteOnParseFail }) {
+  function parseAndNormalizeLLMContent({ content, noteOnParseFail, usage }) {
     if (!content) {
       return { ok: false, error: "no_content", result: null };
     }
@@ -680,7 +785,10 @@ Anforderungen:
       return {
         ok: false,
         error: "json_parse_error",
-        result: buildFallbackResult(noteOnParseFail || "json_parse_error"),
+        result: attachLLMUsage(
+          buildFallbackResult(noteOnParseFail || "json_parse_error"),
+          usage
+        ),
       };
     }
 
@@ -762,7 +870,7 @@ Anforderungen:
       notes: parsedWithRefs.notes,
     };
 
-    return { ok: true, error: "", result };
+    return { ok: true, error: "", result: attachLLMUsage(result, usage) };
   }
 
   /**
@@ -786,24 +894,32 @@ Anforderungen:
     });
 
     const content = response.choices[0]?.message?.content;
+    const usage1 = pickLLMUsage(response);
 
     if (process.env.DEBUG_LLM_DICT === "1") {
       console.log("[dictionary] Raw LLM Result =", content);
+      if (usage1) console.log("[dictionary] LLM usage =", usage1);
     }
 
     // parse & normalize
     const firstParsed = parseAndNormalizeLLMContent({
       content,
       noteOnParseFail: "json_parse_error",
+      usage: usage1,
     });
 
     if (!firstParsed.ok && firstParsed.result) {
       // json parse fail or fallback already built
+      logFinalLLMUsage(usage1);
       return firstParsed.result;
     }
 
     if (!firstParsed.ok) {
-      return buildFallbackResult(firstParsed.error || "no_content");
+      logFinalLLMUsage(usage1);
+      return attachLLMUsage(
+        buildFallbackResult(firstParsed.error || "no_content"),
+        usage1
+      );
     }
 
     const firstResult = firstParsed.result;
@@ -830,6 +946,7 @@ Anforderungen:
 
     // 若沒有 violations，直接回傳
     if (retryDecision.ok) {
+      logFinalLLMUsage(usage1);
       return firstResult;
     }
 
@@ -849,24 +966,29 @@ Anforderungen:
     });
 
     const retryContent = retryResp.choices[0]?.message?.content;
+    const usage2 = pickLLMUsage(retryResp);
 
     if (process.env.DEBUG_LLM_DICT === "1") {
       console.log("[dictionary] Raw LLM Retry Result =", retryContent);
+      if (usage2) console.log("[dictionary] LLM retry usage =", usage2);
     }
 
     const retryParsed = parseAndNormalizeLLMContent({
       content: retryContent,
       noteOnParseFail: "retry_json_parse_error",
+      usage: usage2,
     });
 
     if (!retryParsed.ok && retryParsed.result) {
       // retry parse fail -> fallback already built
+      logFinalLLMUsage(usage2);
       return retryParsed.result;
     }
 
     if (!retryParsed.ok) {
       // retry got no content -> fallback
-      return buildFallbackResult("retry_no_content");
+      logFinalLLMUsage(usage2);
+      return attachLLMUsage(buildFallbackResult("retry_no_content"), usage2);
     }
 
     const retryResult = retryParsed.result;
@@ -904,6 +1026,7 @@ Anforderungen:
       retryResult.notes = prevNotes ? `${prevNotes} | ${add}` : add;
     }
 
+    logFinalLLMUsage(usage2);
     return retryResult;
   } catch (err) {
     console.error("[dictionary] Groq example error:", err.message);

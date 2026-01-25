@@ -1,4 +1,4 @@
-// frontend/src/components/WordPosInfo.jsx
+// frontend/src/components/posInfo/WordPosInfo.jsx
 //
 // 詞性資訊總管（WordPosInfo）
 // ------------------------------------------------------
@@ -45,10 +45,20 @@ export default function WordPosInfo({
   onEntrySurfaceChange,
 
   onWordClick,
+
+  // ✅ POS info collapse (global state passed from parent; optional fallback)
+  posInfoCollapseState,
+  onTogglePosInfoCollapse,
 }) {
   if (!partOfSpeech || !baseForm) return null;
 
   const pos = (partOfSpeech || "").trim();
+
+  // ✅ collapse state key: use raw partOfSpeech (keep stable)
+  const __posKey = (partOfSpeech || "").trim();
+  const __isCollapsed = !!(posInfoCollapseState && typeof posInfoCollapseState === "object"
+    ? posInfoCollapseState[__posKey]
+    : false);
 
   let currentLang = "zh-TW";
   if (uiLang && uiText[uiLang]) currentLang = uiLang;
@@ -251,4 +261,4 @@ export default function WordPosInfo({
       return renderPlaceholder("其他詞性");
   }
 }
-// frontend/src/components/WordPosInfo.jsx
+// frontend/src/components/posInfo/WordPosInfo.jsx

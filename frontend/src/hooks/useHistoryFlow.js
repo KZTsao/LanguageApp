@@ -156,7 +156,8 @@ export function useHistoryFlow({
       return [cur, ...rest].slice(0, HISTORY_LIMIT);
     });
 
-    setHistoryIndex(-1);
+    // ✅ 禁止回到 live（-1）：命中歷史後一定落在最新一筆（index=0）
+    setHistoryIndex(0);
 
     if (isSearchDebugEnabled) {
       // eslint-disable-next-line no-console
@@ -167,6 +168,12 @@ export function useHistoryFlow({
   };
 
   // ✅ 歷史上一頁/下一頁
+  //
+  // ✅ 2026-01-17（Task 0-1 / UI label 計算對齊點）：
+  // - historyIndex === -1 代表「live」（不在回放任何一筆）
+  // - Prev 會前往 historyIndex + 1（更舊那筆；往陣列尾巴）
+  // - Next 會前往 historyIndex - 1（往更新方向；本任務禁止回 live，所以最小停在 0）
+  // 注意：以上僅為語意註解，行為以既有 clamp + applyHistoryItemToUI 為準。
   const goPrevHistory = () => {
     if (!history.length) return;
     const nextIndex = clamp(historyIndex + 1, 0, history.length - 1);
@@ -177,9 +184,8 @@ export function useHistoryFlow({
 
   const goNextHistory = () => {
     if (!history.length) return;
-    const nextIndex = clamp(historyIndex - 1, -1, history.length - 1);
+    const nextIndex = clamp(historyIndex - 1, 0, history.length - 1);
     setHistoryIndex(nextIndex);
-    if (nextIndex === -1) return;
     const item = history[nextIndex];
     applyHistoryItemToUI(item, { syncInput: false, source: "history-nav-next" });
   };
@@ -189,7 +195,7 @@ export function useHistoryFlow({
     [history.length, historyIndex]
   );
   const canNextHistory = useMemo(
-    () => history.length > 0 && historyIndex > -1,
+    () => history.length > 0 && historyIndex > 0,
     [history.length, historyIndex]
   );
 
@@ -207,7 +213,8 @@ export function useHistoryFlow({
       const next = prev.filter((_, i) => i !== idx);
 
       if (next.length === 0) {
-        setHistoryIndex(-1);
+        // ✅ 禁止回到 live（-1）：命中歷史後一定落在最新一筆（index=0）
+    setHistoryIndex(0);
         if (typeof setResult === "function") setResult(null);
       } else {
         const newIndex = clamp(idx, 0, next.length - 1);
@@ -238,3 +245,4 @@ export function useHistoryFlow({
     clearCurrentHistoryItem,
   };
 }
+// frontend/src/hooks/useHistoryFlow.js

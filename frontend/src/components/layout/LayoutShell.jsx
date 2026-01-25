@@ -141,6 +141,66 @@ function getAccessTokenFromLocalStorage() {
   }
 }
 
+/** 模組：Support Admin allowlist（前端顯示入口用；不影響後端權限） */
+function getSupportAdminAllowlist() {
+  // ✅ 避免 import.meta 在某些 runtime 解析下出現 undefined
+  // 優先序：window.__SUPPORT_ADMIN_EMAILS → localStorage → Vite env
+  try {
+    let raw = "";
+
+    // 1) window 注入（臨時測試）
+    try {
+      const w = typeof window !== "undefined" ? window : null;
+      if (w && w.__SUPPORT_ADMIN_EMAILS) {
+        raw = String(w.__SUPPORT_ADMIN_EMAILS || "");
+      }
+    } catch {}
+
+    // 2) localStorage（臨時測試）
+    try {
+      const w = typeof window !== "undefined" ? window : null;
+      if (!raw && w && w.localStorage) {
+        const v = w.localStorage.getItem("SUPPORT_ADMIN_EMAILS");
+        if (v) raw = String(v);
+      }
+    } catch {}
+
+    // 3) Vite env（正式）
+    try {
+      if (!raw) {
+        const __hasImportMeta = (() => {
+          try {
+            return typeof import.meta !== "undefined";
+          } catch (e) {
+            return false;
+          }
+        })();
+        if (__hasImportMeta && import.meta && import.meta.env) {
+          raw = String(import.meta.env.VITE_SUPPORT_ADMIN_EMAILS || "");
+        }
+      }
+    } catch {}
+
+    return String(raw)
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+  } catch (e) {
+    return [];
+  }
+}
+
+function isSupportAdminEmail(email) {
+  try {
+    if (!email) return false;
+    const allow = getSupportAdminAllowlist();
+    if (!allow.length) return false;
+    return allow.includes(String(email));
+  } catch {
+    return false;
+  }
+}
+
 /** 模組：Header 導覽區外框（查詢 / 單字庫） */
 function getNavPillWrapStyle() {
   return {
@@ -184,9 +244,26 @@ function LayoutShell({
   // ====== 2025/12/18 新增：接收 view / onViewChange（由 App.jsx 控制頁面狀態） ======
   view,
   onViewChange,
+  interactionDisabled,
   children,
 }) {
   const { user, profile, signOut } = useAuth();
+
+  // ============================================================
+  // Init Gating（2026/01/24）
+  // - 上層 App.jsx 會在初始化期間設 window.__appInit.blockInteraction = true
+  // - 本元件可接受 interactionDisabled prop（未接線也可用 window fallback）
+  // - 目的：避免初始化中點擊任何 header 入口造成初始失敗
+  // ============================================================
+  const __interactionDisabled = (() => {
+    try {
+      const w = typeof window !== "undefined" ? window : null;
+      const fromWin = Boolean(w?.__appInit?.blockInteraction);
+      return Boolean(interactionDisabled || fromWin);
+    } catch {
+      return Boolean(interactionDisabled);
+    }
+  })();
 
   /** 模組：選單開關（右上角頭像選單） */
   const [menuOpen, setMenuOpen] = useState(false);
@@ -517,6 +594,7 @@ function LayoutShell({
 
   /** 模組：亮暗切換（只呼叫上層 onThemeChange；真正套用 <html>.dark 在 App.jsx） */
   const handleToggleTheme = () => {
+    if (__interactionDisabled) return;
     const cur = theme === "dark" ? "dark" : "light";
     const next = cur === "dark" ? "light" : "dark";
     if (typeof onThemeChange === "function") onThemeChange(next);
@@ -524,16 +602,19 @@ function LayoutShell({
 
   /** 模組：語言切換（只回傳上層 onUiLangChange） */
   const handleUiLangChange = (nextLang) => {
+    if (__interactionDisabled) return;
     if (typeof onUiLangChange === "function") onUiLangChange(nextLang);
   };
 
   /** 模組：頁面切換（只呼叫上層 onViewChange；不自行持有 view 狀態） */
   const handleGoSearch = () => {
+    if (__interactionDisabled) return;
     if (typeof onViewChange === "function") onViewChange("search");
   };
 
   /** 模組：頁面切換（單字庫入口） */
   const handleGoLibrary = () => {
+    if (__interactionDisabled) return;
     if (typeof onViewChange === "function") onViewChange("library");
   };
 
@@ -587,6 +668,7 @@ function LayoutShell({
               </span>
 
               <select
+                disabled={__interactionDisabled}
                 value={uiLang}
                 onChange={(e) => handleUiLangChange(e.target.value)}
                 style={{
@@ -611,6 +693,7 @@ function LayoutShell({
               <LoginButton uiLang={uiLang} />
 
               <button
+                disabled={__interactionDisabled}
                 onClick={handleToggleTheme}
                 style={{
                   padding: "6px 10px",
@@ -698,6 +781,7 @@ function LayoutShell({
               </span>
 
               <select
+                disabled={__interactionDisabled}
                 value={uiLang}
                 onChange={(e) => handleUiLangChange(e.target.value)}
                 style={{
@@ -723,6 +807,43 @@ function LayoutShell({
             key={user.id}
             style={{ display: "flex", alignItems: "center", gap: 12 }}
           >
+
+            {/* ✅ 2026/01/25：Support Admin 入口（僅 allowlist email 可見） */}
+            {isSupportAdminEmail(email) ? (
+              <a
+                href="/support-admin"
+                onClick={(e) => {
+                  if (__interactionDisabled) {
+                    e.preventDefault();
+                    return;
+                  }
+                }}
+                style={{
+                  height: 28,
+                  padding: "0 10px",
+                  borderRadius: 10,
+                  // ⬇️ 這行：改成淺灰框線（不要主題橘）
+                  border: "1px solid var(--border-subtle, #ddd)",
+                  // ⬇️ 這行：白底
+                  background: "#fff",
+                  // ⬇️ 這行：黑字
+                  color: "#000",
+                  textDecoration: "none",
+                  fontSize: 12,
+                  // ⬇️ 這行：字重稍降，質感會好一點
+                  fontWeight: 700,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  whiteSpace: "nowrap",
+                }}
+                
+                title="客服管理"
+                aria-label="客服管理"
+              >
+                客服管理
+              </a>
+            ) : null}
+
             <div
               ref={menuWrapRef}
               style={{
@@ -745,6 +866,7 @@ function LayoutShell({
               <button
                 type="button"
                 onClick={() => {
+                  if (__interactionDisabled) return;
                   const next = !menuOpen;
                   setMenuOpen(next);
                   if (next) fetchUsageSummary();
@@ -852,6 +974,7 @@ function LayoutShell({
             </div>
 
             <button
+              disabled={__interactionDisabled}
               onClick={handleToggleTheme}
               style={{
                 padding: "6px 10px",

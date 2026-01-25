@@ -38,7 +38,8 @@ const {
   generateConversation,
 } = require("../clients/dictionaryClient");
 
-const { logUsage } = require("../utils/usageLogger");
+// ✅ 2026/01/14：加入 logLLMUsage，用於記錄 /api/dictionary/examples 的真實 token
+const { logUsage, logLLMUsage } = require("../utils/usageLogger");
 
 // =========================
 // refs 診斷開關（預設 false）
@@ -297,9 +298,20 @@ router.post("/examples", async (req, res) => {
         : [];
 
     // ======== LLM 呼叫 ========
+    // ✅ 2026/01/14：避免 headword 與 baseForm 同時影響 LLM
+    // - 預設：只用 headword（word）來生成例句
+    // - 若未來做「清除 headword」：可讓前端把 word 留空，此時會 fallback 用 baseForm
+    const llmWord =
+      typeof word === "string" && word.trim()
+        ? word.trim()
+        : typeof baseForm === "string"
+        ? baseForm.trim()
+        : "";
+
     const rawResult = await generateExamples({
-      word,
-      baseForm,
+      word: llmWord,
+      baseForm: "", // 不讓 baseForm 參與生成（避免雙重影響）
+
       partOfSpeech,
       gender,
       senseIndex,
@@ -403,7 +415,7 @@ router.post("/examples", async (req, res) => {
       console.error("[dictionaryRoute] refs post-check failed:", e);
     }
 
-    // ✅ 用量紀錄（若沒有登入也可寫匿名，不阻塞）
+    // ✅ 用量紀錄（估算；若沒有登入也可寫匿名，不阻塞）
     try {
       await logUsage({
         authUserId: authUser ? authUser.id : null,
@@ -427,6 +439,32 @@ router.post("/examples", async (req, res) => {
       });
     } catch (e) {
       console.warn("[dictionaryRoute] logUsage examples failed:", e);
+    }
+
+    // ✅ 2026/01/14：真實 LLM tokens 記錄（必須有 rawResult._llmUsage.total_tokens）
+    // - 只在有登入時歸戶（避免匿名亂記）
+    // - 不阻塞主要回應（try/catch）
+    try {
+      const usage =
+        rawResult && typeof rawResult === "object" ? rawResult._llmUsage : null;
+
+      if (authUser && authUser.id && usage && typeof usage === "object") {
+        await logLLMUsage({
+          endpoint: "/api/dictionary/examples",
+          provider: "groq",
+          model: "llama-3.3-70b-versatile",
+          usage,
+          // ✅ 只在有登入時歸戶
+          userId: authUser.id,
+          email: authUser.email || "",
+          // requestId：保留（若未提供就留空）
+          requestId: req.headers["x-request-id"] || "",
+          // ip：你不在意也沒關係，但保留欄位避免後續事件表缺值
+          ip: req.ip || "",
+        });
+      }
+    } catch (e) {
+      console.warn("[dictionaryRoute] logLLMUsage examples failed:", e);
     }
 
     const elapsedMs = Date.now() - startedAt;
@@ -509,7 +547,6 @@ router.post("/conversation", async (req, res) => {
   }
 });
 
-
 // =========================
 // 回報問題 API（Example Report）
 // POST /api/dictionary/examples/report
@@ -539,7 +576,6 @@ router.post("/examples/report", async (req, res) => {
     if (!authUser || !authUser.id) {
       return res.status(401).json({ ok: false, error: "unauthorized" });
     }
-
 
     const {
       exampleId,
@@ -586,7 +622,8 @@ router.post("/examples/report", async (req, res) => {
     // - 若前端已提供 reason（字串），就把它當作 baseReason.note
     const nowIso = new Date().toISOString();
     const reasonObj = {
-      note: typeof reason === "string" && reason.trim() ? reason.trim() : finalNote || "",
+      note:
+        typeof reason === "string" && reason.trim() ? reason.trim() : finalNote || "",
       context: context || payload || null,
       snapshot: snapshot || null,
       requestMeta: {
@@ -649,7 +686,6 @@ router.post("/reportIssue", async (req, res) => {
     if (!authUser || !authUser.id) {
       return res.status(401).json({ ok: false, error: "unauthorized" });
     }
-
 
     const {
       headword,
@@ -790,7 +826,6 @@ router.post("/reportIssue", async (req, res) => {
     return res.status(500).json({ ok: false, error: "report_issue_failed" });
   }
 });
-
 
 module.exports = router;
 // backend/src/routes/dictionaryRoute.js

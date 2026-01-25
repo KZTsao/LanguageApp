@@ -415,6 +415,8 @@ function logUsage({
   endpoint,
   charCount,
   kind = "llm",
+  usedSeconds = 0,
+  meta = null,
   ip = "",
   userId = "",
   email = "",
@@ -429,6 +431,8 @@ function logUsage({
     charCount: charCount || 0,
     estTokens: estimatedTokens,
     kind,
+    usedSeconds: 0,
+    meta: meta || null, // [Task4] guard: meta defaulted in params
     ip,
     userId: userId || "",
     email: email || "",
@@ -529,6 +533,7 @@ function logLLMUsage({
   userId = "",
   email = "",
   requestId = "",
+  meta = null,
 }) {
   // 必須有 total_tokens 才算有效
   if (!usage || typeof usage.total_tokens !== "number") {
@@ -543,6 +548,8 @@ function logLLMUsage({
     date,
     endpoint,
     kind,
+    usedSeconds: 0,
+    meta: meta || null, // [Task4] guard: meta defaulted in params
     ip,
     userId: userId || "",
     email: email || "",

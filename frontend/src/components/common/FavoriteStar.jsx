@@ -31,6 +31,9 @@
  *   - 不再出現 "Favorite" / "Unfavorite"
  *   - aria-label / title 若未傳入，保持為 undefined（不 fallback）
  *   - 多國責任完全交由外層
+ *
+ * - 2026/01/16
+ *   M｜disabled 不改變顏色/透明度（只禁止點擊）
  */
 
 // frontend/src/components/common/FavoriteStar.jsx
@@ -75,28 +78,27 @@ export default function FavoriteStar(props) {
   };
 
   // =========================
-  // 視覺狀態（既有）
+  // 視覺狀態（調整：disabled 不改變顏色/透明度）
   // =========================
-  const color = disabled
-    ? "var(--text-muted)"
-    : active
-    ? "var(--accent)"
-    : "var(--text-muted)";
+  const color = active ? "var(--accent)" : "var(--text-muted)";
 
   return (
     <button
       type="button"
       onClick={handleClick}
       aria-label={props.ariaLabel} // ✅ 完全由外層決定
-      title={props.title}         // ✅ 完全由外層決定
+      title={props.title} // ✅ 完全由外層決定
       style={{
         background: "none",
         border: "none",
         padding: 0,
         lineHeight: 1,
+
+        // ✅ disabled 只影響「能不能點」
         cursor: disabled ? "default" : "pointer",
-        opacity: disabled ? 0.45 : 1,
+        opacity: 1, // ✅ 不再變淡
         pointerEvents: disabled ? "none" : "auto",
+
         userSelect: "none",
       }}
     >

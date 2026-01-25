@@ -57,9 +57,24 @@
  *      - 新增 favoriteCategorySelectNode（ReactNode）prop：由上層傳入收藏分類下拉 JSX
  *      - 將下拉渲染在收藏 ⭐ 的正上方（同一個右側垂直欄位）
  *      - 不改資料流：select 的 value/onChange 仍由上層控制；WordCard 只負責擺放位置
+ *
+ * - 2026-01-16：
+ *   18) B( UI ) Step 1：收藏 pending → 單字粒度 disable（不做交易邏輯）
+ *      - 新增 favoriteWordKey / isFavoritePending（可選）props：由上層（ResultPanel/Controller）提供
+ *      - WordCard 僅負責：pending 時 disabled + 擋 onClick（不打 API、不 reload、不 rollback、不 optimistic）
+ *
+ * - 2026-01-16：
+ *   19) B(UI) Step 2：本地瞬間反向燈號（不改上層 state/prop 結構）
+ *      - 新增 optimisticFavoriteActive（僅 UI override）：按下星號先立即反向顯示
+ *      - 上層 favoriteActive 更新後，自動清除 override（回歸真實狀態）
+ *
+ * - 2026-01-17：
+ *   20) 歷史紀錄清除 UI 調整：將「點擊清除該筆記錄」改為 WordCard 右上角 close（×）icon
+ *      - 新增 canClearHistory / onClearHistoryItem（可選）props
+ *      - WordCard 僅負責顯示與點擊回呼，不自行操作 history state
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import WordHeader from "./header/WordHeader";
 import WordHeaderMainLinePlural from "./header/WordHeaderMainLinePlural";
 import WordDefinitionBlock from "./definition/WordDefinitionBlock";
@@ -76,13 +91,36 @@ function WordCard({
   data,
   labels = {},
   uiLang,
+  theme,
   onWordClick,
   onSpeak,
+
+  // ✅ 2026-01-20：Task F2（Favorites/Learning examples 快取回寫）— 上下游接線
+  // 中文功能說明：
+  // - mode / learningContext：用於判斷是否為 favorites learning replay，並關閉 auto-refresh
+  // - onExamplesResolved：例句補齊成功後回寫 favoritesResultCache（由 App.jsx 提供）
+  // - examplesAutoRefreshEnabled：上游已計算好的 flag（favorites learning 時為 false）
+  mode,
+  learningContext,
+  onExamplesResolved,
+  examplesAutoRefreshEnabled,
+
+  // ✅ 2026-01-17：歷史紀錄清除（UI 入口搬到 WordCard 右上角 close icon）
+  // - canClearHistory：是否顯示 close icon（由上層決定）
+  // - onClearHistoryItem：點擊後回呼（由上層處理清除邏輯）
+  canClearHistory,
+  onClearHistoryItem,
 
   // ✅ 收藏統一由 App.jsx 管理：WordCard 不再碰 auth/localStorage
   favoriteActive,
   favoriteDisabled = false,
   onToggleFavorite,
+
+  // ✅ 2026-01-16：B(UI) pending 鎖（由上層傳入；WordCard 只負責 disable/阻擋點擊）
+  // - favoriteWordKey：上層已決定的 wordKey（同字在不同面板要一致）
+  // - isFavoritePending(wordKey)：回傳該 wordKey 是否 pending
+  favoriteWordKey,
+  isFavoritePending,
 
   // ✅ 2026-01-13：Task 1（收藏分類下拉搬移）— 從 ResultPanel 傳入的下拉 UI slot
   // 中文功能說明：
@@ -100,6 +138,27 @@ function WordCard({
   const d = data.dictionary || {};
 
   const [senseIndex, setSenseIndex] = useState(0);
+
+  // ✅ 2026-01-16：B(UI) Step 2：本地瞬間反向燈號（override）
+  // - null：不 override，完全跟隨上層 favoriteActive
+  // - boolean：暫時覆蓋 UI 顯示（按下星號立刻反向）
+  const [optimisticFavoriteActive, setOptimisticFavoriteActive] = useState(null);
+
+  // ✅ 上層 favoriteActive 一旦更新（代表 reload/交易完成或狀態已對齊），立刻清除 override
+  useEffect(() => {
+    setOptimisticFavoriteActive(null);
+  }, [favoriteActive]);
+
+  // ✅ 2026-01-16：B(UI) pending 計算（WordCard 不自行生成 wordKey；只吃上層提供）
+  const favPending = useMemo(() => {
+    try {
+      if (!favoriteWordKey) return false;
+      if (typeof isFavoritePending !== "function") return false;
+      return !!isFavoritePending(favoriteWordKey);
+    } catch (e) {
+      return false;
+    }
+  }, [favoriteWordKey, isFavoritePending]);
 
   // ✅ 2026-01-09：Phase X（問題回報入口）
   // 中文功能說明：
@@ -617,9 +676,11 @@ function WordCard({
 
   // ✅ 收藏 UI：完全由 App props 決定
   // ✅ 新增：canonicalPosInvalid 時直接 disable（避免 unknown 寫入 DB）
+  // ✅ 2026-01-16：favPending 時也要 disable（同字交易中不可再點）
   const favDisabled =
     !!favoriteDisabled ||
     canonicalPosInvalid ||
+    favPending ||
     typeof onToggleFavorite !== "function";
 
   /**
@@ -1054,6 +1115,40 @@ function WordCard({
    * 功能：收藏點擊 handler（確保一定帶 entry 給上層）
    */
   const handleFavoriteClick = () => {
+    // ✅ 2026-01-16：B(UI) pending 時 UI 必須擋住（即使某些情況下 disabled 沒生效也不應觸發）
+    if (favPending) {
+      try {
+        console.log("[WordCard][fav] blocked_by_pending", {
+          favoriteWordKey: favoriteWordKey || null,
+        });
+      } catch (e) {}
+      return;
+    }
+
+    // ✅ 2026-01-16：B(UI) Step 2：不符合送出條件就不要先反向燈號（避免 UI 假動作）
+    if (favDisabled || canonicalPosInvalid) {
+      try {
+        console.log("[WordCard][fav] blocked_by_disabled_or_invalid", {
+          favDisabled: !!favDisabled,
+          canonicalPosInvalid: !!canonicalPosInvalid,
+        });
+      } catch (e) {}
+      return;
+    }
+
+    if (typeof onToggleFavorite !== "function") {
+      try {
+        console.log("[WordCard][fav] blocked_no_handler", {});
+      } catch (e) {}
+      return;
+    }
+
+    // ✅ 2026-01-16：B(UI) Step 2：先立刻反向燈號（純 UI override，不動上層 state 結構）
+    setOptimisticFavoriteActive((prev) => {
+      const base = prev == null ? !!favoriteActive : !!prev;
+      return !base;
+    });
+
     console.log("[WordCard][fav] clicked");
     const entry = buildFavoriteEntry();
 
@@ -1135,6 +1230,8 @@ function WordCard({
         ...s,
         lastError: "canonicalPos is invalid (empty or unknown)",
       }));
+      // ✅ 若後面被擋住，回復 override（避免 UI 停在假狀態）
+      setOptimisticFavoriteActive(null);
       return;
     }
 
@@ -1143,6 +1240,7 @@ function WordCard({
         ...s,
         lastError: "onToggleFavorite is not a function",
       }));
+      setOptimisticFavoriteActive(null);
       return;
     }
 
@@ -1151,6 +1249,7 @@ function WordCard({
         ...s,
         lastError: "favorite entry headword is empty",
       }));
+      setOptimisticFavoriteActive(null);
       return;
     }
 
@@ -1219,19 +1318,30 @@ function WordCard({
       has_definition_de_array: Array.isArray(d?.definition_de),
 
       // ✅ 2026-01-05：posOptions（多詞性）存在與否（Production 排查）
-      posOptionsLen: Array.isArray(posOptionsFromDict) ? posOptionsFromDict.length : 0,
+      posOptionsLen: Array.isArray(posOptionsFromDict)
+        ? posOptionsFromDict.length
+        : 0,
       posOptionsPreview: Array.isArray(posOptionsFromDict)
         ? posOptionsFromDict.slice(0, 6)
         : [],
 
       // ✅ 2026-01-06：Step 4-1 activePosKey（Production 排查）
       activePosKey: activePosKeyFromDict || null,
+
+      // ✅ 2026-01-16：B(UI) pending 狀態（Production 排查）
+      favoriteWordKey: favoriteWordKey || null,
+      favPending: !!favPending,
+
+      // ✅ 2026-01-16：B(UI) Step 2：本地 override（Production 排查）
+      optimisticFavoriteActive:
+        optimisticFavoriteActive == null ? null : !!optimisticFavoriteActive,
     });
   } catch (e) {}
 
   return (
     <div
       style={{
+        position: "relative",
         background: "var(--card-bg)",
         border: "1px solid var(--border-subtle)",
         borderRadius: 16,
@@ -1239,6 +1349,45 @@ function WordCard({
         marginBottom: 20,
       }}
     >
+      {/* ✅ 2026-01-17：歷史紀錄清除（close icon 置於 WordCard 右上角） */}
+      {canClearHistory && typeof onClearHistoryItem === "function" ? (
+        <button
+          type="button"
+          onClick={(e) => {
+            try {
+              e.preventDefault();
+              e.stopPropagation();
+            } catch (err) {}
+            onClearHistoryItem();
+          }}
+          aria-label="Clear this history item"
+          title="Clear"
+          style={{
+            position: "absolute",
+            top: 8,
+            right: 8,
+            // ✅ 2026-01-17（需求調整）：不要圓圈外框，只顯示 X（保留透明點擊熱區）
+            width: 24,
+            height: 24,
+            borderRadius: 0,
+            border: "none",
+            background: "transparent",
+            color: "var(--text-muted)",
+            cursor: "pointer",
+            lineHeight: "24px",
+            fontSize: 18,
+            padding: 0,
+            display: "flex",
+            alignItems: "center",
+            opacity: 0.25, 
+            justifyContent: "center",
+            zIndex: 5,
+          }}
+        >
+          ×
+        </button>
+      ) : null}
+
       {/* Header */}
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -1257,6 +1406,7 @@ function WordCard({
             // - onSelectPosKey：點擊回呼（若上層沒傳，WordCard 仍會 fallback 印 console）
             activePosKey={activePosKeyFromDict}
             onSelectPosKey={handleSelectPosKey}
+            uiLang={uiLang}
           />
         </div>
 
@@ -1467,7 +1617,11 @@ function WordCard({
 
           {/* ⭐ 我的最愛（App 管） */}
           <FavoriteStar
-            active={!!favoriteActive}
+            active={
+              optimisticFavoriteActive == null
+                ? !!favoriteActive
+                : !!optimisticFavoriteActive
+            }
             disabled={favDisabled}
             onClick={handleFavoriteClick}
             size={16}
@@ -1586,6 +1740,13 @@ function WordCard({
       <WordExampleBlock
         d={d}
         senseIndex={senseIndex}
+        // ✅ 2026-01-20：Task F2（Favorites/Learning examples 快取回寫）— 往下傳遞導覽狀態與回寫 callback
+        // - WordExampleBlock/useExamples 會用 mode+learningContext 判斷是否關閉 auto-refresh
+        // - 手動補齊成功後，透過 onExamplesResolved 回寫 favoritesResultCache（App.jsx）
+        mode={mode}
+        learningContext={learningContext}
+        onExamplesResolved={onExamplesResolved}
+        examplesAutoRefreshEnabled={examplesAutoRefreshEnabled}
         // ✅ 2026-01-12：Task 1（Entry 狀態：Header 可被置換）— 上游提供 header override（僅顯示用途）
         entryHeaderOverride={entryHeaderOverride}
         onEntrySurfaceChange={handleEntrySurfaceChange}
@@ -1597,6 +1758,7 @@ function WordCard({
         onWordClick={onWordClick}
         onSpeak={onSpeak}
         uiLang={uiLang}
+        theme={theme}
         grammarOptionsLabel={grammarOptionsLabel}
         grammarToggleLabel={grammarToggleLabel}
         grammarCaseLabel={grammarCaseLabel}

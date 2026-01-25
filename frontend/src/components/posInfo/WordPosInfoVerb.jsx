@@ -43,7 +43,9 @@ export default function WordPosInfoVerb({
 }) {
   if (!baseForm) return null;
 
-  // ✅ 折疊（比照 WordPosInfoNoun）
+  // ✅ 折疊（deprecated）
+  // 2026-01-24：由上層「詞性補充」區塊統一管理收合，本元件不再提供內部收合 UI
+  // - 保留 state 與既有邏輯（避免誤刪既有紀錄/後續 merge 衝突）
   const [isOpen, setIsOpen] = useState(true);
 
   // ✅ 第三人稱下拉（er / sie / es）
@@ -752,10 +754,10 @@ export default function WordPosInfoVerb({
     <div
       role="button"
       tabIndex={0}
-      onClick={() => setIsOpen((v) => !v)}
+      onClick={() => { /* deprecated: internal collapse removed */ }}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
-          setIsOpen((v) => !v);
+          /* deprecated: internal collapse removed */
           e.preventDefault();
         }
       }}
@@ -777,6 +779,7 @@ export default function WordPosInfoVerb({
         style={{
           display: "inline-block",
           width: 18,
+          display: "none",
           textAlign: "center",
           fontSize: ARROW_SIZE,
           lineHeight: 1,
@@ -784,7 +787,7 @@ export default function WordPosInfoVerb({
           opacity: 0.85,
         }}
       >
-        {isOpen ? "▾" : "▸"}
+        {""}
       </span>
 
       <div
@@ -799,16 +802,17 @@ export default function WordPosInfoVerb({
     </div>
   );
 
-  if (!isOpen) {
+  // ✅ deprecated: internal collapse removed (kept for history), always render expanded
+  if (false && !isOpen) {
     return (
       <div style={OuterBoxStyle}>
         <div
           role="button"
           tabIndex={0}
-          onClick={() => setIsOpen(true)}
+          onClick={() => { /* deprecated: internal collapse removed */ }}
           onKeyDown={(e) => {
             if (e.key === "Enter" || e.key === " ") {
-              setIsOpen(true);
+              /* deprecated: internal collapse removed */
               e.preventDefault();
             }
           }}
@@ -829,6 +833,8 @@ export default function WordPosInfoVerb({
             style={{
               display: "inline-block",
               width: 18,
+              display: "none",
+          display: "none",
               textAlign: "center",
               fontSize: ARROW_SIZE,
               lineHeight: 1,
@@ -836,7 +842,7 @@ export default function WordPosInfoVerb({
               opacity: 0.85,
             }}
           >
-            {"▸"}
+            {""}
           </span>
 
           <div

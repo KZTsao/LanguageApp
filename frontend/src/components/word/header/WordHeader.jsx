@@ -1,37 +1,27 @@
-// frontend/src/components/WordHeader.jsx
+// frontend/src/components/word/header/WordHeader.jsx
 
 /**
  * 文件說明：
  * - WordHeader：字卡最上方標題區（冠詞/單字/發音按鈕 + 詞性資訊）
  *
- * 異動紀錄：
- * - 2026-01-05：Step 6（只顯示，不做互動）
- *   - 新增支援 posOptions（多詞性清單）顯示：例如 "Adverb / Adjektiv"
- *   - 保留既有 posDisplay 行為（向下相容）
- * - 2026-01-06：Step 4-1（詞性切換：只打通點擊事件，不做 re-query）
- *   - 新增 onSelectPosKey / activePosKey（可選）
- *   - posOptions >= 2 時以「可點擊 pills」呈現，點擊會 console.log 並呼叫 onSelectPosKey（若有）
- *   - 保留舊的 "Adverb / Adjektiv" 純文字顯示作為 fallback（向下相容）
+ * 需求對齊（20260117 多詞性壞掉 / POS Pill Spec 延伸）：
+ * - POS pill 必須可點擊，不能是 display-only
+ * - 點擊要完整往上傳（onSelectPosKey）
+ * - POS 顯示文字需多國（來源 uiText）
+ * - pill 外匡要保留（未選取也要有 border）
+ * - 亮/暗版顏色由 CSS tokens 處理（本檔不做 CSS）
  *
- * - 2026-01-13：Task 1（收藏分類下拉搬移：打通 slot）
- *   - 新增 favoriteCategorySelectNode（可選，ReactNode）
- *   - 若父層傳入，會渲染於 WordHeader 主行區塊上方
- *   - 注意：本檔案不直接依賴 FavoriteStar；下一步由父層（WordCard）把星號與下拉做同欄位垂直堆疊
- *
- * 功能初始化狀態（Production 排查）：
- * - （本檔案不依賴 env）
- * - 若要觀察點擊事件：請在父層傳入 onSelectPosKey，並用 DevTools Console 觀察：
- *   - [WordHeader][posSwitch] clicked <POS>
- * - 若要觀察 props：React DevTools 檢查 WordHeader 的 posOptions / activePosKey / onSelectPosKey
+ * 注意：
+ * - 本檔只負責「UI 事件」與「顯示文字多國化」
+ * - 真正的 state mutation / re-query 必須在 App.jsx handler 內完成（你 spec 已定）
  */
 
-// frontend/src/components/WordHeader.jsx
 import { playTTS } from "../../../utils/ttsClient";
+import uiText from "../../../uiText"; // ✅ 正確：src/components/word/header -> src/uiText.js
 
-// ✅ Step 4-1：可選的 debug 開關（不影響 production，只有開啟才印）
+// ✅ 可選 debug：只在 window.__DEBUG_WORDHEADER__ = true 時印一次
 let __WORDHEADER_DEBUG_INIT_DONE__ = false;
 function debugWordHeaderInitOnce(props) {
-  // 中文功能說明：僅供 Production 排查，預設不輸出
   try {
     if (typeof window === "undefined") return;
     if (!window.__DEBUG_WORDHEADER__) return;
@@ -42,22 +32,30 @@ function debugWordHeaderInitOnce(props) {
       posOptionsLen: Array.isArray(props?.posOptions) ? props.posOptions.length : 0,
       hasOnSelectPosKey: typeof props?.onSelectPosKey === "function",
       activePosKey: props?.activePosKey || null,
-      // 2026-01-13 Task 1：新增 slot（僅 debug 顯示是否存在）
+      uiLang: props?.uiLang || null,
       hasFavoriteCategorySelectNode: !!props?.favoriteCategorySelectNode,
     });
-  } catch (e) {
+  } catch {
     // noop
   }
 }
 
+/**
+ * ✅ POS 多國顯示（來源 uiText）
+ * - 顯示：uiText[uiLang].wordCard.posLocalNameMap[posKey]
+ * - fallback：沒有 map 或沒有 key → 回 posKey（例如 Adjektiv / Adverb）
+ */
+function getPosLabel(uiLang, posKey) {
+  const k = String(posKey || "").trim();
+  if (!k) return "";
+  const lang = uiLang || "zh-TW";
+  const map = uiText?.[lang]?.wordCard?.posLocalNameMap;
+  if (map && typeof map === "object" && map[k]) return String(map[k]);
+  return k;
+}
+
 // 第一行：冠詞 + 單字 + 喇叭
-function WordHeaderMainLine({
-  article,
-  headword,
-  articleColor,
-  headerSpeakText,
-  onWordClick,
-}) {
+function WordHeaderMainLine({ article, headword, articleColor, headerSpeakText, onWordClick }) {
   return (
     <div
       style={{
@@ -73,7 +71,7 @@ function WordHeaderMainLine({
           style={{
             fontSize: 22,
             fontWeight: 700,
-            color: articleColor, // 性別顏色
+            color: articleColor,
             cursor: "pointer",
             textShadow: "var(--text-outline)",
           }}
@@ -94,7 +92,7 @@ function WordHeaderMainLine({
         {headword}
       </span>
 
-      {/* ▶ 播放單字發音（改成 playTTS） */}
+      {/* ▶ 播放單字發音 */}
       <button
         onClick={() => playTTS(headerSpeakText, "de-DE")}
         className="icon-button sound-button"
@@ -106,16 +104,7 @@ function WordHeaderMainLine({
           fill="currentColor"
           xmlns="http://www.w3.org/2000/svg"
         >
-          {/* 外圈圓形 */}
-          <circle
-            cx="12"
-            cy="12"
-            r="10"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.6"
-          />
-          {/* 置中的三角形 */}
+          <circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" strokeWidth="1.6" />
           <polygon points="10,8 10,16 16,12" />
         </svg>
       </button>
@@ -123,38 +112,30 @@ function WordHeaderMainLine({
   );
 }
 
-// 第二行：詞性
-function WordHeaderMetaLine({ posDisplay, posOptions, onSelectPosKey, activePosKey }) {
-  /**
-   * 中文功能說明（Step 6 / Step 4-1）：
-   * - posDisplay：既有單一詞性顯示（保持不變）
-   * - posOptions：新增「多詞性清單」顯示（向下相容）
-   * - onSelectPosKey：Step 4-1 新增（可選），若存在則 posOptions 以可點擊 pills 呈現
-   * - activePosKey：Step 4-1 新增（可選），用來標示當前詞性（僅 UI 狀態；Step 4-1 不做 re-query）
-   */
+// 第二行：詞性（多詞性 pills + fallback 文字）
+function WordHeaderMetaLine({ posDisplay, posOptions, onSelectPosKey, activePosKey, uiLang }) {
   const safePosOptions = Array.isArray(posOptions)
     ? posOptions.map((x) => String(x || "").trim()).filter(Boolean)
     : null;
-
-  const posOptionsText =
-    safePosOptions && safePosOptions.length > 1
-      ? safePosOptions.join(" / ")
-      : null;
 
   const hasInteractivePosSwitch =
     Array.isArray(safePosOptions) &&
     safePosOptions.length > 1 &&
     typeof onSelectPosKey === "function";
 
+  // ✅ fallback 純文字也要走 uiText
+  const posOptionsText =
+    safePosOptions && safePosOptions.length > 1
+      ? safePosOptions.map((k) => getPosLabel(uiLang, k)).join(" / ")
+      : null;
+
   if (!posDisplay && !posOptionsText) return null;
 
   const handlePosClick = (posKey) => {
-    // 中文功能說明：Step 4-1 只做「事件打通」，不做任何資料 re-fetch
+    // ✅ 保留 log（方便 debug），但不是 only-log：一定會呼叫 handler
     console.log("[WordHeader][posSwitch] clicked", posKey);
     try {
-      if (typeof onSelectPosKey === "function") {
-        onSelectPosKey(posKey);
-      }
+      if (typeof onSelectPosKey === "function") onSelectPosKey(posKey);
     } catch (e) {
       console.warn("[WordHeader][posSwitch] onSelectPosKey failed", e);
     }
@@ -171,10 +152,11 @@ function WordHeaderMetaLine({ posDisplay, posOptions, onSelectPosKey, activePosK
         gap: 2,
       }}
     >
-      {/* 既有：單一詞性（向下相容） */}
+      {/* 既有：單一詞性（向下相容）
+         注意：posDisplay 來源在上游；若要連這個也多國化，需改上游產生點（非本檔範圍） */}
       {!!posDisplay && <div>{posDisplay}</div>}
 
-      {/* Step 4-1：多詞性清單（互動 pills；只打通點擊事件） */}
+      {/* ✅ 多詞性：互動 pills（外匡永遠保留） */}
       {!!hasInteractivePosSwitch && (
         <div
           style={{
@@ -185,44 +167,40 @@ function WordHeaderMetaLine({ posDisplay, posOptions, onSelectPosKey, activePosK
             opacity: 0.95,
           }}
         >
-          {safePosOptions.map((k) => {
-            const isActive = !!activePosKey && String(activePosKey) === String(k);
+          {safePosOptions.map((posKey) => {
+            const isActive = !!activePosKey && String(activePosKey) === String(posKey);
+
+            // ✅ 外匡保留：未選取也套 .pos-pill（border 永遠存在）
+            // ✅ 亮/暗版顏色：交給 index.css 的 tokens
+            const cls = `icon-button pos-pill${isActive ? " pos-pill--active" : ""}`;
+
+            const label = getPosLabel(uiLang, posKey);
+            const title = label === posKey ? label : `${label} (${posKey})`;
+
             return (
               <button
-                key={k}
+                key={posKey}
                 type="button"
-                onClick={() => handlePosClick(k)}
-                className="icon-button"
-                style={{
-                  padding: "2px 8px",
-                  borderRadius: 999,
-                  fontSize: 12,
-                  lineHeight: "16px",
-                  border: "1px solid var(--border-subtle)",
-                  background: isActive ? "var(--panel-bg)" : "transparent",
-                  cursor: "pointer",
-                }}
-                title={k}
+                onClick={() => handlePosClick(posKey)}
+                className={cls}
+                title={title}
               >
-                {k}
+                {label}
               </button>
             );
           })}
         </div>
       )}
 
-      {/* Step 6：多詞性清單（純文字 fallback；向下相容） */}
+      {/* ✅ 多詞性：純文字 fallback（一樣走 uiText） */}
       {!!posOptionsText && !hasInteractivePosSwitch && (
-        <div style={{ opacity: 0.9 }}>
-          {/* DEPRECATED（2026-01-05 Step 6）：如果未來要做互動切換，這裡改成 button/badge */}
-          {posOptionsText}
-        </div>
+        <div style={{ opacity: 0.9 }}>{posOptionsText}</div>
       )}
     </div>
   );
 }
 
-// 外層組合元件：兩行 + 分隔線
+// 外層組合元件
 function WordHeader({
   article,
   headword,
@@ -230,22 +208,27 @@ function WordHeader({
   headerSpeakText,
   posDisplay,
   onWordClick,
-  posOptions, // ✅ Step 6：新增（多詞性清單，僅顯示）
-  onSelectPosKey, // ✅ Step 4-1：新增（可選，點擊事件回呼）
-  activePosKey, // ✅ Step 4-1：新增（可選，用於 UI active 標示）
 
-  // ✅ 2026-01-13 Task 1：收藏分類下拉 slot（由父層傳入 JSX）
+  posOptions,
+  onSelectPosKey,
+  activePosKey,
+
+  // ✅ 新增：用來決定 uiText 語系（由 App/上游傳入）
+  uiLang,
+
+  // ✅ slot
   favoriteCategorySelectNode,
 }) {
-  // ✅ Step 4-1：初始化 debug（可選）
-  debugWordHeaderInitOnce({ posOptions, onSelectPosKey, activePosKey, favoriteCategorySelectNode });
+  debugWordHeaderInitOnce({
+    posOptions,
+    onSelectPosKey,
+    activePosKey,
+    uiLang,
+    favoriteCategorySelectNode,
+  });
 
   return (
     <>
-      {/* 2026-01-13 Task 1：
-          中文功能說明：父層可傳入「收藏分類下拉」的 JSX，
-          用來在字卡 header 區域內排版（下一步會與 FavoriteStar 同欄位垂直堆疊）
-      */}
       {!!favoriteCategorySelectNode && (
         <div
           data-ref="wordHeaderFavoriteCategorySlot"
@@ -273,13 +256,13 @@ function WordHeader({
         posOptions={posOptions}
         onSelectPosKey={onSelectPosKey}
         activePosKey={activePosKey}
+        uiLang={uiLang}
       />
 
       <div
         style={{
           height: 1,
-          background:
-            "linear-gradient(to right, transparent, var(--border-subtle), transparent)",
+          background: "linear-gradient(to right, transparent, var(--border-subtle), transparent)",
           marginBottom: 10,
         }}
       />
@@ -289,4 +272,4 @@ function WordHeader({
 
 export default WordHeader;
 
-// frontend/src/components/WordHeader.jsx
+// frontend/src/components/word/header/WordHeader.jsx

@@ -11,6 +11,7 @@
  * - 2025-12-27：補上「平行陣列」→ senses[] 正規化（例如 definition_de_translation 為 array 時）
  * - 2025-12-27：補上 gloss/glossLang（收藏寫入 headword_gloss 用），不改動既有欄位結構
  * - 2025-12-27：支援 analyze envelope 結構（{..., dictionary:{...}}），先正規化 envelope.dictionary（新增 runtime log）
+ * - 2026-01-25：plural / gender 下沉到 sense 級（多義字可保留各 sense 變化；base 欄位避免混淆）
  */
 
 /**
@@ -52,7 +53,8 @@ function fallback(word) {
   const w = String(word || "").trim();
   return {
     word: w,
-    language: "de",
+    // NOTE: language is UI explainLang (mother language), do NOT hardcode headword language
+    language: "",
     partOfSpeech: "unknown",
     type: "unknown", // ⭐ 新增：預設 unknown
     gender: "",
@@ -60,7 +62,8 @@ function fallback(word) {
     baseForm: w,
     definition_de: "",
     definition_de_translation: "",
-    definition: "AI 暫時沒有提供定義（fallback）。",
+    // NOTE: definition is a short gloss in explainLang; leave empty on fallback
+    definition: "",
     example: "",
     tenses: {
       present: "",
@@ -292,6 +295,9 @@ function buildParallelSensesIfAny(parsed) {
     "exampleTranslation",
     "example",
     "notes",
+    // ✅ 2026-01-25：允許 LLM 在 sense 維度回傳不同 gender / plural（例如 Bank）
+    "gender",
+    "plural",
   ];
 
   const arrays = [];
@@ -429,7 +435,7 @@ function normalizeDictionaryResultSingle(parsed, word) {
 
   const result = {
     word: parsed.word || safeWord,
-    language: parsed.language || "de",
+    language: (parsed.explainLang || parsed.explain_lang || parsed.language || ""),
     partOfSpeech,
     type, // ⭐ 已新增 type
     gender: parsed.gender || "",
@@ -480,6 +486,17 @@ function normalizeDictionaryResultSingle(parsed, word) {
       result.gender = "";
     } else {
       result.gender = g;
+    }
+
+    // ✅ plural 必須是「單一字串」；若模型回傳陣列/逗號拼接 → 視為不可信（留空）
+    // - 多義名詞（Bank/Schloss）應由 multi-sense 或平行陣列拆出 sense 後，各 sense 各自帶 plural
+    if (Array.isArray(result.plural)) {
+      result.plural = "";
+    } else {
+      const p = String(result.plural || "").trim();
+      // 常見 NG： "Bänke, Banken" / "城堡,鎖"（逗號拼接）→ 不在 single-sense 放
+      if (/[，,、]/.test(p)) result.plural = "";
+      else result.plural = p;
     }
   }
 
@@ -602,6 +619,27 @@ function normalizeDictionaryResult(parsed, word) {
 
       // ✅ 新增 senses（不破壞既有結構）
       base.senses = senses;
+
+      // ✅ 2026-01-25：plural / gender 下沉到 sense 級（避免多義字在 base 欄位混在一起）
+      // - 若所有 senses 的 plural/gender 都相同 → base 可保留該值（相容既有 UI）
+      // - 若出現不同值（例如 Bank: Bänke vs Banken）→ base 清空，避免誤導
+      const uniqPlural = new Set(
+        (senses || [])
+          .map((x) => (x && typeof x.plural === "string" ? x.plural.trim() : ""))
+          .filter(Boolean)
+      );
+      const uniqGender = new Set(
+        (senses || [])
+          .map((x) => (x && typeof x.gender === "string" ? x.gender.trim() : ""))
+          .filter(Boolean)
+      );
+
+      if (uniqPlural.size === 1) base.plural = Array.from(uniqPlural)[0] || "";
+      else base.plural = "";
+
+      if (uniqGender.size === 1) base.gender = Array.from(uniqGender)[0] || "";
+      // gender 不同很少見，但仍以不誤導為主
+      else if (uniqGender.size > 1) base.gender = "";
 
       INIT_STATUS.runtime.lastSenseCount = senses.length;
 

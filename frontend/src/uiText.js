@@ -73,6 +73,27 @@ const uiText = {
       sectionExampleTranslation: "翻譯",
       sectionNotes: "補充說明",
 
+
+
+
+
+
+
+
+
+      // ★ 詞性補充（NEW）
+      posInfoSupplementTitle: "詞性補充",
+
+
+
+
+
+
+
+
+
+      // ✅ Alias key（同義）：給舊/新元件統一取用（不可刪）
+      posInfoTitle: "詞性補充",
       labelPos: "詞性",
       labelGender: "性別",
       labelPlural: "複數",
@@ -295,6 +316,31 @@ const uiText = {
         title: "單字庫",
         subtitle: "只顯示原型（Lemma），不包含變化形",
         countSuffix: "筆",
+
+        // ✅ Task 1：匯入（Import）入口
+        importButtonLabel: "匯入",
+        importButtonTitle: "匯入",
+        importButtonAria: "匯入",
+        // （本任務 placeholder 用；下一任務會換成 ImportModal）
+        importPlaceholderLine1: "（匯入功能下一步接入）",
+        importPlaceholderLine2: "",
+
+        // ✅ Task 2：Import Modal（UI-only）
+        importModalTitle: "匯入",
+        importLevelLabel: "等級",
+        importScenarioLabel: "情境",
+        importTypeLabel: "類型",
+        importTypeGrammar: "文法",
+        importTypeVocab: "單字",
+        importTypePhrases: "常用語",
+        importCountLabel: "數量",
+        importTargetLabel: "匯入到學習本",
+        importGenerateButton: "生成",
+        importCommitButton: "匯入",
+        importCancelButton: "取消",
+        importSelectAll: "全選",
+        importSelectNone: "全不選",
+        importEmptyPreviewHint: "尚未生成候選清單",
         emptyLine1: "尚未收藏任何單字",
         emptyLine2: "請到查詢頁點擊星號加入收藏",
         cancelFavoriteTitle: "取消收藏",
@@ -318,16 +364,14 @@ const uiText = {
         favoriteCategoryEmpty: "尚無分類",
         favoriteCategoryAll: "全部",
 
-      
-
-// ✅ Alias keys (for backward compatibility with WordLibraryPanel.jsx; do not delete)
-setSelectLabel: "學習本",
-setSelectTitle: "選擇要學習的內容",
-setSelectAria: "學習本選單",
-setFavoritesLabel: "我的收藏",
-setNotReadyLine1: "此學習本內容尚未導入",
-setNotReadyLine2: "目前僅顯示選單，稍後會加入完成度與內容",
-testDisabledTitle: "尚未導入測驗功能",
+        // ✅ Alias keys (for backward compatibility with WordLibraryPanel.jsx; do not delete)
+        setSelectLabel: "學習本",
+        setSelectTitle: "選擇要學習的內容",
+        setSelectAria: "學習本選單",
+        setFavoritesLabel: "我的收藏",
+        setNotReadyLine1: "此學習本內容尚未導入",
+        setNotReadyLine2: "目前僅顯示選單，稍後會加入完成度與內容",
+        testDisabledTitle: "尚未導入測驗功能",
 
         // ✅ Learning set titles (NEW)
         setTitleA1Vocab: "A1 單字",
@@ -337,6 +381,29 @@ testDisabledTitle: "尚未導入測驗功能",
 },
     },
   },
+
+      // ✅ Speak Analyze Panel (ASR once)
+      speakAnalyzePanel: {
+        title: "口說分析",
+        targetLabel: "目標",
+        resultLabel: "分析結果",
+        startRecording: "開始錄音",
+        stopRecording: "停止錄音",
+        replay: "重播",
+        analyze: "分析",
+        close: "關閉",
+        asrLabel: "系統判定",
+        asrProcessing: "系統判定中…",
+        asrPrefix: "系統判定：",
+        analyzeDone: "分析完成",
+        analyzeFailedPrefix: "分析失敗：",
+        recording: "錄音中",
+        secondsSuffix: "秒",
+        perfect: "全對",
+        closeAria: "關閉",
+        waveformAria: "口說波形",
+      },
+
 
   // ----------------------------
   // English
@@ -379,6 +446,27 @@ testDisabledTitle: "尚未導入測驗功能",
       sectionExampleTranslation: "Translation",
       sectionNotes: "Notes",
 
+
+
+
+
+
+
+
+
+      // ★ POS info supplement（NEW）
+      posInfoSupplementTitle: "POS info",
+
+
+
+
+
+
+
+
+
+      // ✅ Alias key（同義）：給舊/新元件統一取用（不可刪）
+      posInfoTitle: "POS info",
       labelPos: "Part of Speech",
       labelGender: "Gender",
       labelPlural: "Plural",
@@ -584,6 +672,31 @@ testDisabledTitle: "尚未導入測驗功能",
         title: "Word Library",
         subtitle: "Only lemmas are shown (no inflections)",
         countSuffix: "items",
+
+        // ✅ Task 1：Import entry
+        importButtonLabel: "Import",
+        importButtonTitle: "Import",
+        importButtonAria: "Import",
+        // placeholder (next task will add ImportModal)
+        importPlaceholderLine1: "(Import will be implemented in the next task.)",
+        importPlaceholderLine2: "",
+
+        // ✅ Task 2：Import Modal（UI-only）
+        importModalTitle: "Import",
+        importLevelLabel: "Level",
+        importScenarioLabel: "Scenario",
+        importTypeLabel: "Type",
+        importTypeGrammar: "Grammar",
+        importTypeVocab: "Vocabulary",
+        importTypePhrases: "Common phrases",
+        importCountLabel: "Count",
+        importTargetLabel: "Import to learning set",
+        importGenerateButton: "Generate",
+        importCommitButton: "Import",
+        importCancelButton: "Cancel",
+        importSelectAll: "Select all",
+        importSelectNone: "Select none",
+        importEmptyPreviewHint: "No preview yet",
         emptyLine1: "No saved words yet",
         emptyLine2: "Tap the star on the search page to save words",
         cancelFavoriteTitle: "Remove from favorites",
@@ -626,7 +739,52 @@ testDisabledTitle: "Test is not available yet.",
         setTitleTest: "Test",
 },
     },
-  },
+  
+
+      // ✅ Speak Analyze Panel (ASR once)
+      speakAnalyzePanel__deprecated_misplaced_20260124: {
+        title: "口說分析",
+        targetLabel: "目標",
+        resultLabel: "分析結果",
+        startRecording: "開始錄音",
+        stopRecording: "停止錄音",
+        replay: "重播",
+        analyze: "分析",
+        close: "關閉",
+        asrProcessing: "ASR 分析中…",
+        asrPrefix: "ASR：",
+        analyzeDone: "分析完成",
+        analyzeFailedPrefix: "分析失敗：",
+        recording: "錄音中",
+        secondsSuffix: "秒",
+        perfect: "全對",
+        closeAria: "關閉",
+        waveformAria: "口說波形",
+      },
+},
+
+      // ✅ Speak Analyze Panel (ASR once)
+      speakAnalyzePanel: {
+        title: "Speak Analyze",
+        targetLabel: "Target",
+        resultLabel: "Result",
+        startRecording: "Start recording",
+        stopRecording: "Stop recording",
+        replay: "Replay",
+        analyze: "Analyze",
+        close: "Close",
+        asrLabel: "System",
+        asrProcessing: "System processing…",
+        asrPrefix: "System: ",
+        analyzeDone: "Analysis complete",
+        analyzeFailedPrefix: "Analysis failed: ",
+        recording: "Recording",
+        secondsSuffix: "s",
+        perfect: "Perfect",
+        closeAria: "Close",
+        waveformAria: "Speech waveform",
+      },
+
 
   // ----------------------------
   // 簡體中文 zh-CN
@@ -668,7 +826,10 @@ testDisabledTitle: "Test is not available yet.",
       sectionExample: "例句",
       sectionExampleTranslation: "翻译",
       sectionNotes: "补充说明",
-
+      // ★ 词性补充（NEW）
+      posInfoSupplementTitle: "词性补充",
+      // ✅ Alias key（同義）：給舊/新元件統一取用（不可刪）
+      posInfoTitle: "词性补充",
       labelPos: "词性",
       labelGender: "性别",
       labelPlural: "复数",
@@ -878,6 +1039,31 @@ testDisabledTitle: "Test is not available yet.",
         title: "单字库",
         subtitle: "只显示原型（Lemma），不包含变位/变化形",
         countSuffix: "条",
+
+        // ✅ Task 1：导入（Import）入口
+        importButtonLabel: "导入",
+        importButtonTitle: "导入",
+        importButtonAria: "导入",
+        // （本任务 placeholder；下一任务接入 ImportModal）
+        importPlaceholderLine1: "（导入功能下一步接入）",
+        importPlaceholderLine2: "",
+
+        // ✅ Task 2：导入弹窗（UI-only）
+        importModalTitle: "导入",
+        importLevelLabel: "等级",
+        importScenarioLabel: "情境",
+        importTypeLabel: "类型",
+        importTypeGrammar: "语法",
+        importTypeVocab: "单词",
+        importTypePhrases: "常用语",
+        importCountLabel: "数量",
+        importTargetLabel: "导入到学习本",
+        importGenerateButton: "生成",
+        importCommitButton: "导入",
+        importCancelButton: "取消",
+        importSelectAll: "全选",
+        importSelectNone: "全不选",
+        importEmptyPreviewHint: "尚未生成候选清单",
         emptyLine1: "还没有收藏任何单词",
         emptyLine2: "请到查询页点击星号加入收藏",
         cancelFavoriteTitle: "取消收藏",
@@ -921,6 +1107,29 @@ testDisabledTitle: "尚未导入测验功能",
     },
   },
 
+      // ✅ Speak Analyze Panel (ASR once)
+      speakAnalyzePanel: {
+        title: "口说分析",
+        targetLabel: "目标",
+        resultLabel: "分析结果",
+        startRecording: "开始录音",
+        stopRecording: "停止录音",
+        replay: "重播",
+        analyze: "分析",
+        close: "关闭",
+        asrLabel: "系统判定",
+        asrProcessing: "系统判定中…",
+        asrPrefix: "系统判定：",
+        analyzeDone: "分析完成",
+        analyzeFailedPrefix: "分析失败：",
+        recording: "录音中",
+        secondsSuffix: "秒",
+        perfect: "全对",
+        closeAria: "关闭",
+        waveformAria: "口说波形",
+      },
+
+
   // ----------------------------
   // Deutsch de
   // ----------------------------
@@ -962,6 +1171,27 @@ testDisabledTitle: "尚未导入测验功能",
       sectionExampleTranslation: "Übersetzung",
       sectionNotes: "Notizen",
 
+
+
+
+
+
+
+
+
+      // ★ Wortart-Zusatzinfo（NEW）
+      posInfoSupplementTitle: "Wortart-Info",
+
+
+
+
+
+
+
+
+
+      // ✅ Alias key（同義）：給舊/新元件統一取用（不可刪）
+      posInfoTitle: "Wortart-Info",
       labelPos: "Wortart",
       labelGender: "Genus",
       labelPlural: "Plural",
@@ -1168,6 +1398,31 @@ testDisabledTitle: "尚未导入测验功能",
         title: "Wortliste",
         subtitle: "Nur Grundformen (Lemma), keine Beugungsformen",
         countSuffix: "Einträge",
+
+        // ✅ Task 1：Import入口
+        importButtonLabel: "Importieren",
+        importButtonTitle: "Importieren",
+        importButtonAria: "Importieren",
+        // Platzhalter (naechster Task: ImportModal)
+        importPlaceholderLine1: "(Import folgt im naechsten Task.)",
+        importPlaceholderLine2: "",
+
+        // ✅ Task 2：Import-Modal（UI-only）
+        importModalTitle: "Importieren",
+        importLevelLabel: "Niveau",
+        importScenarioLabel: "Kontext",
+        importTypeLabel: "Typ",
+        importTypeGrammar: "Grammatik",
+        importTypeVocab: "Wortschatz",
+        importTypePhrases: "Redewendungen",
+        importCountLabel: "Anzahl",
+        importTargetLabel: "In Lernset importieren",
+        importGenerateButton: "Generieren",
+        importCommitButton: "Importieren",
+        importCancelButton: "Abbrechen",
+        importSelectAll: "Alle auswählen",
+        importSelectNone: "Keine auswählen",
+        importEmptyPreviewHint: "Noch keine Vorschau",
         emptyLine1: "Noch keine gespeicherten Wörter",
         emptyLine2: "Auf der Suchseite den Stern antippen, um zu speichern",
         cancelFavoriteTitle: "Aus Favoriten entfernen",
@@ -1210,7 +1465,52 @@ testDisabledTitle: "Test ist noch nicht verfügbar.",
         setTitleTest: "Test",
 },
     },
-  },
+  
+
+      // ✅ Speak Analyze Panel (ASR once)
+      speakAnalyzePanel__deprecated_misplaced_20260124: {
+        title: "口说分析",
+        targetLabel: "目标",
+        resultLabel: "分析结果",
+        startRecording: "开始录音",
+        stopRecording: "停止录音",
+        replay: "重播",
+        analyze: "分析",
+        close: "关闭",
+        asrProcessing: "ASR 分析中…",
+        asrPrefix: "ASR：",
+        analyzeDone: "分析完成",
+        analyzeFailedPrefix: "分析失败：",
+        recording: "录音中",
+        secondsSuffix: "秒",
+        perfect: "全对",
+        closeAria: "关闭",
+        waveformAria: "口说波形",
+      },
+},
+
+      // ✅ Speak Analyze Panel (ASR once)
+      speakAnalyzePanel: {
+        title: "Sprech-Analyse",
+        targetLabel: "Ziel",
+        resultLabel: "Ergebnis",
+        startRecording: "Aufnahme starten",
+        stopRecording: "Aufnahme stoppen",
+        replay: "Wiedergeben",
+        analyze: "Analysieren",
+        close: "Schließen",
+        asrLabel: "System",
+        asrProcessing: "System wird ausgewertet…",
+        asrPrefix: "System: ",
+        analyzeDone: "Analyse abgeschlossen",
+        analyzeFailedPrefix: "Analyse fehlgeschlagen: ",
+        recording: "Aufnahme läuft",
+        secondsSuffix: "s",
+        perfect: "Perfekt",
+        closeAria: "Schließen",
+        waveformAria: "Sprachwellenform",
+      },
+
 
   // ----------------------------
   // العربية ar
@@ -1252,6 +1552,24 @@ testDisabledTitle: "Test ist noch nicht verfügbar.",
       sectionExample: "مثال",
       sectionExampleTranslation: "الترجمة",
       sectionNotes: "ملاحظات إضافية",
+
+
+
+
+
+
+
+
+
+      // ★ معلومات إضافية عن نوع الكلمة（NEW）
+      posInfoSupplementTitle: "معلومات نوع الكلمة",
+
+
+
+
+
+
+
 
       labelPos: "نوع الكلمة",
       labelGender: "الجنس",
@@ -1458,6 +1776,31 @@ testDisabledTitle: "Test ist noch nicht verfügbar.",
         title: "مكتبة الكلمات",
         subtitle: "عرض الصيغة الأساسية فقط (Lemma) بدون تصريف",
         countSuffix: "عنصر",
+
+        // ✅ Task 1：استيراد (Import)
+        importButtonLabel: "استيراد",
+        importButtonTitle: "استيراد",
+        importButtonAria: "استيراد",
+        // (Placeholder؛ المهمة التالية ستضيف ImportModal)
+        importPlaceholderLine1: "(سيتم تنفيذ الاستيراد في المهمة التالية.)",
+        importPlaceholderLine2: "",
+
+        // ✅ Task 2：نافذة الاستيراد (UI-only)
+        importModalTitle: "استيراد",
+        importLevelLabel: "المستوى",
+        importScenarioLabel: "السياق",
+        importTypeLabel: "النوع",
+        importTypeGrammar: "قواعد",
+        importTypeVocab: "مفردات",
+        importTypePhrases: "عبارات شائعة",
+        importCountLabel: "العدد",
+        importTargetLabel: "الاستيراد إلى مجموعة التعلّم",
+        importGenerateButton: "إنشاء",
+        importCommitButton: "استيراد",
+        importCancelButton: "إلغاء",
+        importSelectAll: "تحديد الكل",
+        importSelectNone: "إلغاء تحديد الكل",
+        importEmptyPreviewHint: "لا توجد معاينة بعد",
         emptyLine1: "لا توجد كلمات محفوظة بعد",
         emptyLine2: "اضغط على النجمة في صفحة البحث للحفظ",
         cancelFavoriteTitle: "إزالة من المفضلة",
@@ -1499,8 +1842,54 @@ testDisabledTitle: "الاختبار غير متاح بعد.",
         setTitleTest: "اختبار",
 },
     },
-  },
+  
+
+      // ✅ Speak Analyze Panel (ASR once)
+      speakAnalyzePanel: {
+        title: "تحليل النطق",
+        targetLabel: "النص المستهدف",
+        resultLabel: "نتيجة التحليل",
+        startRecording: "بدء التسجيل",
+        stopRecording: "إيقاف التسجيل",
+        replay: "إعادة التشغيل",
+        analyze: "تحليل",
+        close: "إغلاق",
+        asrProcessing: "جارٍ تحليل ASR…",
+        asrPrefix: "ASR: ",
+        analyzeDone: "تم التحليل",
+        analyzeFailedPrefix: "فشل التحليل: ",
+      },
+      // ✅ Speak Analyze Panel (ASR once)
+      speakAnalyzePanel: {
+        title: "تحليل النطق",
+        targetLabel: "النص المستهدف",
+        resultLabel: "نتيجة التحليل",
+        startRecording: "بدء التسجيل",
+        stopRecording: "إيقاف التسجيل",
+        replay: "إعادة التشغيل",
+        analyze: "تحليل",
+        close: "إغلاق",
+        asrProcessing: "جارٍ تحليل ASR…",
+        asrPrefix: "ASR: ",
+        analyzeDone: "تم التحليل",
+        analyzeFailedPrefix: "فشل التحليل: ",
+        recording: "جارٍ التسجيل",
+        secondsSuffix: "ث",
+        perfect: "مثالي",
+        closeAria: "إغلاق",
+        waveformAria: "مخطط موجة النطق",
+      },
+
+
+},
 };
 
 export default uiText;
+
+
+
+
+
+
+
 // frontend/src/uiText.js

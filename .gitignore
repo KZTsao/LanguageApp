@@ -7,3 +7,10 @@ backend/.env
 .vscode/
 dev-access-480923-j8-3600952f939d.json
 
+
+.env
+.env.*
+*.jsonl
+*.webm
+.DS_Store
+node_modules

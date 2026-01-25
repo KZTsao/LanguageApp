@@ -115,6 +115,10 @@ function SearchBox({
   onUiLangChange,
   uiText,
 
+  // ✅ Query normalize hint（由 App.jsx 傳入）
+  queryHint,
+  onClearQueryHint,
+
   // Task 1：全域模式（由 App.jsx 傳入）
   appMode, // "search" | "learning"
   learningContext, // { title, ... }（MVP）
@@ -667,7 +671,7 @@ function SearchBox({
   return (
     <div
       style={{
-        marginBottom: 16,
+        marginBottom: 8,
         padding: 12,
         borderRadius: 16,
         border: "1px solid var(--border-subtle)",
@@ -691,6 +695,7 @@ function SearchBox({
           onChange={(e) => {
             internalUpdateRef.current = true;
             onTextChangeRef.current(e.target.value);
+            if (typeof onClearQueryHint === "function") onClearQueryHint();
           }}
           onKeyDown={handleKeyDown}
           placeholder={placeholder}
@@ -704,6 +709,28 @@ function SearchBox({
             outline: "none",
           }}
         />
+
+        {/* ✅ Query normalize hint（紅字提示拼錯/不存在；非阻斷查詢） */}
+        {queryHint && queryHint.text && (
+          <div
+            style={{
+              marginTop: 6,
+              paddingLeft: 6,
+              paddingRight: 6,
+              fontSize: 12,
+              lineHeight: 1.35,
+              color: queryHint.type === "error" ? "var(--danger)" : "var(--text-subtle)",
+              userSelect: "text",
+              cursor: "default",
+            }}
+            onClick={() => {
+              if (typeof onClearQueryHint === "function") onClearQueryHint();
+            }}
+            title={uiText?.searchHintClickToClear || "Click to clear"}
+          >
+            {queryHint.text}
+          </div>
+        )}
 
         {/* Task 1：模式切換（Search / Learning） */}
         {(canEnterSearch || canEnterLearning) && (

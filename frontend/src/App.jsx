@@ -105,19 +105,67 @@
  * - 2026-01-14：拆分（useLibraryController）
  *   1) 將「單字庫/收藏/分類/彈窗/DB API/legacy localStorage」整包抽到 hooks/useLibraryController.js
  *   2) App.jsx 保留狀態與接線（減少檔案大小、降低讀檔壓力）
+ * - 2026-01-16：B(UI) 接線（pending/wordKey）
+ *   1) App.jsx 轉傳 controller 的 isFavoritePending/getFavoriteWordKey → AppShellView → ResultPanel/WordCard
+ *   2) UI 層只負責 disable/阻擋點擊；交易/optimistic/rollback 都在 controller
  */
 
 // App 只管狀態與邏輯，畫面交給 LayoutShell / SearchBox / ResultPanel
 
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import SupportAdminPage from "./pages/SupportAdminPage";
 import uiText from "./uiText";
 import WordCard from "./components/word/WordCard";
 import GrammarCard from "./components/grammar/GrammarCard";
 import { AuthProvider, useAuth } from "./context/AuthProvider";
 import AppShellView from "./components/layout/AppShellView";
+import { getSnapshot, upsertSnapshot } from "./app/snapshotStore"; // Task 4C-fix
 
 // ✅ 新增：統一帶 Authorization
 import { apiFetch } from "./utils/apiClient";
+
+// ============================================================
+// Snapshot helpers (Task 4C) — only upsert when next snapshot is "more complete"
+// - prevents less-complete data from overwriting better snapshots
+// - safe no-op if refKey missing or upsertSnapshot throws
+// ============================================================
+const scoreSnapshotCompleteness = (snap) => {
+  try {
+    const d = snap && typeof snap === "object" ? snap.dictionary : null;
+    if (!d || typeof d !== "object") return 0;
+
+    const hasExamples = Array.isArray(d.examples) && d.examples.length > 0;
+    const hasExampleTr = typeof d.exampleTranslation === "string" && d.exampleTranslation.trim() !== "";
+    const hasDefinition =
+      typeof d.definition === "string"
+        ? d.definition.trim() !== ""
+        : typeof d.gloss === "string"
+          ? d.gloss.trim() !== ""
+          : false;
+    const hasSenses = Array.isArray(snap?.senses) && snap.senses.length > 0;
+
+    return (hasExamples ? 2 : 0) + (hasExampleTr ? 2 : 0) + (hasDefinition ? 1 : 0) + (hasSenses ? 1 : 0);
+  } catch {
+    return 0;
+  }
+};
+
+const upsertIfImproved = (refKey, prevSnap, nextSnap, meta) => {
+  try {
+    if (!refKey) return false;
+
+    const prevScore = scoreSnapshotCompleteness(prevSnap);
+    const nextScore = scoreSnapshotCompleteness(nextSnap);
+
+    if (!prevSnap || nextScore >= prevScore) {
+      upsertSnapshot(refKey, nextSnap, meta);
+      return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+};
 
 // ✅ 新增：右上角登入/登出改由 LoginHeader 自己負責（它內部用 useAuth）
 import { useHistoryFlow } from "./hooks/useHistoryFlow";
@@ -125,6 +173,7 @@ import { useAppState } from "./app/useAppState";
 
 // ✅ 拆出：單字庫/收藏 controller
 import { useLibraryController } from "./hooks/useLibraryController";
+import { findFavoritesSnapshot, upsertFavoritesSnapshot } from "./app/favoritesSnapshotStorage";
 
 function AppInner() {
   // ✅ 取得登入 userId（未登入 = guest bucket）
@@ -147,6 +196,9 @@ function AppInner() {
     showLibraryModal,
     mode,
     learningContext,
+    // ✅ 2026-01-19：Task A（ResultPanel 導覽列雙路）
+    // - App 端已 setNavContext(...)，但必須把 navContext 往下傳到 ResultPanel 才能生效
+    navContext,
     libraryItems,
     libraryCursor,
     favoriteCategories,
@@ -171,6 +223,8 @@ function AppInner() {
     enterSearchMode,
     enterLearningMode,
     updateLearningContext,
+    // navContext（Task 1）
+    setNavContext,
     setLibraryItems,
     setLibraryCursor,
     setFavoriteCategories,
@@ -182,7 +236,16 @@ function AppInner() {
     setTestMetaLoading,
   } = actions;
 
-  const { safeWriteLocalStorageText, safeWriteLocalStorageJson } = helpers;
+  const {
+    safeWriteLocalStorageText,
+    safeWriteLocalStorageJson,
+    // ✅ moved from App.jsx → useAppState helpers
+    isLibraryDebugEnabled,
+    isSearchDebugEnabled,
+    isVisitDebugEnabled,
+    isExamplesDebugEnabled,
+    normalizeSearchQuery,
+  } = helpers;
 
   const {
     // scoped
@@ -213,55 +276,18 @@ function AppInner() {
   // ✅ Phase 4（並存模式）開關：true = 單字庫收藏走 DB（/api/library）；false = 使用 legacy localStorage
   const USE_API_LIBRARY = true;
 
-  /**
-   * 功能：取得 debug 開關（localStorage.DEBUG）
-   * - 目的：避免 console 噪音過多；只有在你需要排查時才打開詳細 log
-   * - 使用方式：
-   *   - 開：localStorage.setItem("DEBUG", "library")（或包含 library 的字串）
-   *   - 關：localStorage.removeItem("DEBUG") 或設成不含 library
-   */
-  const isLibraryDebugEnabled = () => {
-    try {
-      const v = window.localStorage.getItem("DEBUG") || "";
-      return String(v).includes("library");
-    } catch {
-      return false;
-    }
-  };
-
-  /**
-   * 功能：取得 debug 開關（localStorage.DEBUG）
-   * - 目的：Search normalize 排查用（避免 console 噪音過多）
-   * - 使用方式：
-   *   - 開：localStorage.setItem("DEBUG", "search")（或包含 search 的字串）
-   *   - 關：localStorage.removeItem("DEBUG") 或設成不含 search
-   */
-  const isSearchDebugEnabled = () => {
-    try {
-      const v = window.localStorage.getItem("DEBUG") || "";
-      return String(v).includes("search");
-    } catch {
-      return false;
-    }
-  };
-
-  /**
-   * 功能：取得 debug 開關（localStorage.DEBUG）
-   * - 目的：Visit（/api/visit）排查用（避免 console 噪音過多）
-   * - 使用方式：
-   *   - 開：localStorage.setItem("DEBUG", "visit")（或包含 visit 的字串）
-   *   - 關：localStorage.removeItem("DEBUG") 或設成不含 visit
-   */
-  const isVisitDebugEnabled = () => {
-    try {
-      const v = window.localStorage.getItem("DEBUG") || "";
-      return String(v).includes("visit");
-    } catch {
-      return false;
-    }
-  };
-
   // ✅ view 切換：search / test（library 改彈窗，不再佔 view）
+
+  // ============================================================
+  // Task E — Favorites 瀏覽快取（cache-first，僅快取預設詞性；pos switch 仍重打 /api/analyze）
+  // - App 常駐：獨立於 history（history 仍是 localStorage snapshot）
+  // - key：normalizeSearchQuery(headword)（本檔 normalizeSearchQuery 回傳 string）
+  // - value：/api/analyze 的完整 resultSnapshot（必須能完整重現 ResultPanel UI）
+  // - 限制：
+  //   1) 只快取 favorites replay（intent="learning-replay" && noHistory=true）
+  //   2) 只快取預設詞性（!options.targetPosKey）
+  // ============================================================
+  const favoritesResultCacheRef = useRef(new Map());
 
   /**
    * 功能：同一個 user / 同一個 tab 只送一次 visit（避免狂加）
@@ -356,7 +382,7 @@ function AppInner() {
 
   // 查詢歷史：存最近 10 筆
   // ✅ 2025-12-18：本輪需求改為保留 30 筆（統一套用在所有 slice）
-  const HISTORY_LIMIT = 30;
+  const HISTORY_LIMIT = 100;
 
   // ✅ 查詢歷史（已拆出 useHistoryFlow，避免 App.jsx 過大）
   const {
@@ -380,12 +406,135 @@ function AppInner() {
     setResult,
   });
 
+  // ============================================================
+  // Fix: Maximum update depth exceeded（Task 2 navContext + unstable handlers）
+  // - 原因：goPrevHistory/goNextHistory 可能是每次 render 都變的新 function
+  //         Task 2 useEffect 依賴它們 → 每 render 都 setNavContext → 造成無限更新
+  // - 解法：用 ref 持有最新 handlers，並提供 stable wrapper function 給 navContext
+  //         （維持既有行為，但避免 useEffect 依賴變動函式）
+  // ============================================================
+  const historyNavHandlersRef = useRef({ goPrevHistory: null, goNextHistory: null });
+  useEffect(() => {
+    historyNavHandlersRef.current = { goPrevHistory, goNextHistory };
+  }, [goPrevHistory, goNextHistory]);
+
+  const stableGoPrevHistory = useCallback(() => {
+    const fn = historyNavHandlersRef.current?.goPrevHistory;
+    if (typeof fn === "function") fn();
+  }, []);
+
+  const stableGoNextHistory = useCallback(() => {
+    const fn = historyNavHandlersRef.current?.goNextHistory;
+    if (typeof fn === "function") fn();
+  }, []);
+
+  // ============================================================
+  // Task 2 — 將 History 導覽接入 navContext（Search 模式）
+  // - 只在 mode="search" 時更新（避免覆蓋 learning/favorites）
+  // - historyIndex === -1 代表 live：index 固定 -1、currentLabel 固定空字串
+  // - canPrev/canNext/goPrev/goNext 必須沿用 useHistoryFlow 輸出（不可重算）
+  // - label 欄位固定：historyItem.headword（禁止 UI fallback chain）
+  // ============================================================
+  useEffect(() => {
+    // ============================================================
+    // Task C — 從學習本（Favorites/Learning）返回時，導覽來源保持學習本，不回落 History
+    // 核心規則：Learning/Favorites 的 navContext 優先權 > History navContext
+    // - 只要在 learning/favorites：History 不得覆蓋 navContext
+    // - 即使 historyIndex 有變動，也必須忽略
+    // ============================================================
+      // Task 4B-0: (deprecated) snapshotStore favorites replay guard moved to handleAnalyzeByText(...)
+      // - 此 useEffect 只處理 history/navContext 初始化，這裡不做任何 early return（避免誤攔截）
+
+    // ✅ mode !== "search"：不碰 navContext（避免覆蓋其他模式來源）
+    if (mode !== "search") return;
+
+    // ✅ 安全：history 必須是 array
+    const items = Array.isArray(history) ? history : [];
+
+    // ✅ label 取值規則：固定欄位 headword（禁止 UI 自行猜）
+    const getLabel = (item) => {
+      try {
+        const v = item && typeof item === "object" ? item.headword : "";
+        return typeof v === "string" ? v : "";
+      } catch {
+        return "";
+      }
+    };
+
+    // ✅ index 規則：live 仍保留 -1（避免誤把 live 當成 history[0]）
+    const idx = typeof historyIndex === "number" ? historyIndex : -1;
+
+    const prevTargetIndex = idx + 1;
+    const nextTargetIndex = idx - 1;
+
+    const prevLabel = prevTargetIndex >= 0 && prevTargetIndex < items.length ? getLabel(items[prevTargetIndex]) : "";
+    const nextLabel = nextTargetIndex >= 0 && nextTargetIndex < items.length ? getLabel(items[nextTargetIndex]) : "";
+
+    const currentLabel = idx >= 0 && idx < items.length ? getLabel(items[idx]) : "";
+
+    // ✅ history 空/無效時的 safety（依 spec）
+    const safeItems = items.length ? items : [];
+    const safeIndex = safeItems.length ? idx : -1;
+
+    setNavContext({
+      source: "history",
+      items: safeItems,
+      total: safeItems.length,
+
+      // index: live 時維持 -1；history 空時也固定 -1
+      index: safeIndex,
+
+      // labels：以「按下後會去到的那筆」為準（Task 4 才會讀）
+      currentLabel: idx === -1 ? "" : currentLabel,
+      prevLabel,
+      nextLabel,
+
+      // canPrev/canNext：直接沿用 flow（不可重算，避免不一致）
+      canPrev: !!canPrevHistory,
+      canNext: !!canNextHistory,
+
+      // 行為：封裝既有 goPrevHistory/goNextHistory
+      goPrev: stableGoPrevHistory,
+      goNext: stableGoNextHistory,
+    });
+  }, [
+    mode,
+    learningContext?.sourceType,
+    history,
+    historyIndex,
+    canPrevHistory,
+    canNextHistory,
+    stableGoPrevHistory,
+    stableGoNextHistory,
+    setNavContext,
+  ]);
+
+  // ============================================================
   // 深淺色主題（分桶，但初始仍可用 legacy 當 fallback）
   const [theme, setTheme] = useState(() => {
     const legacy = window.localStorage.getItem(THEME_KEY_LEGACY);
     if (legacy === "light" || legacy === "dark") return legacy;
     return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
   });
+  // ============================================================
+  // Init Gate — 初始化完成前，禁止任何互動入口
+  // - hydrationDone：scoped/legacy localStorage 值已套用
+  // - favoritesReady：登入狀態下，等待收藏分類載入完成（避免學習本 init mismatch）
+  // ============================================================
+  const [hydrationDone, setHydrationDone] = useState(false);
+
+  const appReady = useMemo(() => {
+    const baseReady = !!hydrationDone;
+    const favoritesReady = !authUserId ? true : !favoriteCategoriesLoading;
+    return baseReady && favoritesReady;
+  }, [hydrationDone, authUserId, favoriteCategoriesLoading]);
+
+  // ✅ 提供給下游元件（就算中間沒傳 prop，也能用 global 讀取）
+  useEffect(() => {
+    try {
+      window.__LANGAPP_INTERACTION_ENABLED__ = !!appReady;
+    } catch {}
+  }, [appReady]);
 
   // ✅ uiText 取用（嚴格：缺字顯示 —）
   const currentUiText = useMemo(() => {
@@ -426,6 +575,11 @@ function AppInner() {
       if (scopedLast) setText(scopedLast);
       else if (legacyLast) setText(legacyLast);
     } catch {}
+
+    // ✅ Init Gate：標記 hydration 完成（必須在 try/catch 之外，避免例外中斷）
+    try {
+      setHydrationDone(true);
+    } catch {}
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [UILANG_KEY, THEME_KEY, LASTTEXT_KEY]);
 
@@ -448,57 +602,75 @@ function AppInner() {
     try {
       window.localStorage.setItem(LASTTEXT_KEY, text);
     } catch {}
-    // eslint-disable-next-line ret-hooks/exhaustive-deps
-  }, [history, HISTORY_KEY]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [text, LASTTEXT_KEY]);
+
+
+  // ============================================================
+  // Query Preflight Normalize (LLM) — Task QN-0
+  // 需求：查詢字先用 LLM 前置處理 → 回填查詢框 → 提示拼錯/不存在（紅字由下游 UI 決定如何 render）
+  // - fail-open：normalize 掛了就照舊走原字
+  // ============================================================
+  const [queryHint, setQueryHint] = useState(null);
+
+  const clearQueryHint = useCallback(() => {
+    try {
+      setQueryHint(null);
+    } catch {}
+  }, []);
+
+  const preflightNormalizeQuery = useCallback(
+    async (raw) => {
+      const text0 = (raw ?? "").toString().trim();
+      if (!text0) return { finalText: text0, hint: null };
+
+      try {
+        const res = await apiFetch("/api/query/normalize", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: text0, uiLang: uiLang || "zh" }),
+        });
+
+        // apiFetch 可能直接回傳 json，也可能回傳 Response（依你專案的 apiClient 實作）
+        const data = res && typeof res.json === "function" ? await res.json() : res;
+
+        const finalText = String(
+          data?.finalText ?? data?.normalized ?? data?.text ?? text0
+        ).trim();
+
+        // hint payload (UI): { type: "error" | "info", message, original, normalized }
+        let hint = null;
+        if (finalText && finalText !== text0) {
+          hint = {
+            type: "info",
+            message: `已自動修正為：${finalText}`,
+            original: text0,
+            normalized: finalText,
+          };
+        } else if (data?.status === "not_found" || data?.status === "not_german") {
+          hint = {
+            type: "error",
+            message: data?.message || "找不到這個字，可能拼錯或不是德文",
+            original: text0,
+            normalized: finalText || text0,
+          };
+        }
+
+        return { finalText, hint };
+      } catch {
+        // fail-open
+        return { finalText: text0, hint: null };
+      }
+    },
+    [uiLang]
+  );
 
   // ✅ handleTextChange：輸入時同步更新 text，並重置 index
   const handleTextChange = (v) => {
     setText(v);
     setHistoryIndex(-1);
-  };
-
-  /**
-   * 功能：查詢文字前處理（normalize）
-   * - 目的：在送後端之前，先把「頭尾多餘標點/括號/引號」去掉，避免 sehr. 要點多次才查
-   * - 規則：
-   *   1) 只動「頭尾」：不動中間（例如 z.B. / e-mail / C++ 不會被破壞）
-   *   2) 先 trim，再去頭尾常見符號，最後再 trim 一次
-   *   3) 若 clean 後為空字串，回傳空字串（上游會直接 return）
-   * - 注意：
-   *   - 不依賴任何外部 library（使用原生 JS）
-   *   - 不以 text 變動觸發查詢（避免 history 切換誤觸發）
-   */
-  const normalizeSearchQuery = (raw, source = "") => {
-    const rawStr = (raw ?? "").toString();
-    let s = rawStr.trim();
-
-    // ✅ 去除頭尾標點（僅動頭尾，不動中間）
-    // - 覆蓋：英文常見標點 + 中文全形標點 + 引號/括號
-    // - 例：sehr. / „sehr.“ / (sehr) / [sehr] / sehr... / sehr;  → sehr
-    // - 注意：不要在這裡動中間字元（例如 z.B. 保留）
-    s = s.replace(
-      /^[\s\u00A0"'“”‘’\(\)\[\]\{\}<>.,!?;:。！？；：…，．、]+|[\s\u00A0"'“”‘’\(\)\[\]\{\}<>.,!?;:。！？；：…，．、]+$/g,
-      ""
-    );
-    s = s.trim();
-
-    const cleaned = s;
-
-    // ✅ 可控 debug：只有開 DEBUG=search 才印（避免噪音）
-    if (isSearchDebugEnabled()) {
-      try {
-        const changed = rawStr !== cleaned;
-        if (changed) {
-          console.debug("[search][normalizeSearchQuery]", {
-            source: source || "",
-            raw: rawStr,
-            cleaned,
-          });
-        }
-      } catch {}
-    }
-
-    return cleaned;
+    // 使用者開始輸入 → 清掉提示（避免紅字一直掛著）
+    clearQueryHint();
   };
 
   /**
@@ -506,8 +678,213 @@ function AppInner() {
    * - 注意：保留既有 handleAnalyze() 不改其介面（避免影響 SearchBox 既有呼叫）
    */
   const handleAnalyzeByText = async (rawText, options = {}) => {
-    const q = normalizeSearchQuery(rawText, "handleAnalyzeByText");
+    // ============================================================
+    // Preflight normalize (LLM) — may update the actual query text BEFORE analyze
+    // - Only for direct user query / SearchBox by default
+    // - fail-open: if anything fails, continue with original rawText
+    // ============================================================
+    let __rawText0 = (rawText ?? "").toString();
+    let __rawText = __rawText0;
+
+    // options.preflightNormalize === false → skip
+    const __intent = options && typeof options.intent === "string" ? options.intent : "";
+    const __shouldPreflight =
+      options?.preflightNormalize !== false &&
+      (__intent === "user-search" || __intent === "searchbox" || __intent === "" || __intent === "manual");
+
+    if (__shouldPreflight) {
+      const { finalText, hint } = await preflightNormalizeQuery(__rawText0);
+      if (hint) {
+        try {
+          setQueryHint(hint);
+        } catch {}
+      }
+      if (finalText && typeof finalText === "string" && finalText.trim() && finalText.trim() !== __rawText0.trim()) {
+        __rawText = finalText;
+        // 回填到查詢框
+        try {
+          setText(finalText);
+        } catch {}
+      }
+    }
+    const USE_SNAPSHOTSTORE_REPLAY_ONLY = true; // Task 4B-0：replay 唯一來源（避免舊 favoritesSnapshotStorage 誤判）
+
+    // === [Favorites Snapshot Replay] ===
+    // Task 1/2：
+    // - 在 favorites-learning 狀態下，先嘗試用「可更新的 favorites snapshot」回放（命中就不打 API）
+    // - 其餘模式完全不動
+    try {
+      if (mode === "learning" && learningContext?.sourceType === "favorites") {
+        const __qForSnapshot = normalizeSearchQuery(__rawText, "favoritesSnapshotReplay");
+        if (__qForSnapshot) {
+
+          // Task 4B-0: SnapshotStore guard（命中才 early return；未命中完全走舊邏輯）
+          // refKey 規則：
+          // - 優先：headword::canonicalPos
+          // - 若 canonicalPos 不可得：headword::__any（由 analyze 成功出口同步寫 alias）
+          //
+          // ⚠️ 重要：
+          // - 這段必須在 handleAnalyzeByText(...) 的同一個 scope 內計算 refKey
+          // - 不可依賴其他 useEffect 或外部 try block 的 refKey（避免 ReferenceError / 錯 key）
+          try {
+            const __lc =
+              learningContext && typeof learningContext === "object"
+                ? learningContext
+                : null;
+
+            const __items = Array.isArray(__lc?.items) ? __lc.items : [];
+            const __idxRaw =
+              typeof __lc?.index === "number" && Number.isFinite(__lc.index)
+                ? __lc.index
+                : -1;
+
+            const __idx = __idxRaw >= 0 && __idxRaw < __items.length ? __idxRaw : -1;
+            const __item = __idx >= 0 ? __items[__idx] : null;
+
+            // 1) 先從 learning item 取 canonicalPos（若有）
+            let __posForSnapshot = String(
+              (__item &&
+                (__item.canonicalPos ||
+                  __item.canonical_pos ||
+                  __item.pos ||
+                  __item.partOfSpeech ||
+                  __item.canonicalPOS)) ||
+                ""
+            ).trim();
+
+            const __headForSnapshot = String(__qForSnapshot || "").trim();
+
+            // 2) 若 item 沒有 pos：允許用「舊 favoritesSnapshotStorage」只做 pos hint（不做 replay source）
+            //    目的：提升 snapshotStore 命中率，但不讓驗收被舊快取誤導
+            if (!__posForSnapshot) {
+              try {
+                const __hintKey = normalizeSearchQuery(__headForSnapshot, "favoritesCache");
+                // 2-1) 先從 memory cache 找（不觸發任何 return）
+                const __memHint =
+                  __hintKey && favoritesResultCacheRef.current
+                    ? favoritesResultCacheRef.current.get(__hintKey)
+                    : null;
+                const __memPos = String(
+                  (__memHint?.dictionary?.canonicalPos ||
+                    __memHint?.dictionary?.canonical_pos ||
+                    __memHint?.dictionary?.partOfSpeech ||
+                    __memHint?.dictionary?.posKey ||
+                    "") ||
+                    ""
+                ).trim();
+                if (__memPos) __posForSnapshot = __memPos;
+              } catch {}
+            }
+
+            if (!__posForSnapshot) {
+              try {
+                const __hintKey = normalizeSearchQuery(__headForSnapshot, "favoritesCache");
+                const __legacyHint = __hintKey ? findFavoritesSnapshot(__hintKey) : null;
+                const __legacyPos = String(
+                  (__legacyHint?.dictionary?.canonicalPos ||
+                    __legacyHint?.dictionary?.canonical_pos ||
+                    __legacyHint?.dictionary?.partOfSpeech ||
+                    __legacyHint?.dictionary?.posKey ||
+                    "") ||
+                    ""
+                ).trim();
+                if (__legacyPos) __posForSnapshot = __legacyPos;
+              } catch {}
+            }
+
+            // 3) SnapshotStore 嘗試：若沒 pos → 用 __any alias
+            const __refKeyAny = __headForSnapshot ? `${__headForSnapshot}::__any` : "";
+            const __refKeyPos =
+              __headForSnapshot && __posForSnapshot
+                ? `${__headForSnapshot}::${__posForSnapshot}`
+                : "";
+
+            let snap = null;
+            let __usedRefKey = "";
+            if (__refKeyPos) {
+              snap = getSnapshot(__refKeyPos);
+              __usedRefKey = __refKeyPos;
+            } else if (__refKeyAny) {
+              snap = getSnapshot(__refKeyAny);
+              __usedRefKey = __refKeyAny;
+            }
+
+            // dev-only debug：favorites replay hit/miss（僅觀察 SnapshotStore）
+            try {
+              if (import.meta?.env?.DEV) {
+                console.debug("[snapshotStore][favorites-replay]", {
+                  refKey: __usedRefKey,
+                  hit: !!snap,
+                  hasPos: !!__posForSnapshot,
+                });
+              }
+            } catch {}
+
+            if (snap) {
+              setResult(snap);
+              return;
+            }
+          } catch {
+            // swallow snapshot errors（must never break old logic）
+            try {
+              if (import.meta?.env?.DEV) {
+                console.debug("[snapshotStore][favorites-replay]", {
+                  refKey: "",
+                  hit: false,
+                  error: true,
+                });
+              }
+            } catch {}
+          }
+
+          // legacy favoritesSnapshotStorage replay（僅在允許 legacy replay 時啟用；不影響 SnapshotStore）
+          if (!USE_SNAPSHOTSTORE_REPLAY_ONLY) {
+            const __snapKey = normalizeSearchQuery(__qForSnapshot, "favoritesCache");
+            const __snapshot = findFavoritesSnapshot(__snapKey);
+            if (__snapshot) {
+              setResult(__snapshot);
+              return;
+            }
+          }
+        }
+      }
+    } catch (e) {
+      // swallow snapshot errors
+    }
+    // === [End Favorites Snapshot Replay] ===
+
+    const q = normalizeSearchQuery(__rawText, "handleAnalyzeByText");
     if (!q) return;
+
+    // ============================================================
+    // Task B — Favorites/Learning replay：允許「只更新結果，不污染 history」
+    // - options.noHistory=true：
+    //   1) 不使用 history-hit 回放（避免 reorder history）
+    //   2) 不寫入 history / 不改 historyIndex
+    // - 注意：noHistory 只影響前端狀態，不動 DB、不新增 API
+    // ============================================================
+    const noHistory = !!(options && options.noHistory);
+
+    // ============================================================
+    // Task D — intent：主動新查詢時強制切回 Search/History
+    // - 目的：在 Favorites/Learning 狀態下，使用者點字觸發「主動新查詢」時，
+    //         UI 必須回到 search/history pipeline（避免仍卡在 favorites 導覽）。
+    // - 規則（前端）：
+    //   1) intent ∈ {"user-search", "searchbox"} && noHistory !== true
+    //      → 若當下 mode !== "search"，先 enterSearchMode() 再查詢。
+    //   2) replay（noHistory=true）一律不切 mode。
+    // ============================================================
+    const intent = (options && typeof options === "object" ? options.intent : "")
+      ? String(options.intent).trim()
+      : "";
+
+    if (!noHistory && (intent === "user-search" || intent === "searchbox")) {
+      if (mode !== "search") {
+        try {
+          enterSearchMode();
+        } catch {}
+      }
+    }
 
     /**
      * ✅ 2026-01-06：詞性切換必須「強制重查」
@@ -530,7 +907,11 @@ function AppInner() {
 
     // ✅ Phase X：若命中 history，直接回放（不重打 /api/analyze）
     // ⚠️ 但詞性切換必須重查，所以 hasTargetPosKey=true 時跳過
-    if (!hasTargetPosKey) {
+    // ✅ Phase X：若命中 history，直接回放（不重打 /api/analyze）
+    // ⚠️ 但：
+    // - 詞性切換必須重查（hasTargetPosKey=true）
+    // - Task B replay 必須 noHistory（不依賴 history / 不 reorder history）
+    if (!hasTargetPosKey && !noHistory) {
       const hitIndex = findHistoryHitIndex(q);
       if (hitIndex !== -1) {
         const replayed = replayHistoryHit(hitIndex, q, "handleAnalyzeByText");
@@ -540,9 +921,17 @@ function AppInner() {
 
     setLoading(true);
     try {
+      // ✅ 後端只需要它認得的 options；noHistory/source 屬於前端控制旗標，不應透傳
+      const apiOptions = options && typeof options === "object" ? { ...options } : {};
+      if (apiOptions && typeof apiOptions === "object") {
+        delete apiOptions.noHistory;
+        delete apiOptions.source;
+        delete apiOptions.intent;
+      }
+
       const res = await apiFetch(`/api/analyze`, {
         method: "POST",
-        body: JSON.stringify({ text: q, uiLang, explainLang: uiLang, ...(options || {}) }),
+        body: JSON.stringify({ text: q, uiLang, explainLang: uiLang, ...(apiOptions || {}) }),
       });
 
       if (!res) throw new Error("[analyze] response is null");
@@ -563,10 +952,207 @@ function AppInner() {
         data = null;
       }
 
-      setResult(data);
+      // ✅ Task F2：確保 snapshot 內含 examples（Array），避免 favorites replay/回放時被判定為無例句
+      const __dict = (data && typeof data === "object" && data.dictionary && typeof data.dictionary === "object") ? data.dictionary : {};
+      const __examples = Array.isArray(__dict.examples) ? __dict.examples : [];
+      const dataWithExamples = (data && typeof data === "object") ? ({
+        ...data,
+        dictionary: {
+          ...__dict,
+          examples: __examples,
+        },
+      }) : data;
+
+      setResult(dataWithExamples);
+
+      // Task 4B-0: SnapshotStore sidecar write（不改流程、不 return）
+      // refKey 規則：headword + canonicalPos（以 :: 串接）
+      try {
+        const __hw = String(
+          (dataWithExamples && dataWithExamples.dictionary && (dataWithExamples.dictionary.baseForm || dataWithExamples.dictionary.word)) ||
+          q ||
+          ""
+        ).trim();
+        const __pos = String(
+          (dataWithExamples && dataWithExamples.dictionary && (dataWithExamples.dictionary.canonicalPos || dataWithExamples.dictionary.partOfSpeech)) ||
+          ""
+        ).trim();
+
+        const refKey = (__hw && __pos) ? `${__hw}::${__pos}` : "";
+        if (refKey) {
+          upsertSnapshot(refKey, dataWithExamples, { source: "analyze" });
+          // ✅ Task 4B-0：alias（headword::__any）— 當 favorites item 缺 canonicalPos 時仍可命中
+          try {
+            const __aliasKey = __hw ? `${__hw}::__any` : "";
+            if (__aliasKey) {
+              upsertSnapshot(__aliasKey, dataWithExamples, { source: "analyze" });
+              // dev-only debug：確認 alias 寫入
+              try {
+                if (import.meta?.env?.DEV) {
+                  console.debug("[snapshotStore][analyze-alias]", { refKey: __aliasKey, source: "analyze" });
+                }
+              } catch {}
+            }
+          } catch {}
+
+          // ✅ Task 4B-1 harden: 另外以「learningContext item 的 pos」寫一份 key（提升 Refresh 後命中率）
+          // - 不改 replay 邏輯，只增加寫入 key
+          try {
+            if (mode === "learning" && learningContext?.sourceType === "favorites") {
+              const __qForSnapshot2 = normalizeSearchQuery(__rawText, "favoritesSnapshotReplay");
+              const __lc2 =
+                learningContext && typeof learningContext === "object" ? learningContext : null;
+              const __items2 = Array.isArray(__lc2?.items) ? __lc2.items : [];
+              const __idxRaw2 =
+                typeof __lc2?.index === "number" && Number.isFinite(__lc2.index)
+                  ? __lc2.index
+                  : -1;
+              const __idx2 =
+                __idxRaw2 >= 0 && __idxRaw2 < __items2.length ? __idxRaw2 : -1;
+              const __item2 = __idx2 >= 0 ? __items2[__idx2] : null;
+
+              const __posFromItem2 = String(
+                (__item2 &&
+                  (__item2.canonicalPos ||
+                    __item2.canonical_pos ||
+                    __item2.pos ||
+                    __item2.partOfSpeech ||
+                    __item2.canonicalPOS)) ||
+                  ""
+              ).trim();
+
+              const __head2 = String(__qForSnapshot2 || "").trim();
+              const __lcKey2 =
+                __head2 && __posFromItem2
+                  ? `${__head2}::${__posFromItem2}`
+                  : __head2
+                    ? `${__head2}::__any`
+                    : "";
+
+              if (__lcKey2 && __lcKey2 !== refKey) {
+                upsertSnapshot(__lcKey2, dataWithExamples, { source: "analyze" });
+                try {
+                  if (import.meta?.env?.DEV) {
+                    console.debug("[snapshotStore][analyze-lc-key]", {
+                      refKey: __lcKey2,
+                      source: "analyze",
+                    });
+                  }
+                } catch {}
+              }
+            }
+          } catch {}
+
+          if (import.meta?.env?.DEV) {
+            try { console.debug("[snapshotStore][analyze]", { refKey, source: "analyze" }); } catch {}
+          }
+        }
+      } catch {
+        // no-op (must never break analyze flow)
+      }
+
+
+      // ============================================================
+      // Task E — Favorites 瀏覽快取：只寫入 favorites replay 的「預設詞性」結果
+      // 寫入條件：
+      // - intent === "learning-replay"
+      // - noHistory === true
+      // - !options.targetPosKey（預設詞性）
+      // - q 存在
+      // 注意：
+      // - 嚴禁把一般 search 結果塞進 cache（避免汙染）
+      // ============================================================
+      try {
+        const shouldWriteFavoritesCache =
+          noHistory &&
+          intent === "learning-replay" &&
+          !hasTargetPosKey &&
+          typeof q === "string" &&
+          q.trim();
+
+        if (shouldWriteFavoritesCache) {
+          // ✅ Task F2：favorites cacheKey 與 replay 讀取必須一致（normalizeSearchQuery(..., "favoritesCache")）
+          const __favoritesCacheKey = normalizeSearchQuery(q, "favoritesCache");
+
+          // ✅ Task F2：favoritesResultCache 的 snapshot 必須帶 examples（Array）
+          // - 例句補齊後會回寫到 snapshot.dictionary.examples
+          // - 這裡先保底，避免 cachedSnapshot 被判定為『無例句』
+          const __safeSnapshot = (() => {
+            try {
+              const dd = data && typeof data === "object" ? data : null;
+              const dict = dd && dd.dictionary && typeof dd.dictionary === "object" ? dd.dictionary : {};
+              const ex = Array.isArray(dict.examples) ? dict.examples : [];
+              return {
+                ...(dd || {}),
+                dictionary: {
+                  ...(dict || {}),
+                  examples: ex,
+                },
+              };
+            } catch {
+              return data;
+            }
+          })();
+
+          // ✅ 使用一致 key 寫入 favorites cache（不可用原始 q 以免 miss）
+          favoritesResultCacheRef.current.set(__favoritesCacheKey, __safeSnapshot);
+          // ✅ Task 2：favorites snapshot 是快取但不是凍結；把最新結果寫回可更新 snapshot（LRU/LIMIT 由 storage 控制）
+          try {
+            upsertFavoritesSnapshot(__favoritesCacheKey, __safeSnapshot);
+          } catch {}
+
+
+          // ✅ 可控 debug（避免噪音）：只有開 DEBUG=search 才印
+          if (isSearchDebugEnabled()) {
+            try {
+              console.debug("[favorites][cache] write", {
+                key: __favoritesCacheKey,
+                size: favoritesResultCacheRef.current.size,
+              });
+            } catch {}
+          }
+        }
+      } catch {}
+
+      // ✅ Task B：noHistory 時只更新結果，不寫入 history
+      if (noHistory) return;
 
       const headword = (data?.dictionary?.baseForm || data?.dictionary?.word || q).trim();
       const canonicalPos = (data?.dictionary?.canonicalPos || data?.dictionary?.partOfSpeech || "").trim();
+
+      // ✅ Phase 1+：analyze 後同步帶上 user_words / dict 相關欄位（僅紀錄，不生成新資料）
+      // - 目的：讓後續收藏/寫 DB 時能直接沿用這次 analyze 的欄位（避免 UI/DB 不一致）
+      const senseIndexRaw = data?.dictionary?.senseIndex ?? data?.dictionary?.sense_index ?? 0;
+      const senseIndex = Number.isInteger(senseIndexRaw)
+        ? senseIndexRaw
+        : Number.isFinite(Number(senseIndexRaw))
+        ? Number(senseIndexRaw)
+        : 0;
+
+      const headwordGloss = (() => {
+        try {
+          const v =
+            data?.dictionary?.headwordGloss ??
+            data?.dictionary?.headword_gloss ??
+            data?.dictionary?.gloss ??
+            "";
+          return typeof v === "string" ? v : "";
+        } catch {
+          return "";
+        }
+      })();
+
+      const headwordGlossLang = (() => {
+        try {
+          const v =
+            data?.dictionary?.headwordGlossLang ??
+            data?.dictionary?.headword_gloss_lang ??
+            "";
+          return typeof v === "string" ? v : "";
+        } catch {
+          return "";
+        }
+      })();
 
       const key = `${headword}::${canonicalPos}`;
       setHistory((prev) => {
@@ -577,6 +1163,9 @@ function AppInner() {
             text: q,
             headword,
             canonicalPos,
+            senseIndex,
+            headwordGloss,
+            headwordGlossLang,
             createdAt: new Date().toISOString(),
             resultSnapshot: data,
           },
@@ -599,54 +1188,58 @@ function AppInner() {
    * - 若 clickedPosKey 缺失：直接 return，不拋錯
    * - 若點擊的詞性等於目前 activePosKey：不重查（避免重複查詢）
    */
-  const handleSelectPosKey = (payload) => {
+  const handleSelectPosKey = async (payload) => {
     try {
-      const clickedPosKey = (payload?.clickedPosKey || payload?.posKey || "").trim();
+      const clickedPosKey = (payload?.clickedPosKey || payload?.posKey || "").toString().trim();
       const word = (payload?.word || payload?.text || payload?.headword || "").toString().trim();
 
       const activePosKey =
         (payload?.activePosKey ||
           result?.dictionary?.posKey ||
-          result?.dictionary?.partOfSpeech ||
           result?.dictionary?.canonicalPos ||
+          result?.dictionary?.partOfSpeech ||
           "")
           .toString()
           .trim();
 
-      console.log("[App][posSwitch] handleSelectPosKey", {
-        clickedPosKey,
-        activePosKey,
-        word,
-        hasClickedPosKey: !!clickedPosKey,
-        hasWord: !!word,
-      });
+      // ✅ 需求：點擊一定要生效（不能只 console），因此：
+      // - 若命中 history snapshot：直接 setResult/setHistoryIndex（即時 UI 變化）
+      // - 若未命中：一定要重新打 /api/analyze（帶 targetPosKey）以觸發重新分析/例句
+      //   （handleAnalyzeByText 已內建：targetPosKey 會跳過 history-hit 回放 → 強制打 API）
+      try {
+        console.log("[App][posSwitch] handleSelectPosKey", {
+          clickedPosKey,
+          activePosKey,
+          word,
+          hasClickedPosKey: !!clickedPosKey,
+          hasWord: !!word,
+        });
+      } catch {}
 
       if (!clickedPosKey || !word) return;
       if (clickedPosKey === activePosKey) return;
 
-      // 🔒 詞性 pill = 歷史切換（不打 API）
-      const historyKey = `${word}::${clickedPosKey}`;
-
-      const hitIndex = history.findIndex(
-        (h) =>
-          h?.text === word &&
-          (h?.resultSnapshot?.dictionary?.posKey === clickedPosKey ||
-            h?.resultSnapshot?.dictionary?.canonicalPos === clickedPosKey)
-      );
+      // ✅ 先嘗試命中既有 history（同字不同 POS 的快照）
+      const hitIndex = history.findIndex((h) => {
+        const t = (h?.text || "").toString().trim();
+        if (t !== word) return false;
+        const posKey = (h?.resultSnapshot?.dictionary?.posKey || "").toString().trim();
+        const canonicalPos = (h?.resultSnapshot?.dictionary?.canonicalPos || "").toString().trim();
+        const partOfSpeech = (h?.resultSnapshot?.dictionary?.partOfSpeech || "").toString().trim();
+        return posKey === clickedPosKey || canonicalPos === clickedPosKey || partOfSpeech === clickedPosKey;
+      });
 
       if (hitIndex >= 0) {
-        console.log("[App][posSwitch] hit history", historyKey, hitIndex);
-
-        setHistoryIndex(hitIndex);
-
         const snapshot = history[hitIndex]?.resultSnapshot;
         if (snapshot) {
+          setHistoryIndex(hitIndex);
           setResult(snapshot);
+          return;
         }
-      } else {
-        console.log("[App][posSwitch] no history for posKey", historyKey);
       }
 
+      // ✅ 必須重查：帶 targetPosKey 觸發後端用指定詞性重新分析/產生例句
+      await handleAnalyzeByText(word, { targetPosKey: clickedPosKey, queryMode: "pos_switch" });
       return;
     } catch (err) {
       console.warn("[App][posSwitch] handleSelectPosKey error", err);
@@ -657,6 +1250,13 @@ function AppInner() {
   const handleAnalyze = async () => {
     const q = normalizeSearchQuery(text, "handleAnalyze");
     if (!q) return;
+
+    // ============================================================
+    // Task D — intent：SearchBox 主動查詢
+    // - 統一走 handleAnalyzeByText（含：必要時切回 search/history + history-hit 回放 + 寫入 history）
+    // - 保留下方既有 legacy 實作（避免誤刪；但此處 return 後不會再執行）
+    // ============================================================
+    return await handleAnalyzeByText(q, { intent: "searchbox" });
 
     // ✅ Phase X：若命中 history，直接回放（不重打 /api/analyze）
     const hitIndex = findHistoryHitIndex(q);
@@ -695,6 +1295,40 @@ function AppInner() {
       const headword = (data?.dictionary?.baseForm || data?.dictionary?.word || q).trim();
       const canonicalPos = (data?.dictionary?.canonicalPos || data?.dictionary?.partOfSpeech || "").trim();
 
+      // ✅ Phase 1+：analyze 後同步帶上 user_words / dict 相關欄位（僅紀錄，不生成新資料）
+      // - 目的：讓後續收藏/寫 DB 時能直接沿用這次 analyze 的欄位（避免 UI/DB 不一致）
+      const senseIndexRaw = data?.dictionary?.senseIndex ?? data?.dictionary?.sense_index ?? 0;
+      const senseIndex = Number.isInteger(senseIndexRaw)
+        ? senseIndexRaw
+        : Number.isFinite(Number(senseIndexRaw))
+        ? Number(senseIndexRaw)
+        : 0;
+
+      const headwordGloss = (() => {
+        try {
+          const v =
+            data?.dictionary?.headwordGloss ??
+            data?.dictionary?.headword_gloss ??
+            data?.dictionary?.gloss ??
+            "";
+          return typeof v === "string" ? v : "";
+        } catch {
+          return "";
+        }
+      })();
+
+      const headwordGlossLang = (() => {
+        try {
+          const v =
+            data?.dictionary?.headwordGlossLang ??
+            data?.dictionary?.headword_gloss_lang ??
+            "";
+          return typeof v === "string" ? v : "";
+        } catch {
+          return "";
+        }
+      })();
+
       const key = `${headword}::${canonicalPos}`;
       setHistory((prev) => {
         const next = prev.filter((x) => (x?.key || "") !== key);
@@ -704,6 +1338,9 @@ function AppInner() {
             text: q,
             headword,
             canonicalPos,
+            senseIndex,
+            headwordGloss,
+            headwordGlossLang,
             createdAt: new Date().toISOString(),
             resultSnapshot: data,
           },
@@ -726,7 +1363,7 @@ function AppInner() {
 
     setText(q);
     setHistoryIndex(-1);
-    handleAnalyzeByText(q);
+    handleAnalyzeByText(q, { intent: "user-search" });
   };
 
   // ✅ 單字庫/收藏 controller（已拆出）
@@ -739,6 +1376,16 @@ function AppInner() {
     handleLibraryReview,
     handleSelectFavoriteCategory,
     handleSelectFavoriteCategoryForAdd,
+    // ✅ 2026-01-17：favorites categories CRUD（管理分類 modal 串接）
+    createFavoriteCategoryViaApi,
+    renameFavoriteCategoryViaApi,
+    reorderFavoriteCategoriesViaApi,
+    archiveFavoriteCategoryViaApi,
+    isFavoriteCategoriesSaving,
+    favoriteCategoriesSavingError,
+    // ✅ 2026-01-16：B(UI) pending/key（UI 禁止連點用；UI 不做交易邏輯）
+    isFavoritePending,
+    getFavoriteWordKey,
   } = useLibraryController({
     // flags / env
     USE_API_LIBRARY,
@@ -1006,43 +1653,825 @@ function AppInner() {
 
   // ✅ 點星號後：先走既有 toggle，再拉一次 category-status 對齊（避免只靠 optimistic）
   const handleToggleFavoriteForUI = (entry, options = {}) => {
-    if (typeof handleToggleFavorite === "function") {
-      handleToggleFavorite(entry, options);
+  // ✅ 2026-01-14：取消收藏（unfavorite）必須帶 category_id（links-first）
+  // - 若呼叫端沒帶，就用目前選到的分類 selectedFavoriteCategoryId
+  const fallbackCategoryIdRaw = selectedFavoriteCategoryId;
+  const fallbackCategoryId = Number.isInteger(fallbackCategoryIdRaw)
+    ? fallbackCategoryIdRaw
+    : Number.isFinite(Number(fallbackCategoryIdRaw))
+    ? Number(fallbackCategoryIdRaw)
+    : 0;
+
+  const nextOptions =
+    options && typeof options === "object"
+      ? {
+          ...options,
+          ...(options.category_id || options.categoryId
+            ? {}
+            : fallbackCategoryId > 0
+            ? { category_id: fallbackCategoryId }
+            : {}),
+        }
+      : fallbackCategoryId > 0
+      ? { category_id: fallbackCategoryId }
+      : {};
+
+  if (typeof handleToggleFavorite === "function") {
+    handleToggleFavorite(entry, nextOptions);
+  }
+
+  // 只有在「當前畫面有分類選擇」才需要刷新狀態
+  try {
+    window.setTimeout(() => {
+      fetchFavoriteCategoryStatus({ reason: "after-toggle" });
+    }, 200);
+  } catch {}
+};
+
+
+
+  // ============================================================
+  // Task 3 — Favorites Learning：goPrev/goNext 需要讀『最新 learningContext』
+  // - 用 ref 避免 navContext.goPrev/goNext 閉包拿到舊 index
+  // ============================================================
+  const learningContextRef = useRef(null);
+  useEffect(() => {
+    learningContextRef.current = learningContext;
+  }, [learningContext]);
+
+  // ============================================================
+  // Task B — Favorites/Learning：取得 item 的查詢 headword（唯一規則，禁止 UI fallback chain）
+  // - 規則：只認 item.headword（string），其他欄位一律不採用
+  // - 原因：replay 的資料來源必須穩定，避免 UI/後端欄位不一致導致「翻頁不翻結果」
+  // ============================================================
+  const getItemHeadword = (item) => {
+    try {
+      const v = item && typeof item === "object" ? item.headword : "";
+      return typeof v === "string" ? v.trim() : "";
+    } catch {
+      return "";
+    }
+  };
+
+  // ============================================================
+  // Task B — Favorites/Learning：index 改變 → replay current item（必須換結果內容）
+  // - 觸發：mode="learning" && sourceType="favorites" && index 變動
+  // - 動作：handleAnalyzeByText(headword, { noHistory:true })
+  // - Guard：lastReplayedHeadwordRef（避免相同 headword 重覆觸發造成 loop）
+  // ============================================================
+  const lastReplayedHeadwordRef = useRef("");
+  useEffect(() => {
+    if (mode !== "learning") return;
+    if (!learningContext || learningContext.sourceType !== "favorites") return;
+
+    // 僅以 index 作為切換觸發；items 透過 ref 讀取最新（避免 deps 放 items 造成不穩定）
+    const lc = learningContextRef.current || learningContext;
+    const items = Array.isArray(lc?.items) ? lc.items : [];
+    if (items.length <= 0) return;
+
+    const rawIndex = typeof lc?.index === "number" && Number.isFinite(lc.index) ? lc.index : -1;
+    if (rawIndex < 0) return;
+    const index = rawIndex >= items.length ? items.length - 1 : rawIndex;
+
+    const item = items[index];
+    const headword = getItemHeadword(item);
+    if (!headword) return;
+
+    // guard：同一個 headword 不重播（避免某些 setState 觸發 effect 重入）
+    if (lastReplayedHeadwordRef.current === headword) return;
+    lastReplayedHeadwordRef.current = headword;
+
+    // ============================================================
+    // Task E — Favorites replay：cache-first（僅預設詞性）
+    // - cache hit：直接 setResult(snapshot)，不打 /api/analyze
+    // - cache miss：沿用既有 handleAnalyzeByText（noHistory=true）
+    // - 注意：pos switch（有 targetPosKey）不走此路徑（handleSelectPosKey 會帶 targetPosKey）
+    // ============================================================
+    try {
+      const cacheKey = normalizeSearchQuery(headword, "favoritesCache");
+
+      if (
+        typeof cacheKey === "string" &&
+        cacheKey.trim() &&
+        favoritesResultCacheRef.current &&
+        favoritesResultCacheRef.current.has(cacheKey)
+      ) {
+        const cached = favoritesResultCacheRef.current.get(cacheKey);
+        if (cached) {
+          setResult(cached);
+
+          // ✅ 可控 debug（避免噪音）：只有開 DEBUG=search 才印
+          if (isSearchDebugEnabled()) {
+            try {
+              console.debug("[favorites][cache] hit", {
+                key: cacheKey,
+                size: favoritesResultCacheRef.current.size,
+              });
+            } catch {}
+          }
+
+          return;
+        }
+      }
+    } catch {}
+
+    // ✅ cache miss：只更新結果，不污染 history、不切 mode
+    handleAnalyzeByText(headword, {
+      noHistory: true,
+      intent: "learning-replay",
+      source: "learning-favorites-replay",
+    });
+
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, learningContext?.sourceType, learningContext?.index]);
+  // ============================================================
+  // Task 3 — Favorites Learning → navContext 映射（Learning 模式）
+  // 條件：mode === "learning" && learningContext?.sourceType === "favorites"
+  // - Favorites 順序固定：prev=index-1, next=index+1（方向鎖死）
+  // - label 固定欄位：item.headword（禁止 UI fallback chain）
+  // - goPrev/goNext 只能改 learningContext.index（禁止動 historyIndex）
+  // ============================================================
+  useEffect(() => {
+    const lc = learningContext;
+
+    // 只在 learning + favorites 時接管 navContext
+    if (mode !== "learning") return;
+    if (!lc || lc.sourceType !== "favorites") return;
+
+    const items = Array.isArray(lc.items) ? lc.items : [];
+    const total = items.length;
+
+    // safety：沒有 items 就先清空（避免 UI 誤判）
+    if (total <= 0) {
+      setNavContext({
+        source: "favorites",
+        items: [],
+        total: 0,
+        index: -1,
+        currentLabel: "",
+        prevLabel: "",
+        nextLabel: "",
+        canPrev: false,
+        canNext: false,
+        goPrev: () => {},
+        goNext: () => {},
+      });
+      return;
     }
 
-    // 只有在「當前畫面有分類選擇」才需要刷新狀態
-    try {
-      window.setTimeout(() => {
-        fetchFavoriteCategoryStatus({ reason: "after-toggle" });
-      }, 200);
-    } catch {}
-  };
+    // clamp index
+    const rawIndex =
+      typeof lc.index === "number" && Number.isFinite(lc.index) ? lc.index : 0;
+    const index = rawIndex < 0 ? 0 : rawIndex >= total ? total - 1 : rawIndex;
+
+    const getLabelByIndex = (i) => {
+      if (i < 0 || i >= total) return "";
+      const it = items[i];
+      return typeof it?.headword === "string" ? it.headword : "";
+    };
+
+    const prevTargetIndex = index - 1;
+    const nextTargetIndex = index + 1;
+
+    const canPrev = index > 0;
+    const canNext = index < total - 1;
+
+    // ✅ 用 ref 讀最新 learningContext，避免閉包拿到舊 index
+    const goPrev = () => {
+      const cur = learningContextRef.current;
+      if (!cur || cur.sourceType !== "favorites") return;
+
+      const curItems = Array.isArray(cur.items) ? cur.items : [];
+      const curTotal = curItems.length;
+      const curIndex =
+        typeof cur.index === "number" && Number.isFinite(cur.index) ? cur.index : 0;
+
+      if (curTotal <= 0) return;
+      if (curIndex <= 0) return;
+
+      updateLearningContext({ index: curIndex - 1 });
+    };
+
+    const goNext = () => {
+      const cur = learningContextRef.current;
+      if (!cur || cur.sourceType !== "favorites") return;
+
+      const curItems = Array.isArray(cur.items) ? cur.items : [];
+      const curTotal = curItems.length;
+      const curIndex =
+        typeof cur.index === "number" && Number.isFinite(cur.index) ? cur.index : 0;
+
+      if (curTotal <= 0) return;
+      if (curIndex >= curTotal - 1) return;
+
+      updateLearningContext({ index: curIndex + 1 });
+    };
+
+    setNavContext({
+      source: "favorites",
+      items,
+      total,
+      index,
+      currentLabel: getLabelByIndex(index),
+      prevLabel: getLabelByIndex(prevTargetIndex),
+      nextLabel: getLabelByIndex(nextTargetIndex),
+      canPrev,
+      canNext,
+      goPrev,
+      goNext,
+    });
+  }, [mode, learningContext, setNavContext, updateLearningContext]);
 
   const canClearHistory = historyIndex >= 0 && historyIndex < history.length;
 
+  
+
+  // ============================================================
+  // Task F2 — Favorites/Learning：例句補齊後回寫 favoritesResultCache（持久顯示）
+  // - 只在 mode=learning 且 learningContext.sourceType=favorites 啟用
+  // - examples 必須寫回 favoritesResultCacheRef.current 的 result snapshot（dictionary.examples）
+  // - cacheKey 必須與 favorites replay 讀取一致（normalizeSearchQuery(headword, "favoritesCache")）
+  // ============================================================
+  const isFavoritesLearning =
+    mode === "learning" &&
+    learningContext &&
+    learningContext.sourceType === "favorites";
+
+  // ✅ 2026/01/20（需求變更）：取消 favorites-learning 不自動打 /api/dictionary/examples
+  // - 需求：學習本連到 ResultPanel，希望「直接自動產生例句 + 翻譯」
+  // - 決策：favorites-learning 一律啟用 auto-refresh（避免回到學習狀態時漏翻譯）
+  // - 注意：若日後要控 token，可在 useExamples 端加「只補缺翻譯」的 guard（本檔先不改下游）
+  //
+  // ===== 舊邏輯（deprecated）：只有「目前沒有例句」才允許自動產生 =====
+  // ✅ 只在「學習本/我的最愛」且「目前這張卡沒有例句」時才允許自動產生
+  // - 目的：學習本進 ResultPanel 時能自動補齊一次
+  // - 避免：已有例句或 Prev/Next 重播時重複打例句 API
+  const hasExamplesNow__deprecated =
+    Array.isArray(result?.dictionary?.examples)
+      ? result.dictionary.examples.length > 0
+      : false;
+
+  const examplesAutoRefreshEnabled__deprecated =
+    isFavoritesLearning ? !hasExamplesNow__deprecated : true;
+
+  // ✅ 新邏輯：favorites-learning 一律開啟（上游接線永遠傳 boolean，避免 undefined）
+  const examplesAutoRefreshEnabled = isFavoritesLearning ? true : true;
+
+  // ✅ 可控 debug（避免噪音）：DEBUG 包含 examples 才印
+  if (isExamplesDebugEnabled()) {
+    try {
+      console.debug("[examples][autoRefresh] computed", {
+        mode: mode || "not available",
+        sourceType: learningContext?.sourceType || "not available",
+        isFavoritesLearning: !!isFavoritesLearning,
+        hasExamplesNow__deprecated: !!hasExamplesNow__deprecated,
+        examplesAutoRefreshEnabled__deprecated: !!examplesAutoRefreshEnabled__deprecated,
+        examplesAutoRefreshEnabled: !!examplesAutoRefreshEnabled,
+      });
+    } catch {}
+  }
+
+
+  const handleFavoritesExamplesResolved = (examplesArray, meta) => {
+  // === FIX: ensure updatedResult is used consistently ===
+    // Task 4C-fix: single write-back to SnapshotStore (no loop)
+    try {
+      if (result) {
+        // ✅ 規則：只在 examples 成功補齊後回寫（此 handler 只在成功時被呼叫）
+        const prev = result && typeof result === "object" ? result : null;
+        if (!prev) return;
+
+        const prevDict =
+          prev.dictionary && typeof prev.dictionary === "object"
+            ? prev.dictionary
+            : {};
+
+        const nextExamples = Array.isArray(examplesArray) ? examplesArray : [];
+
+        const nextExampleTranslation =
+          typeof meta?.exampleTranslation === "string"
+            ? meta.exampleTranslation.trim()
+            : "";
+
+        const updatedResult = {
+          ...prev,
+          dictionary: {
+            ...prevDict,
+            example: nextExamples,
+            examples: nextExamples,
+            ...(nextExampleTranslation ? { exampleTranslation: nextExampleTranslation } : {}),
+          },
+        };
+
+        // ✅ Task 4C-0：同頁即時補齊 result（避免 d.exampleTranslation 仍空而導致重打）
+        try {
+          // 同步 header 欄位（僅在有 meta 時覆蓋；避免因後續重播仍看到舊 headword）
+          if (meta && meta.displayHeadword) {
+            updatedResult.dictionary.headword = meta.displayHeadword;
+          }
+          if (meta && meta.article !== undefined) {
+            updatedResult.dictionary.article = meta.article;
+          }
+
+          setResult(updatedResult);
+        } catch {}
+
+        // ✅ Task 4C-A: 同步回寫 history snapshot（避免切換時回放舊資料）
+        try {
+          if (typeof historyIndex === "number" && historyIndex >= 0 && Array.isArray(history)) {
+            setHistory((prevHistory) => {
+              if (!Array.isArray(prevHistory) || !prevHistory[historyIndex]) return prevHistory;
+              const nextHistory = prevHistory.slice();
+              nextHistory[historyIndex] = {
+                ...prevHistory[historyIndex],
+                resultSnapshot: updatedResult,
+              };
+              return nextHistory;
+            });
+          }
+        } catch {}
+
+
+
+        // ✅ refKey：優先使用 meta.refKey；否則用 headword::canonicalPos；最後用 headword::__any
+        let refKey = "";
+        try {
+          if (typeof meta?.refKey === "string" && meta.refKey.trim()) {
+            refKey = meta.refKey.trim();
+          } else {
+            const hw = String(
+              prevDict?.baseForm || prevDict?.word || prevDict?.headword || ""
+            ).trim();
+            const pos = String(
+              prevDict?.canonicalPos || prevDict?.canonical_pos || prevDict?.partOfSpeech || ""
+            ).trim();
+
+            if (hw && pos) refKey = `${hw}::${pos}`;
+            else if (hw) refKey = `${hw}::__any`;
+          }
+        } catch {
+          refKey = "";
+        }
+
+        if (refKey) {
+          // ✅ 4C：只在「更完整」時才回寫（避免無謂寫入 / 避免較差資料覆蓋）
+          try {
+            upsertIfImproved(refKey, getSnapshot(refKey), updatedResult, {
+              source: "examples-resolved",
+            });
+          } catch {}
+
+          // ✅ alias：headword::__any（避免 favorites item 缺 canonicalPos 時 miss）
+          try {
+            const hwAlias = String(
+              prevDict?.baseForm || prevDict?.word || prevDict?.headword || ""
+            ).trim();
+            const aliasKey = hwAlias ? `${hwAlias}::__any` : "";
+            if (aliasKey) {
+              upsertIfImproved(aliasKey, getSnapshot(aliasKey), updatedResult, {
+                source: "examples-resolved",
+              });
+            }
+          } catch {}
+
+          // ✅ harden：同一份 updatedResult 也寫入「其他可能的 headword 變體」（提升命中率）
+          // - 常見情境：查詢字形是變格/變位（例如：des Berges），但 dictionary.baseForm 是 Berg
+          try {
+            const pos2 = String(
+              prevDict?.canonicalPos || prevDict?.canonical_pos || prevDict?.partOfSpeech || ""
+            ).trim();
+
+            const hwVariants = [
+              String(prevDict?.word || "").trim(),
+              String(prevDict?.baseForm || "").trim(),
+              String(prevDict?.headword || "").trim(),
+            ].filter((x, i, arr) => x && arr.indexOf(x) === i);
+
+            hwVariants.forEach((hwv) => {
+              const k = pos2 ? `${hwv}::${pos2}` : `${hwv}::__any`;
+              if (!k) return;
+              try {
+                upsertIfImproved(k, getSnapshot(k), updatedResult, {
+                  source: "examples-resolved",
+                });
+              } catch {}
+            });
+          } catch {}
+
+          // ✅ Task 4B-1 harden: 用 learningContext item 的 pos 再寫一次 key（提升 Refresh 後命中率）
+          // - 不改 replay / analyze / history，只增加寫入 key
+          try {
+            if (mode === "learning" && learningContext?.sourceType === "favorites") {
+              const __hw3 = String(
+                prevDict?.baseForm || prevDict?.word || prevDict?.headword || ""
+              ).trim();
+              const __q3 = normalizeSearchQuery(__hw3, "favoritesSnapshotReplay");
+              const __lc3 =
+                learningContext && typeof learningContext === "object" ? learningContext : null;
+              const __items3 = Array.isArray(__lc3?.items) ? __lc3.items : [];
+              const __idxRaw3 =
+                typeof __lc3?.index === "number" && Number.isFinite(__lc3.index)
+                  ? __lc3.index
+                  : -1;
+              const __idx3 =
+                __idxRaw3 >= 0 && __idxRaw3 < __items3.length ? __idxRaw3 : -1;
+              const __item3 = __idx3 >= 0 ? __items3[__idx3] : null;
+
+              const __posFromItem3 = String(
+                (__item3 &&
+                  (__item3.canonicalPos ||
+                    __item3.canonical_pos ||
+                    __item3.pos ||
+                    __item3.partOfSpeech ||
+                    __item3.canonicalPOS)) ||
+                  ""
+              ).trim();
+
+              const __head3 = String(__q3 || "").trim();
+              const __lcKey3 =
+                __head3 && __posFromItem3
+                  ? `${__head3}::${__posFromItem3}`
+                  : __head3
+                    ? `${__head3}::__any`
+                    : "";
+
+              if (__lcKey3 && __lcKey3 !== refKey) {
+                upsertSnapshot(__lcKey3, updatedResult, { source: "examples-resolved" });
+                try {
+                  if (import.meta?.env?.DEV) {
+                    console.debug("[snapshotStore][examples-resolved-lc-key]", {
+                      refKey: __lcKey3,
+                      source: "examples-resolved",
+                    });
+                  }
+                } catch {}
+              }
+            }
+          } catch {}
+
+
+          // dev-only debug：examples-resolved
+          try {
+            if (import.meta?.env?.DEV) {
+              console.debug("[snapshotStore][examples-resolved]", {
+                refKey,
+                source: "examples-resolved",
+                hasExamples: Array.isArray(nextExamples) && nextExamples.length > 0,
+                hasExampleTranslation: !!nextExampleTranslation,
+              });
+            }
+          } catch {}
+        }
+      }
+    } catch {}
+
+    try {
+      if (!(mode === "learning" && learningContext && learningContext.sourceType === "favorites")) {
+        return;
+      }
+
+      // ✅ headword 取得方式與 favorites replay 一致（優先用 learningContext 當下 item.headword）
+      const lc = learningContext;
+      const items = Array.isArray(lc?.items) ? lc.items : [];
+      const idx =
+        typeof lc?.index === "number" && Number.isFinite(lc.index) ? lc.index : -1;
+      const item = idx >= 0 && idx < items.length ? items[idx] : null;
+
+      const headword =
+        (item && getItemHeadword(item)) ||
+        (result?.dictionary?.baseForm || result?.dictionary?.word || "") ||
+        "";
+
+      const cacheKey = normalizeSearchQuery(headword, "favoritesCache");
+      if (!cacheKey || !cacheKey.trim()) return;
+
+      const nextExamples = Array.isArray(examplesArray) ? examplesArray : [];
+
+      // ✅ Task 3：翻譯來源以 meta.exampleTranslation 為主，並且必須回寫到 dictionary.exampleTranslation
+      const nextExampleTranslation =
+        typeof meta?.exampleTranslation === "string"
+          ? meta.exampleTranslation.trim()
+          : "";
+
+      // ============================================================
+      // Task 2 — Favorites Snapshot「可更新」
+      // - 例句/翻譯補齊完成後：更新同一筆 favorites snapshot（replay 是快取但不是凍結）
+      // - 只允許 favorites-learning；History/Search 不得回寫（由上方 gate 保證）
+      // - 只要有新增就算（例句由空→有、翻譯補齊、例句數量增加）
+      // ============================================================
+      const hasTranslation = (ex) => {
+        try {
+          if (!ex || typeof ex !== "object") return false;
+          if (typeof ex.translation === "string" && ex.translation.trim()) return true;
+          if (typeof ex.translationText === "string" && ex.translationText.trim()) return true;
+          if (typeof ex.zh === "string" && ex.zh.trim()) return true;
+          if (typeof ex.zhTw === "string" && ex.zhTw.trim()) return true;
+          if (typeof ex.explain === "string" && ex.explain.trim()) return true;
+          if (Array.isArray(ex.translations) && ex.translations.length > 0) return true;
+          return false;
+        } catch {
+          return false;
+        }
+      };
+
+      const prevStored = (() => {
+        try {
+          const s = findFavoritesSnapshot(cacheKey);
+          return s && typeof s === "object" ? s : null;
+        } catch {
+          return null;
+        }
+      })();
+
+      const prevInMem = (() => {
+        try {
+          const s = favoritesResultCacheRef.current?.get(cacheKey);
+          return s && typeof s === "object" ? s : null;
+        } catch {
+          return null;
+        }
+      })();
+
+      const prevSnap = prevInMem || prevStored;
+
+      const prevExampleTranslation =
+        typeof prevSnap?.dictionary?.exampleTranslation === "string"
+          ? prevSnap.dictionary.exampleTranslation.trim()
+          : "";
+
+      const prevExamples = Array.isArray(prevSnap?.dictionary?.examples)
+        ? prevSnap.dictionary.examples
+        : [];
+
+      const prevTranslatedCount = prevExamples.filter(hasTranslation).length;
+      const nextTranslatedCount = nextExamples.filter(hasTranslation).length;
+
+      const improved =
+        (prevExamples.length === 0 && nextExamples.length > 0) ||
+        nextExamples.length > prevExamples.length ||
+        nextTranslatedCount > prevTranslatedCount ||
+        (!!nextExampleTranslation && !prevExampleTranslation);
+
+      // 1) 回寫 favorites cache snapshot（memory + persisted snapshot）
+      if (improved) {
+        try {
+          const base = prevSnap || (result && typeof result === "object" ? result : null);
+          if (base) {
+            const dict =
+              base.dictionary && typeof base.dictionary === "object" ? base.dictionary : {};
+            const updatedSnapshot = {
+              ...base,
+              dictionary: {
+                ...dict,
+                examples: nextExamples,
+                // ✅ Task 3：回寫例句翻譯（必須落在 dictionary.exampleTranslation）
+                ...(nextExampleTranslation
+                  ? { exampleTranslation: nextExampleTranslation }
+                  : {}),
+              },
+            };
+
+            // memory map（Task E cache）
+            try {
+              favoritesResultCacheRef.current?.set(cacheKey, updatedSnapshot);
+            } catch {}
+
+            // persisted snapshot（Task 1/2 replay source）
+            try {
+              upsertFavoritesSnapshot(cacheKey, updatedSnapshot);
+            } catch {}
+          }
+        } catch {}
+      }
+
+      // 2) 同步更新當前畫面（避免只更新 cache，UI 還拿舊 result）
+      try {
+        setResult((prev) => {
+          const p = prev && typeof prev === "object" ? prev : null;
+          if (!p) return prev;
+          const pd =
+            p.dictionary && typeof p.dictionary === "object" ? p.dictionary : {};
+          return {
+            ...p,
+            dictionary: {
+              ...pd,
+              examples: nextExamples,
+              // ✅ Task 3：同步回寫 dictionary.exampleTranslation（避免只更新 cache，畫面仍顯示空翻譯）
+              ...(nextExampleTranslation
+                ? { exampleTranslation: nextExampleTranslation }
+                : {}),
+            },
+          };
+        });
+      } catch {}
+
+      // ✅ 例句翻譯排查（runtime）：是否有帶 translation 欄位
+      if (isExamplesDebugEnabled()) {
+        try {
+          const sample =
+            Array.isArray(nextExamples) && nextExamples.length ? nextExamples[0] : null;
+          const sampleHasTranslation = hasTranslation(sample);
+          console.debug("[examples][resolved] translation-check", {
+            key: cacheKey || "not available",
+            count: nextExamples.length,
+            sampleHasTranslation,
+            improved,
+            prevCount: prevExamples.length,
+            prevTranslatedCount,
+            nextTranslatedCount,
+          });
+        } catch {}
+      }
+
+      // ✅ 可控 debug
+      if (isSearchDebugEnabled()) {
+        try {
+          console.debug("[favorites][examples] resolved->cache", {
+            key: cacheKey,
+            count: nextExamples.length,
+            improved,
+            meta: meta || null,
+          });
+        } catch {}
+      }
+    } catch {}
+  };
+
+
+  // ============================================================
+  // Task F2 — Favorites/Learning：examples 補齊後回寫 favorites cache
+  // ============================================================
+  const examplesAutoRefreshEnabled__legacyF2 = !(
+    mode === "learning" &&
+    learningContext &&
+    learningContext.sourceType === "favorites"
+  );
+
+  const handleFavoritesExamplesResolved__legacyF2 = (examplesArray, meta) => {
+    // Legacy-F2：保留舊的 favorites cache 寫入路徑，但修正成「不依賴未宣告變數」且可安全更新當前畫面
+    try {
+      if (!(mode === "learning" && learningContext && learningContext.sourceType === "favorites")) return;
+
+      const items = Array.isArray(learningContext.items) ? learningContext.items : [];
+      const idx =
+        typeof learningContext.index === "number" && Number.isFinite(learningContext.index)
+          ? learningContext.index
+          : -1;
+      if (idx < 0 || idx >= items.length) return;
+
+      const item = items[idx];
+      const headword = getItemHeadword(item);
+      const cacheKey = normalizeSearchQuery(headword, "favoritesCache");
+      if (!cacheKey || !favoritesResultCacheRef.current) return;
+
+      const prevSnap = favoritesResultCacheRef.current.get(cacheKey);
+      if (!prevSnap || typeof prevSnap !== "object") return;
+
+      const prevDict =
+        prevSnap.dictionary && typeof prevSnap.dictionary === "object" ? prevSnap.dictionary : {};
+      const nextExamples = Array.isArray(examplesArray) ? examplesArray : [];
+
+      const nextSnap = {
+        ...prevSnap,
+        dictionary: {
+          ...prevDict,
+          examples: nextExamples,
+        },
+      };
+      favoritesResultCacheRef.current.set(cacheKey, nextSnap);
+
+      // ✅ 同步更新當前畫面（僅在同一個 headword 時覆蓋）
+      setResult((curr) => {
+        const currObj = curr && typeof curr === "object" ? curr : null;
+        if (!currObj) return curr;
+
+        const currDict =
+          currObj.dictionary && typeof currObj.dictionary === "object" ? currObj.dictionary : {};
+        const currHead = (currDict.baseForm || currDict.lemma || currDict.word || "").toString();
+        const normalizedCurrHead = normalizeSearchQuery(currHead, "favoritesCache");
+        if (normalizedCurrHead !== cacheKey) return curr;
+
+        const nextDict = {
+          ...currDict,
+          examples: nextExamples,
+        };
+
+        // header 同步（避免 UI title 仍是舊字）
+        if (meta && meta.displayHeadword) nextDict.headword = meta.displayHeadword;
+        if (meta && meta.article !== undefined) nextDict.article = meta.article;
+
+        return {
+          ...currObj,
+          dictionary: nextDict,
+        };
+      });
+    } catch {}
+  };
+
+  // ============================================================
+  // Init Gate (UI) — 初始化未完成前，所有「使用者觸發」入口直接 no-op
+  // ============================================================
+  const setUiLangSafe = useCallback(
+    (next) => {
+      if (!appReady) return;
+      setUiLang(next);
+    },
+    [appReady]
+  );
+
+  const setThemeSafe = useCallback(
+    (next) => {
+      if (!appReady) return;
+      setTheme(next);
+    },
+    [appReady]
+  );
+
+  const setViewSafe = useCallback(
+    (next) => {
+      if (!appReady) return;
+      setView(next);
+    },
+    [appReady]
+  );
+
+  const goPrevHistorySafe = useCallback(() => {
+    if (!appReady) return;
+    goPrevHistory();
+  }, [appReady, goPrevHistory]);
+
+  const goNextHistorySafe = useCallback(() => {
+    if (!appReady) return;
+    goNextHistory();
+  }, [appReady, goNextHistory]);
+
+  const toggleFavoriteSafe = useCallback(
+    (...args) => {
+      if (!appReady) return;
+      return handleToggleFavoriteForUI?.(...args);
+    },
+    [appReady, handleToggleFavoriteForUI]
+  );
+
   return (
-    <AppShellView
+    <div style={{ position: "relative" }}>
+      {!appReady && (
+        <div
+          className="app-init-overlay"
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 9999,
+            background: "transparent",
+            // ✅ init gating：只擋互動，不要整頁霧面/白幕
+            backdropFilter: "none",
+            WebkitBackdropFilter: "none",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            pointerEvents: "auto",
+          }}
+        >
+          <div
+            style={{
+              padding: "12px 14px",
+              borderRadius: 12,
+              border: theme === "dark" ? "1px solid rgba(255,255,255,0.16)" : "1px solid rgba(0,0,0,0.10)",
+              background: theme === "dark" ? "rgba(20,20,20,0.85)" : "rgba(255,255,255,0.92)",
+              boxShadow: theme === "dark" ? "0 10px 30px rgba(0,0,0,0.55)" : "0 10px 30px rgba(0,0,0,0.15)",
+              color: theme === "dark" ? "rgba(255,255,255,0.92)" : "rgba(0,0,0,0.78)",
+              fontSize: 14,
+              letterSpacing: "0.2px",
+            }}
+          >
+            初始化中…
+          </div>
+        </div>
+      )}
+
+      <AppShellView
       // core
       uiLang={uiLang}
-      setUiLang={setUiLang}
+      setUiLang={setUiLangSafe}
       theme={theme}
-      setTheme={setTheme}
+      setTheme={setThemeSafe}
       currentUiText={currentUiText}
       uiText={uiText}
       t={t}
       loading={loading}
       view={view}
-      setView={setView}
+      setView={setViewSafe}
       authUserId={authUserId}
       apiBase={API_BASE}
+      interactionEnabled={appReady}
       // layout
       history={history}
       historyIndex={historyIndex}
-      onPrevHistory={goPrevHistory}
-      onNextHistory={goNextHistory}
+      onPrevHistory={goPrevHistorySafe}
+      onNextHistory={goNextHistorySafe}
       // test mode
       isFavorited={isFavoritedForUI}
-      onToggleFavorite={handleToggleFavoriteForUI}
+      onToggleFavorite={toggleFavoriteSafe}
       libraryItems={libraryItems}
       testCard={testCard}
       setTestCard={setTestCard}
@@ -1053,6 +2482,8 @@ function AppInner() {
       // search box
       text={text}
       onTextChange={handleTextChange}
+      queryHint={queryHint}
+      onClearQueryHint={clearQueryHint}
       onAnalyze={handleAnalyze}
       onEnterSearch={enterSearchMode}
       onEnterLearning={enterLearningMode}
@@ -1063,6 +2494,11 @@ function AppInner() {
       onToggleRaw={() => setShowRaw((p) => !p)}
       mode={mode}
       learningContext={learningContext}
+      // ✅ Task F2：examples 補齊完成後回寫 favorites cache（由下游 useExamples 觸發）
+      onExamplesResolved={handleFavoritesExamplesResolved}
+  // === FIX: ensure updatedResult is used consistently ===
+      // ✅ Task F2：Favorites learning replay 預設關閉 auto-refresh，只允許手動補齊
+      examplesAutoRefreshEnabled={examplesAutoRefreshEnabled}
       WordCard={WordCard}
       GrammarCard={GrammarCard}
       historyLength={history.length}
@@ -1086,7 +2522,30 @@ function AppInner() {
       onUpdateSenseStatus={handleUpdateSenseStatus}
       favoriteDisabled={!authUserId}
       onSelectFavoriteCategory={handleSelectFavoriteCategory}
+      // ✅ 2026-01-17：favorites categories CRUD（管理分類 modal 串接）
+      // ✅ 2026-01-18：Task C（分類 CRUD 接線：新 prop 命名，供 AppShellView/WordLibraryPanel 使用）
+      // - 注意：保留舊 prop（onCreateFavoriteCategory...）不移除；新舊並存
+      isCategoriesSaving={isFavoriteCategoriesSaving}
+      categoriesErrorText={favoriteCategoriesSavingError}
+      onCreateCategory={createFavoriteCategoryViaApi}
+      onRenameCategory={renameFavoriteCategoryViaApi}
+      onReorderCategories={reorderFavoriteCategoriesViaApi}
+      onArchiveCategory={archiveFavoriteCategoryViaApi}
+      onCreateFavoriteCategory={createFavoriteCategoryViaApi}
+      onRenameFavoriteCategory={renameFavoriteCategoryViaApi}
+      onReorderFavoriteCategories={reorderFavoriteCategoriesViaApi}
+      onArchiveFavoriteCategory={archiveFavoriteCategoryViaApi}
+      isFavoriteCategoriesSaving={isFavoriteCategoriesSaving}
+      favoriteCategoriesSavingError={favoriteCategoriesSavingError}
+      // ✅ 2026-01-16：B(UI) pending/key 接線（ResultPanel/Library list 的星號 disable）
+      isFavoritePending={isFavoritePending}
+      getFavoriteWordKey={getFavoriteWordKey}
+
+      // ✅ 2026-01-19：Task A（ResultPanel 導覽列雙路）
+      // - App 端已 setNavContext(...)，但此前未往下傳，ResultPanel 看不到
+      navContext={navContext}
     />
+    </div>
   );
 }
 

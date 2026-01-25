@@ -1,3 +1,4 @@
+// FILE: frontend/src/components/examples/useExamples.jsx
 // frontend/src/components/examples/useExamples.jsx
 /**
  * 📌 檔案說明（useExamples Hook）
@@ -206,6 +207,28 @@ export default function useExamples({
   // ✅ 新增（可選）：多重參考（不破壞既有呼叫）
   multiRefEnabled,
   refs,
+
+  // ✅ 新增（可選）：例句 headword 覆蓋（例如：名詞格變化 des Berges）
+  // - 目的：讓「重新產生例句」以 UI 顯示的 headword 為準（word），baseForm 仍保留 lemma
+  // - 注意：只影響本次 refreshExamples 的 payload.word，不改 d.word / history key
+  headwordOverride,
+
+  // =========================
+  // Task F2（Favorites/Learning examples cache 回寫）
+  // =========================
+  /**
+   * onExamplesResolved（可選）
+   * - 當 /api/dictionary/examples 成功回傳例句後，會呼叫此 callback
+   * - 用途：讓上游（App.jsx）把例句寫回 favoritesResultCache 的 snapshot
+   */
+  onExamplesResolved,
+
+  /**
+   * examplesAutoRefreshEnabled（可選，預設 true）
+   * - true：維持既有 auto-refresh 行為（無例句時自動呼叫 /api/dictionary/examples）
+   * - false：關閉 auto-refresh（例如：Favorites learning replay），但仍允許使用者手動按鈕補齊
+   */
+  examplesAutoRefreshEnabled = true,
 }) {
   const [examples, setExamples] = useState(
     d && Array.isArray(d.examples)
@@ -222,6 +245,22 @@ export default function useExamples({
   );
 
   const [loading, setLoading] = useState(false);
+
+  // =========================
+  // Task F2：用 ref 保存最新 callback / autoRefresh flag
+  // - 避免 callback/flag 變動導致 refreshExamples/useEffect deps 不穩
+  // =========================
+  const onExamplesResolvedRef = useRef(null);
+  const examplesAutoRefreshEnabledRef = useRef(true);
+
+  useEffect(() => {
+    onExamplesResolvedRef.current =
+      typeof onExamplesResolved === "function" ? onExamplesResolved : null;
+  }, [onExamplesResolved]);
+
+  useEffect(() => {
+    examplesAutoRefreshEnabledRef.current = !!examplesAutoRefreshEnabled;
+  }, [examplesAutoRefreshEnabled]);
 
   // =========================
   // Phase 2-3：usedRefs / missingRefs（向後相容）
@@ -252,6 +291,22 @@ export default function useExamples({
     refs: [],
   });
 
+  // =========================
+  // Task F2：onExamplesResolvedRef / examplesAutoRefreshEnabledRef
+  // - 已在上方（loading state 之後）初始化與同步
+  // - 這裡保留區塊註解，避免未來區塊重排時誤以為漏導入
+  // =========================
+
+  /**
+   * ✅ 新增：headwordOverrideRef（例句 headword 覆蓋）
+   * 中文功能說明：
+   * - 保存最新 headwordOverride（不直接納入 refreshExamples deps）
+   * - 目的：避免 UI 上 headword/表面型變動造成 refreshExamples useCallback 依賴變動
+   *         進而干擾 auto-refresh useEffect（維持「切換歷史不查詢」的核心規則）
+   * - 原則：只有使用者手動 refresh（UI 呼叫 refreshExamples）才會真正送出覆蓋後的 word
+   */
+  const headwordOverrideRef = useRef("");
+
   /**
    * 中文功能說明：
    * - 同步外部傳入的 multiRefEnabled/refs 到 ref（不影響既有流程）
@@ -263,6 +318,10 @@ export default function useExamples({
       refs: Array.isArray(refs) ? refs : [],
     };
 
+    // ✅ 同步 headwordOverride（例句標題旁 headword）到 ref（不影響既有流程）
+    headwordOverrideRef.current =
+      typeof headwordOverride === "string" ? headwordOverride.trim() : "";
+
     // ✅ Production 排查：refs 同步狀態（預設關閉）
     diagLog("multiRef:sync", {
       word: d?.word,
@@ -271,7 +330,7 @@ export default function useExamples({
       multiRefEnabled: !!multiRefEnabled,
       refsCount: Array.isArray(refs) ? refs.length : 0,
     });
-  }, [multiRefEnabled, refs, d, senseIndex, explainLang]);
+  }, [multiRefEnabled, refs, headwordOverride, d, senseIndex, explainLang]);
 
   /**
    * 中文功能說明：
@@ -341,8 +400,30 @@ export default function useExamples({
     });
   }, [d]);
 
-  const refreshExamples = useCallback(async () => {
+  /**
+   * ✅ refreshExamples
+   * - 預設視為「手動」呼叫（UI 點擊）
+   * - 若要由 auto-refresh useEffect 觸發，請傳入 { isAutoRefresh: true }
+   */
+  const refreshExamples = useCallback(async (opts) => {
     if (!d || !d.word) return;
+
+    const isAutoRefresh = !!(opts && opts.isAutoRefresh);
+
+    // Task F2：Favorites/Learning replay 時會由上游關閉 auto-refresh
+    // - 這裡只擋「自動」refresh；手動按鈕仍允許補齊
+    if (isAutoRefresh && examplesAutoRefreshEnabledRef.current === false) {
+      lastAutoRefreshDecisionRef.current = {
+        at: Date.now(),
+        action: "skipped",
+        reason: "auto-refresh skipped: examplesAutoRefreshEnabled=false (refreshExamples)",
+        word: d.word,
+        senseIndex,
+        explainLang,
+      };
+      diagLog("auto-refresh:skipped", lastAutoRefreshDecisionRef.current);
+      return;
+    }
 
     setLoading(true);
 
@@ -353,11 +434,15 @@ export default function useExamples({
         refs: [],
       };
 
+      // ✅ 新增：以 UI 顯示的 headword 覆蓋本次例句生成用字（word）
+      const overrideWord = (headwordOverrideRef.current || "").trim();
+      const payloadWord = overrideWord || d.word;
+
       // ✅ Phase X-0/X-1：建立 effective refs（Noun + Definite article 時補 surfaceForms）
       const effectiveRefs = buildEffectiveRefs(
         Array.isArray(multiRefPayload.refs) ? multiRefPayload.refs : [],
         {
-          word: d.word,
+          word: payloadWord,
           baseForm: d.baseForm,
           partOfSpeech: d.partOfSpeech,
           gender: d.gender,
@@ -372,7 +457,7 @@ export default function useExamples({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          word: d.word,
+          word: payloadWord,
           baseForm: d.baseForm,
           partOfSpeech: d.partOfSpeech,
           gender: d.gender,
@@ -403,17 +488,35 @@ export default function useExamples({
       const data = await resp.json();
 
       if (data && Array.isArray(data.examples)) {
-        setExamples(
-          data.examples.filter(
-            (s) => typeof s === "string" && s.trim().length > 0
-          )
+        const nextExamples = data.examples.filter(
+          (s) => typeof s === "string" && s.trim().length > 0
         );
 
-        if (
-          typeof data.exampleTranslation === "string" &&
-          data.exampleTranslation.trim()
-        ) {
-          setExampleTranslation(data.exampleTranslation.trim());
+        setExamples(nextExamples);
+
+        // ✅ 翻譯（若有）先寫入本地 state，再回拋上游（避免上游先 rerender 又觸發 auto-refresh）
+        const nextExampleTranslation =
+          typeof data.exampleTranslation === "string"
+            ? data.exampleTranslation.trim()
+            : "";
+
+        if (nextExampleTranslation) {
+          setExampleTranslation(nextExampleTranslation);
+        }
+
+        // ✅ Task F2：成功拿到例句後，回拋給上游寫回 favorites cache（若有提供 callback）
+        // - v5：同時回拋翻譯與 metadata，避免「例句有了但翻譯缺」造成重複自動產生
+        try {
+          if (onExamplesResolvedRef.current) {
+            onExamplesResolvedRef.current(nextExamples, {
+              exampleTranslation: nextExampleTranslation,
+              examplesUpdatedAt: new Date().toISOString(),
+              // ✅ 修正：refreshOpts 未定義，應以 opts/isAutoRefresh 為準（不改既有 meta 結構）
+              examplesSource: isAutoRefresh ? "api" : "manual",
+            });
+          }
+        } catch {
+          // ignore
         }
       }
 
@@ -435,6 +538,7 @@ export default function useExamples({
       // ✅ Production 排查：這次確實有打到後端
       diagLog("refreshExamples:fetched", {
         word: d?.word,
+        payloadWord,
         senseIndex,
         explainLang,
         returnedCount: Array.isArray(data?.examples) ? data.examples.length : 0,
@@ -455,9 +559,28 @@ export default function useExamples({
   useEffect(() => {
     if (!d || !d.word) return;
 
+    // =========================
+    // Task F2：Favorites/Learning replay 預設關閉 auto-refresh
+    // - 只允許使用者手動補齊（UI 點「重新產生例句」會呼叫 refreshExamples）
+    // - 因此這裡只擋 auto-refresh，不擋 refreshExamples() 本身
+    // =========================
+    if (!examplesAutoRefreshEnabledRef.current) {
+      lastAutoRefreshDecisionRef.current = {
+        at: Date.now(),
+        action: "skipped",
+        reason: "auto-refresh skipped: examplesAutoRefreshEnabled=false",
+        word: d.word,
+        senseIndex,
+        explainLang,
+      };
+
+      diagLog("auto-refresh:skipped", lastAutoRefreshDecisionRef.current);
+      return;
+    }
+
     /**
      * ✅ 修正點（單一修改點）：history replay guard
-     * - 若 d 已含 examples/example，代表這次 d 可能來自 history snapshot 回放
+     * - 若 d 已含 examples/example 且翻譯也已存在，代表這次 d 可能來自 history snapshot 回放
      * - 此時不應自動 refreshExamples()，避免切換歷史時重查例句
      *
      * 不影響：
@@ -470,7 +593,19 @@ export default function useExamples({
     const hasSingleExampleFromD =
       typeof d.example === "string" && d.example.trim().length > 0;
 
-    if (hasExamplesFromD || hasSingleExampleFromD) {
+    // ✅ Task 3 — Examples Auto-Refresh（核心判斷）
+    // - 翻譯來源以 d.exampleTranslation 為主（必須回寫到這個欄位）
+    // - 其他 legacy 欄位（examplesTranslation/exampleTranslations）保留偵錯參考，但不作為 skip 依據
+    const hasTranslationFromD =
+      typeof d.exampleTranslation === "string" && d.exampleTranslation.trim() !== "";
+
+    // legacy (debug only; 不參與 skip 判斷)
+    const hasTranslationFromD__legacy =
+      (typeof d.examplesTranslation === "string" && d.examplesTranslation.trim().length > 0) ||
+      (typeof d.exampleTranslations === "string" && d.exampleTranslations.trim().length > 0);
+
+
+    if ((hasExamplesFromD || hasSingleExampleFromD) && hasTranslationFromD) {
       lastAutoRefreshDecisionRef.current = {
         at: Date.now(),
         action: "skipped",
@@ -498,7 +633,7 @@ export default function useExamples({
     diagLog("auto-refresh:start", lastAutoRefreshDecisionRef.current);
 
     // ✅ 原本行為保留，只是多了 guard
-    refreshExamples();
+    refreshExamples({ isAutoRefresh: true });
   }, [d, senseIndex, explainLang, refreshExamples]);
 
   return {
@@ -516,5 +651,7 @@ export default function useExamples({
       lastAutoRefreshDecisionRef,
     },
   };
+
 }
 // frontend/src/components/examples/useExamples.jsx
+// END FILE: frontend/src/components/examples/useExamples.jsx

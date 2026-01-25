@@ -1,5 +1,5 @@
 // frontend/src/hooks/useLibraryController.js
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 
 /**
  * useLibraryController
@@ -51,6 +51,36 @@ export function useLibraryController({
   normalizeSearchQuery,
   handleAnalyzeByText,
 }) {
+  // ============================
+  // [FAV_FLOW] 統一觀測（低噪音摘要 log）
+  // - 目的：觀察「收藏/取消收藏」在 UI → hook → API → DB 的卡點
+  // - 規則：所有摘要 log 都用同一前綴 + flowId，方便 grep
+  // ============================
+  const makeFavFlowId = () => {
+    try {
+      const rand = Math.random().toString(36).slice(2, 8);
+      return `fav_${Date.now().toString(36)}_${rand}`;
+    } catch (e) {
+      return `fav_${Date.now()}`;
+    }
+  };
+
+  const favFlowLog = (payload) => {
+    try {
+      const p = payload || {};
+      console.log("[FAV_FLOW]", {
+        flowId: p.flowId || "",
+        stage: p.stage || "",
+        set: p.set || "",
+        category: p.category ?? null,
+        wordKey: p.wordKey || "",
+        action: p.action || "",
+      });
+    } catch (e) {
+      // no-op
+    }
+  };
+
   // ============================
   // Legacy migration：WORDS / UILANG / THEME / LASTTEXT
   // ============================
@@ -193,6 +223,84 @@ export function useLibraryController({
     return { headword, canonicalPos, headwordKey, canonicalPosKey };
   };
 
+  // ============================
+  // [FAV_TXN] pending lock + optimistic + rollback
+  // - 交易鎖是 controller 的唯一真相：UI 只讀 isFavoritePending(wordKey)
+  // - 目的：避免重複點擊、先亮燈(optimistic)、失敗可 rollback
+  // ============================
+  const pendingFavMapRef = useRef(new Map());
+
+  // wordKey 以「你現有收藏判斷粒度」為準（headword + canonicalPos）
+  // NOTE: 若未來要做到 senseIndex 粒度，再擴充即可。
+  const buildFavoriteWordKey = (entryOrKey) => {
+    if (typeof entryOrKey === "string") return entryOrKey;
+    const { headwordKey, canonicalPosKey } = getFavoriteKey(entryOrKey);
+    return `${headwordKey}::${canonicalPosKey}`;
+  };
+
+  // 2026-01-16: expose wordKey builder for UI (read-only)
+  const getFavoriteWordKey = (entryOrKey) => buildFavoriteWordKey(entryOrKey);
+
+
+  // UI disable 用：給 wordKey 或 entry 都可
+  const isFavoritePending = (entryOrKey) => {
+    try {
+      const k = buildFavoriteWordKey(entryOrKey);
+      return pendingFavMapRef.current.has(k);
+    } catch {
+      return false;
+    }
+  };
+
+  // optimistic：直接改 libraryItems（你目前 isFavorited() 是用 libraryItems.some 判斷存在與否）
+  // existsBefore：一定要用「進 txn 前」的判斷（避免 optimistic 後污染 exists 判斷）
+  const optimisticToggleFavoriteInList = (entry, { existsBefore }) => {
+    const headword = (entry?.headword || "").trim();
+    const canonicalPos = (entry?.canonicalPos || "").trim();
+    if (!headword) return;
+
+    setLibraryItems((prev) => {
+      const list = Array.isArray(prev) ? prev : [];
+      const matchIndex = list.findIndex((x) => {
+        const xHead = (x?.headword || "").trim();
+        const xPos = ((x?.canonical_pos ?? x?.canonicalPos) || "").trim();
+        return (
+          normalizeFavoriteTextLower(xHead) === normalizeFavoriteTextLower(headword) &&
+          normalizeFavoriteTextLower(xPos) === normalizeFavoriteTextLower(canonicalPos)
+        );
+      });
+
+      // 如果 txn 前就存在 → optimistic remove（✅ word-level：同 headword + canonicalPos 的所有 sense 全部移除）
+      if (existsBefore) {
+        if (matchIndex < 0) return list;
+        return list.filter((x) => {
+          const xHead = (x?.headword || "").trim();
+          const xPos = ((x?.canonical_pos ?? x?.canonicalPos) || "").trim();
+          const sameHead =
+            normalizeFavoriteTextLower(xHead) === normalizeFavoriteTextLower(headword);
+          const samePos =
+            normalizeFavoriteTextLower(xPos) === normalizeFavoriteTextLower(canonicalPos);
+          return !(sameHead && samePos);
+        });
+      }
+
+      // txn 前不存在 → optimistic add
+      if (matchIndex >= 0) return list;
+
+      // minimal item：維持你既有欄位命名習慣，避免 UI/其他流程抓不到
+      const minimal = {
+        headword,
+        canonicalPos,
+        canonical_pos: canonicalPos,
+        senseIndex: Number.isInteger(entry?.senseIndex) ? entry.senseIndex : 0,
+        createdAt: new Date().toISOString(),
+        userId: authUserId,
+      };
+
+      return [minimal, ...list];
+    });
+  };
+
   const pickFirstNonEmptyString = (candidates) => {
     if (!Array.isArray(candidates)) return "";
     for (const v of candidates) {
@@ -283,6 +391,12 @@ export function useLibraryController({
   };
 
   // ============================
+  // Favorites categories：saving lock（本任務新增）
+  // - 只鎖「分類 CRUD」請求，避免 Modal 連點/交疊交易
+  // ============================
+  const [isFavoriteCategoriesSaving, setIsFavoriteCategoriesSaving] = useState(false);
+
+  // ============================
   // API：favorites categories
   // ============================
   const loadFavoriteCategoriesFromApi = async () => {
@@ -308,7 +422,9 @@ export function useLibraryController({
           detail = await res.text();
         } catch {}
         throw new Error(
-          `[favorites] GET /api/library/favorites/categories failed: ${res.status} ${res.statusText}${detail ? " | " + detail : ""}`
+          `[favorites] GET /api/library/favorites/categories failed: ${res.status} ${res.statusText}${
+            detail ? " | " + detail : ""
+          }`
         );
       }
 
@@ -332,6 +448,236 @@ export function useLibraryController({
     }
   };
 
+
+
+  // ============================
+  // API：favorites categories CRUD（本任務新增）
+  // - 成功後統一 reload：loadFavoriteCategoriesFromApi()
+  // - 不做 optimistic，降低回滾成本
+  // ============================
+
+  const normalizeCategoryName = (v) => String(v || "").trim();
+
+  const readErrorTextFromResponse = async (res) => {
+    try {
+      const ct = res && res.headers ? res.headers.get("content-type") : "";
+      if (ct && ct.includes("application/json")) {
+        const j = await res.clone().json();
+        const msg = j && (j.error || j.message || j.detail);
+        return msg ? String(msg) : "";
+      }
+    } catch {}
+
+    try {
+      const t = await res.text();
+      return t ? String(t) : "";
+    } catch {}
+
+    return "";
+  };
+
+  const createFavoriteCategoryViaApi = async (name) => {
+    if (!authUserId) return { ok: false, error: new Error("not logged in") };
+
+    const nextName = normalizeCategoryName(name);
+    if (!nextName) return { ok: false, error: new Error("name is empty") };
+
+    if (isFavoriteCategoriesSaving) return { ok: false, error: new Error("categories saving") };
+
+    setIsFavoriteCategoriesSaving(true);
+
+    try {
+      const res = await apiFetch(`/api/library/favorites/categories`, {
+        method: "POST",
+        body: JSON.stringify({ name: nextName }),
+      });
+
+      if (!res) throw new Error("[favorites] create category response is null");
+
+      if (res.status === 401 || res.status === 403) {
+        const err = new Error(`[favorites] create category unauthorized: ${res.status}`);
+        return { ok: false, error: err, unauthorized: true, status: res.status };
+      }
+
+      if (res.status === 409) {
+        const detail = await readErrorTextFromResponse(res);
+        const err = new Error(detail || "duplicate category name");
+        return { ok: false, error: err, conflict: true, status: 409 };
+      }
+
+      if (!res.ok) {
+        const detail = await readErrorTextFromResponse(res);
+        throw new Error(
+          `[favorites] POST /api/library/favorites/categories failed: ${res.status} ${res.statusText}${
+            detail ? " | " + detail : ""
+          }`
+        );
+      }
+
+      await loadFavoriteCategoriesFromApi();
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: e };
+    } finally {
+      setIsFavoriteCategoriesSaving(false);
+    }
+  };
+
+  const renameFavoriteCategoryViaApi = async (id, name) => {
+    if (!authUserId) return { ok: false, error: new Error("not logged in") };
+
+    const catIdNum = Number.parseInt(String(id ?? ""), 10);
+    if (!Number.isFinite(catIdNum) || catIdNum <= 0) return { ok: false, error: new Error("invalid id") };
+
+    const nextName = normalizeCategoryName(name);
+    if (!nextName) return { ok: false, error: new Error("name is empty") };
+
+    if (isFavoriteCategoriesSaving) return { ok: false, error: new Error("categories saving") };
+
+    setIsFavoriteCategoriesSaving(true);
+
+    try {
+      const res = await apiFetch(`/api/library/favorites/categories/${catIdNum}`, {
+        method: "PATCH",
+        body: JSON.stringify({ name: nextName }),
+      });
+
+      if (!res) throw new Error("[favorites] rename category response is null");
+
+      if (res.status === 401 || res.status === 403) {
+        const err = new Error(`[favorites] rename category unauthorized: ${res.status}`);
+        return { ok: false, error: err, unauthorized: true, status: res.status };
+      }
+
+      if (res.status === 404) {
+        const detail = await readErrorTextFromResponse(res);
+        const err = new Error(detail || "category not found");
+        return { ok: false, error: err, notFound: true, status: 404 };
+      }
+
+      if (res.status === 409) {
+        const detail = await readErrorTextFromResponse(res);
+        const err = new Error(detail || "duplicate category name");
+        return { ok: false, error: err, conflict: true, status: 409 };
+      }
+
+      if (!res.ok) {
+        const detail = await readErrorTextFromResponse(res);
+        throw new Error(
+          `[favorites] PATCH /api/library/favorites/categories/:id failed: ${res.status} ${res.statusText}${
+            detail ? " | " + detail : ""
+          }`
+        );
+      }
+
+      await loadFavoriteCategoriesFromApi();
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: e };
+    } finally {
+      setIsFavoriteCategoriesSaving(false);
+    }
+  };
+
+  const reorderFavoriteCategoriesViaApi = async (ids) => {
+    if (!authUserId) return { ok: false, error: new Error("not logged in") };
+
+    const arr = Array.isArray(ids) ? ids : null;
+    if (!arr || arr.length === 0) return { ok: false, error: new Error("ids is empty") };
+
+    const parsed = [];
+    const seen = new Set();
+
+    for (const x of arr) {
+      const n = Number.parseInt(String(x ?? ""), 10);
+      if (!Number.isFinite(n) || n <= 0) return { ok: false, error: new Error("invalid id in ids") };
+      if (seen.has(String(n))) return { ok: false, error: new Error("duplicate ids") };
+      seen.add(String(n));
+      parsed.push(n);
+    }
+
+    if (isFavoriteCategoriesSaving) return { ok: false, error: new Error("categories saving") };
+
+    setIsFavoriteCategoriesSaving(true);
+
+    try {
+      const res = await apiFetch(`/api/library/favorites/categories/reorder`, {
+        method: "PATCH",
+        body: JSON.stringify({ ids: parsed }),
+      });
+
+      if (!res) throw new Error("[favorites] reorder categories response is null");
+
+      if (res.status === 401 || res.status === 403) {
+        const err = new Error(`[favorites] reorder categories unauthorized: ${res.status}`);
+        return { ok: false, error: err, unauthorized: true, status: res.status };
+      }
+
+      if (!res.ok) {
+        const detail = await readErrorTextFromResponse(res);
+        throw new Error(
+          `[favorites] PATCH /api/library/favorites/categories/reorder failed: ${res.status} ${res.statusText}${
+            detail ? " | " + detail : ""
+          }`
+        );
+      }
+
+      await loadFavoriteCategoriesFromApi();
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: e };
+    } finally {
+      setIsFavoriteCategoriesSaving(false);
+    }
+  };
+
+  const archiveFavoriteCategoryViaApi = async (id) => {
+    if (!authUserId) return { ok: false, error: new Error("not logged in") };
+
+    const catIdNum = Number.parseInt(String(id ?? ""), 10);
+    if (!Number.isFinite(catIdNum) || catIdNum <= 0) return { ok: false, error: new Error("invalid id") };
+
+    if (isFavoriteCategoriesSaving) return { ok: false, error: new Error("categories saving") };
+
+    setIsFavoriteCategoriesSaving(true);
+
+    try {
+      const res = await apiFetch(`/api/library/favorites/categories/${catIdNum}/archive`, {
+        method: "PATCH",
+        body: JSON.stringify({}),
+      });
+
+      if (!res) throw new Error("[favorites] archive category response is null");
+
+      if (res.status === 401 || res.status === 403) {
+        const err = new Error(`[favorites] archive category unauthorized: ${res.status}`);
+        return { ok: false, error: err, unauthorized: true, status: res.status };
+      }
+
+      if (res.status === 404) {
+        const detail = await readErrorTextFromResponse(res);
+        const err = new Error(detail || "category not found");
+        return { ok: false, error: err, notFound: true, status: 404 };
+      }
+
+      if (!res.ok) {
+        const detail = await readErrorTextFromResponse(res);
+        throw new Error(
+          `[favorites] PATCH /api/library/favorites/categories/:id/archive failed: ${res.status} ${res.statusText}${
+            detail ? " | " + detail : ""
+          }`
+        );
+      }
+
+      await loadFavoriteCategoriesFromApi();
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: e };
+    } finally {
+      setIsFavoriteCategoriesSaving(false);
+    }
+  };
+
   // ============================
   // API：library list / upsert / delete
   // ============================
@@ -342,7 +688,7 @@ export function useLibraryController({
       const qs = new URLSearchParams();
       qs.set("limit", String(limit));
       if (cursor) qs.set("cursor", cursor);
-      if (categoryId) qs.set("category_id", String(categoryId));
+      if (categoryId != null && String(categoryId).trim() !== "") qs.set("category_id", String(categoryId));
 
       const res = await apiFetch(`/api/library?${qs.toString()}`);
       if (!res) throw new Error("[library] response is null");
@@ -446,9 +792,7 @@ export function useLibraryController({
 
     const safeGloss = typeof headwordGloss === "string" ? headwordGloss : "";
     const safeGlossLang =
-      typeof headwordGlossLang === "string" && headwordGlossLang.trim()
-        ? headwordGlossLang.trim()
-        : uiLang;
+      typeof headwordGlossLang === "string" && headwordGlossLang.trim() ? headwordGlossLang.trim() : uiLang;
 
     const rawCat = category_id ?? categoryId;
     const catNum = Number.parseInt(String(rawCat ?? ""), 10);
@@ -493,12 +837,52 @@ export function useLibraryController({
     }
   };
 
-  const removeFavoriteViaApi = async ({ headword, canonicalPos }) => {
+  // ✅ 新增：removeFavoriteViaApi 支援 flowId/setCode（不破壞既有呼叫）
+  const removeFavoriteViaApi = async ({
+    headword,
+    canonicalPos,
+    categoryId,
+    category_id,
+
+    // ✅ 新增（可選）：追蹤用
+    flowId,
+    setCode,
+  }) => {
     if (!authUserId) return;
+
+    // ✅ 分類收藏：取消收藏必須帶 category_id（只刪目前分類的 link）
+    const rawCat = category_id ?? categoryId ?? selectedFavoriteCategoryId;
+    const catNum = Number.parseInt(String(rawCat ?? ""), 10);
+    const safeCategoryId = Number.isFinite(catNum) && catNum > 0 ? catNum : null;
+
+    if (safeCategoryId == null) {
+      throw new Error("[favorite] removeFavoriteViaApi requires category_id (selectedFavoriteCategoryId is null)");
+    }
+
+    const _flowId = flowId || makeFavFlowId();
+    const _set = String(setCode || "favorites");
+    const _wordKey = `${headword}::${canonicalPos}`;
+
+    // ✅ 觀測點：DELETE 前
+    favFlowLog({
+      flowId: _flowId,
+      stage: "removeFavoriteViaApi:before",
+      set: _set,
+      category: safeCategoryId,
+      wordKey: _wordKey,
+      action: "DELETE /api/library",
+    });
 
     const res = await apiFetch(`/api/library`, {
       method: "DELETE",
-      body: JSON.stringify({ headword, canonicalPos }),
+      body: JSON.stringify({
+        headword,
+        canonicalPos,
+        category_id: safeCategoryId,
+
+        // ✅ 後端若有要接 flowId，可直接用
+        flowId: _flowId,
+      }),
     });
 
     if (!res) throw new Error("[library] response is null");
@@ -511,6 +895,16 @@ export function useLibraryController({
         `[library] DELETE /api/library failed: ${res.status} ${res.statusText}${detail ? ` | ${detail}` : ""}`
       );
     }
+
+    // ✅ 觀測點：DELETE 後
+    favFlowLog({
+      flowId: _flowId,
+      stage: "removeFavoriteViaApi:after",
+      set: _set,
+      category: safeCategoryId,
+      wordKey: _wordKey,
+      action: "DELETE ok",
+    });
   };
 
   const updateSenseStatusViaApi = async ({ headword, canonicalPos, senseIndex, familiarity, isHidden }) => {
@@ -537,7 +931,7 @@ export function useLibraryController({
 
     await postLibraryUpsertViaApi(payload);
 
-    const after = await loadLibraryFromApi({ limit: 50 });
+    const after = await loadLibraryFromApi({ limit: 50, cursor: null, categoryId: selectedFavoriteCategoryId });
 
     try {
       const afterItems = after?.items || null;
@@ -556,10 +950,8 @@ export function useLibraryController({
       const wantedF = Number.isInteger(familiarity) ? familiarity : null;
       const wantedH = typeof isHidden === "boolean" ? isHidden : null;
 
-      const gotF =
-        match && Object.prototype.hasOwnProperty.call(match, "familiarity") ? match.familiarity ?? null : null;
-      const gotH =
-        match && Object.prototype.hasOwnProperty.call(match, "isHidden") ? match.isHidden ?? null : null;
+      const gotF = match && Object.prototype.hasOwnProperty.call(match, "familiarity") ? match.familiarity ?? null : null;
+      const gotH = match && Object.prototype.hasOwnProperty.call(match, "isHidden") ? match.isHidden ?? null : null;
 
       const mismatch = !match || gotF !== wantedF || gotH !== wantedH;
 
@@ -592,22 +984,26 @@ export function useLibraryController({
     } catch {}
   };
 
+  // ✅ 新增：toggleFavoriteViaApi 加入 [FAV_FLOW] 觀測點
+  // ✅ 重要：此函式「不再吞錯誤」— 失敗必須 throw，讓外層 txn 做 rollback
+  // ✅ 可選：options.forceAction = 'add' | 'remove' 以避免 optimistic 後 exists 判斷被污染
+  // ✅ 可選：options.skipReload = true 讓外層統一負責 reload
   const toggleFavoriteViaApi = async (entry, options = null) => {
     if (!authUserId) return;
     const { headword, canonicalPos } = getFavoriteKey(entry);
     if (!headword) return;
 
-    const exists = libraryItems.some((x) => {
-      return (
-        (x?.headword || "").trim() === headword &&
-        ((x?.canonical_pos ?? x?.canonicalPos) || "").trim() === canonicalPos
-      );
-    });
+    const opt = options && typeof options === "object" ? options : {};
+
+    // ====== flow/meta ======
+    const flowId = opt.flowId || makeFavFlowId();
+    const setCode = opt.set_code ?? opt.setCode ?? "favorites";
+
+    const wordKey = `${headword}::${canonicalPos}`;
 
     const pickDefaultCategoryIdForAdd = () => {
       try {
-        const optRaw =
-          options && typeof options === "object" ? options.category_id ?? options.categoryId : null;
+        const optRaw = opt.category_id ?? opt.categoryId;
         if (optRaw !== null && typeof optRaw !== "undefined") return optRaw;
 
         if (selectedFavoriteCategoryId) return selectedFavoriteCategoryId;
@@ -616,7 +1012,7 @@ export function useLibraryController({
           const prefer = favoriteCategories.find((c) => (c?.name || "") === "我的最愛1");
           if (prefer && (prefer?.id ?? null) !== null) return prefer.id;
         }
-      } catch (e) {}
+      } catch {}
       return null;
     };
 
@@ -624,10 +1020,68 @@ export function useLibraryController({
     const catNum = Number.parseInt(String(rawCat ?? ""), 10);
     const safeCategoryId = Number.isFinite(catNum) && catNum > 0 ? catNum : null;
 
+    // ====== decide add/remove ======
+    const forceAction = typeof opt.forceAction === "string" ? opt.forceAction : null;
+
+    const existsNow = libraryItems.some((x) => {
+      return (
+        (x?.headword || "").trim() === headword &&
+        (((x?.canonical_pos ?? x?.canonicalPos) || "").trim() === canonicalPos)
+      );
+    });
+
+    const willRemove = forceAction ? forceAction === "remove" : existsNow;
+
+    // ✅ 觀測點：toggle 決策（低噪音一行）
+    favFlowLog({
+      flowId,
+      stage: "toggleFavoriteViaApi:decide",
+      set: String(setCode || "favorites"),
+      category: safeCategoryId,
+      wordKey,
+      action: willRemove ? "will-remove" : "will-add",
+    });
+
     try {
-      if (exists) {
-        await removeFavoriteViaApi({ headword, canonicalPos });
+      if (willRemove) {
+        // ✅ 觀測點：remove 前
+        favFlowLog({
+          flowId,
+          stage: "toggleFavoriteViaApi:before-remove",
+          set: String(setCode || "favorites"),
+          category: safeCategoryId,
+          wordKey,
+          action: "call removeFavoriteViaApi",
+        });
+
+        await removeFavoriteViaApi({
+          headword,
+          canonicalPos,
+          ...(safeCategoryId != null ? { category_id: safeCategoryId } : {}),
+          flowId,
+          setCode,
+        });
+
+        // ✅ 觀測點：remove 後
+        favFlowLog({
+          flowId,
+          stage: "toggleFavoriteViaApi:after-remove",
+          set: String(setCode || "favorites"),
+          category: safeCategoryId,
+          wordKey,
+          action: "removeFavoriteViaApi returned",
+        });
       } else {
+        // ✅ 觀測點：add 前
+        favFlowLog({
+          flowId,
+          stage: "toggleFavoriteViaApi:before-add",
+          set: String(setCode || "favorites"),
+          category: safeCategoryId,
+          wordKey,
+          action: "plan addFavoriteViaApi",
+        });
+
         const payloads = buildFavoritePayloadsFromEntry(entry, { headword, canonicalPos });
 
         try {
@@ -650,8 +1104,7 @@ export function useLibraryController({
                 canonicalPos: p?.canonicalPos,
                 senseIndex: Number.isInteger(p?.senseIndex) ? p.senseIndex : null,
                 headwordGlossLen: typeof p?.headwordGloss === "string" ? p.headwordGloss.length : -1,
-                headwordGlossPreview:
-                  typeof p?.headwordGloss === "string" ? p.headwordGloss.slice(0, 60) : "",
+                headwordGlossPreview: typeof p?.headwordGloss === "string" ? p.headwordGloss.slice(0, 60) : "",
                 headwordGlossLang: p?.headwordGlossLang,
               });
             } catch {}
@@ -671,9 +1124,58 @@ export function useLibraryController({
             ...(safeCategoryId != null ? { category_id: safeCategoryId } : {}),
           });
         }
+
+        // ✅ 觀測點：add 後
+        favFlowLog({
+          flowId,
+          stage: "toggleFavoriteViaApi:after-add",
+          set: String(setCode || "favorites"),
+          category: safeCategoryId,
+          wordKey,
+          action: "addFavoriteViaApi finished",
+        });
       }
-      await loadLibraryFromApi({ limit: 50 });
-    } catch (e) {}
+
+      // ✅ reload：預設仍保留舊行為（DB 為唯一真相）；外層 txn 若要統一 reload，可 options.skipReload=true
+      if (!opt.skipReload) {
+        favFlowLog({
+          flowId,
+          stage: "toggleFavoriteViaApi:reload:before",
+          set: String(setCode || "favorites"),
+          category: safeCategoryId,
+          wordKey,
+          action: "loadLibraryFromApi",
+        });
+
+        await loadLibraryFromApi({ limit: 50, cursor: null, categoryId: selectedFavoriteCategoryId });
+
+        favFlowLog({
+          flowId,
+          stage: "toggleFavoriteViaApi:reload:after",
+          set: String(setCode || "favorites"),
+          category: safeCategoryId,
+          wordKey,
+          action: "loadLibraryFromApi done",
+        });
+      }
+
+      return { ok: true };
+    } catch (e) {
+      // ✅ 觀測點：api_failed（外層 txn 會 rollback）
+      try {
+        favFlowLog({
+          flowId,
+          stage: "toggleFavoriteViaApi:api_failed",
+          set: String(setCode || "favorites"),
+          category: safeCategoryId,
+          wordKey,
+          action: String(e?.message || e || "error"),
+        });
+      } catch {}
+
+      // ✅ 重要：不能吞錯誤
+      throw e;
+    }
   };
 
   // ✅ isFavorited：WordCard 顯示用
@@ -689,7 +1191,10 @@ export function useLibraryController({
       const xHeadwordRaw = (x?.headword || "").trim();
       const xPosRaw = ((x?.canonical_pos ?? x?.canonicalPos) || "").trim();
 
-      return normalizeFavoriteTextLower(xHeadwordRaw) === headwordKey && normalizeFavoriteTextLower(xPosRaw) === canonicalPosKey;
+      return (
+        normalizeFavoriteTextLower(xHeadwordRaw) === headwordKey &&
+        normalizeFavoriteTextLower(xPosRaw) === canonicalPosKey
+      );
     });
   };
 
@@ -719,13 +1224,119 @@ export function useLibraryController({
     });
   };
 
-  const handleToggleFavorite = (entry, options = null) => {
+  // ✅ handleToggleFavorite：唯一交易入口（pending lock + optimistic + rollback）
+  // - UI：點擊後立刻變燈號 + disable（由 isFavoritePending 提供）
+  // - 成功：reload 校正 DB 真相
+  // - 失敗：rollback 回 snapshot，並把錯誤 throw 出去（外層可 toast）
+  const handleToggleFavorite = async (entry, options = null) => {
     if (!authUserId) return;
-    if (USE_API_LIBRARY) {
-      toggleFavoriteViaApi(entry, options);
+
+    if (!USE_API_LIBRARY) {
+      toggleFavoriteLegacy(entry);
       return;
     }
-    toggleFavoriteLegacy(entry);
+
+    const flowId = makeFavFlowId();
+    const setCode =
+      (options && typeof options === "object" ? options.set_code ?? options.setCode : null) || "favorites";
+
+    const wordKey = buildFavoriteWordKey(entry);
+
+    // ✅ 防重複點：pending lock
+    if (pendingFavMapRef.current.has(wordKey)) {
+      favFlowLog({
+        flowId,
+        stage: "toggle_txn:blocked_by_pending",
+        set: String(setCode || "favorites"),
+        category: selectedFavoriteCategoryId ?? null,
+        wordKey,
+        action: "return (duplicate click)",
+      });
+      return;
+    }
+
+    const snapshot = Array.isArray(libraryItems) ? libraryItems : [];
+
+    // existsBefore 取「進入交易前」的判斷，避免 optimistic 後被污染
+    const existsBefore = isFavorited(entry);
+
+    // ✅ optimistic 立刻更新 UI（UX：先變色）
+    favFlowLog({
+      flowId,
+      stage: "optimistic_applied",
+      set: String(setCode || "favorites"),
+      category: selectedFavoriteCategoryId ?? null,
+      wordKey,
+      action: existsBefore ? "optimistic_remove" : "optimistic_add",
+    });
+
+    optimisticToggleFavoriteInList(entry, { existsBefore });
+
+    // ✅ 存 snapshot（rollback 用）+ lock（UX：再 disable）
+    pendingFavMapRef.current.set(wordKey, { flowId, snapshot });
+
+    try {
+      // ✅ API（失敗要 throw）
+      await toggleFavoriteViaApi(entry, {
+        ...(options && typeof options === "object" ? options : {}),
+        flowId,
+        setCode,
+        forceAction: existsBefore ? "remove" : "add",
+        skipReload: true,
+      });
+
+      favFlowLog({
+        flowId,
+        stage: "api_ok",
+        set: String(setCode || "favorites"),
+        category: selectedFavoriteCategoryId ?? null,
+        wordKey,
+        action: "toggleFavoriteViaApi ok",
+      });
+
+      // ✅ reload（DB 為唯一真相）
+      try {
+        await loadLibraryFromApi({ limit: 50, cursor: null, categoryId: selectedFavoriteCategoryId });
+        favFlowLog({
+          flowId,
+          stage: "reloaded_ok",
+          set: String(setCode || "favorites"),
+          category: selectedFavoriteCategoryId ?? null,
+          wordKey,
+          action: "loadLibraryFromApi ok",
+        });
+      } catch (eReload) {
+        favFlowLog({
+          flowId,
+          stage: "reloaded_failed",
+          set: String(setCode || "favorites"),
+          category: selectedFavoriteCategoryId ?? null,
+          wordKey,
+          action: String(eReload?.message || eReload || "reload error"),
+        });
+        throw eReload;
+      }
+    } catch (e) {
+      // ✅ rollback
+      try {
+        const snap = pendingFavMapRef.current.get(wordKey)?.snapshot || snapshot;
+        setLibraryItems(snap);
+      } catch {}
+
+      favFlowLog({
+        flowId,
+        stage: "rollback_applied",
+        set: String(setCode || "favorites"),
+        category: selectedFavoriteCategoryId ?? null,
+        wordKey,
+        action: String(e?.message || e || "error"),
+      });
+
+      // ✅ 重要：讓外層知道失敗
+      throw e;
+    } finally {
+      pendingFavMapRef.current.delete(wordKey);
+    }
   };
 
   // ============================
@@ -861,6 +1472,7 @@ export function useLibraryController({
   return {
     // exposed
     isFavorited,
+    isFavoritePending,
     handleToggleFavorite,
     handleUpdateSenseStatus,
     openLibraryModal,
@@ -868,5 +1480,17 @@ export function useLibraryController({
     handleLibraryReview,
     handleSelectFavoriteCategory,
     handleSelectFavoriteCategoryForAdd,
+
+    // favorites categories CRUD (DB-backed)
+    isFavoriteCategoriesSaving,
+    createFavoriteCategoryViaApi,
+    renameFavoriteCategoryViaApi,
+    reorderFavoriteCategoriesViaApi,
+    archiveFavoriteCategoryViaApi,
+
+    // wordKey helper
+    getFavoriteWordKey,
   };
 }
+
+// frontend/src/hooks/useLibraryController.js

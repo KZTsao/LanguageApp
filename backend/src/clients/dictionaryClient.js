@@ -16,10 +16,354 @@
  *     STEP 2：再請 Groq 逐行產生對應母語翻譯（每行一句）
  */
 
-const { lookupWord } = require("./dictionaryLookup");
+const { lookupWord: lookupWordLegacy } = require("./dictionaryLookup");
 const { generateExamples } = require("./dictionaryExamples");
 const groqClient = require("./groqClient");
 const { logLLMUsage } = require("../utils/usageLogger");
+
+
+// =============================
+// ✅ 主線任務：導入權威辭典（Authority Dictionary）— Wiktionary (de)
+// - 原則：不刪既有 lookup 邏輯；僅「旁掛補欄位」
+// - 行為：
+//   1) 先走既有 lookupWordLegacy（DB/原本流程）
+//   2) 若缺少核心欄位（IPA / definitions / synonyms / antonyms），再查 Wiktionary 補上
+//   3) 只補「缺的欄位」，不覆蓋既有內容
+//
+// 可用環境變數：
+// - DICT_AUTHORITY_ENABLED=0  → 關閉（預設開啟）
+// - DICT_AUTHORITY_PROVIDER=wiktionary → 目前只支援 wiktionary（預設）
+// - DICT_AUTHORITY_TTL_MS=21600000     → cache TTL（預設 6h）
+// =============================
+
+const https = require("https");
+
+const __DICT_AUTHORITY_ENABLED =
+  String(process.env.DICT_AUTHORITY_ENABLED || "1").trim() !== "0";
+const __DICT_AUTHORITY_PROVIDER = String(
+  process.env.DICT_AUTHORITY_PROVIDER || "wiktionary"
+).trim();
+const __DICT_AUTHORITY_TTL_MS = Math.max(
+  30 * 1000,
+  Number(process.env.DICT_AUTHORITY_TTL_MS || 6 * 60 * 60 * 1000)
+);
+
+const __authorityCache = new Map(); // key -> { at, value }
+
+function __cacheGet(key) {
+  const hit = __authorityCache.get(key);
+  if (!hit) return null;
+  if (Date.now() - hit.at > __DICT_AUTHORITY_TTL_MS) {
+    __authorityCache.delete(key);
+    return null;
+  }
+  return hit.value;
+}
+
+function __cacheSet(key, value) {
+  __authorityCache.set(key, { at: Date.now(), value });
+  return value;
+}
+
+function __httpGetJson(url) {
+  return new Promise((resolve, reject) => {
+    https
+      .get(url, (res) => {
+        let data = "";
+        res.on("data", (chunk) => (data += chunk));
+        res.on("end", () => {
+          try {
+            resolve(JSON.parse(data));
+          } catch (e) {
+            reject(e);
+          }
+        });
+      })
+      .on("error", reject);
+  });
+}
+
+function __stripTags(html) {
+  return String(html || "")
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&#039;/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function __uniqLower(arr) {
+  const out = [];
+  const seen = new Set();
+  for (const x of arr || []) {
+    const w = String(x || "").trim();
+    if (!w) continue;
+    const k = w.toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(w);
+  }
+  return out;
+}
+
+function __sliceGermanSection(html) {
+  const s = String(html || "");
+  const idx = s.search(/mw-headline"\s+id="Deutsch"/);
+  if (idx < 0) return null;
+  const tail = s.slice(idx);
+
+  const reNext = /mw-headline"\s+id="([^"]+)"/g;
+  let first = true;
+  let nextPos = -1;
+  let mm;
+  while ((mm = reNext.exec(tail)) !== null) {
+    const id = mm[1];
+    if (first) {
+      first = false;
+      continue;
+    }
+    if (id && id !== "Deutsch") {
+      nextPos = mm.index;
+      break;
+    }
+  }
+  if (nextPos > 0) return tail.slice(0, nextPos);
+  return tail;
+}
+
+function __detectPos(germanHtml) {
+  const s = String(germanHtml || "");
+  const posList = [
+    "Nomen",
+    "Substantiv",
+    "Verb",
+    "Adjektiv",
+    "Adverb",
+    "Pronomen",
+    "Präposition",
+    "Konjunktion",
+    "Interjektion",
+    "Artikel",
+    "Numerale",
+    "Partikel",
+  ];
+  for (const p of posList) {
+    const re = new RegExp(
+      `mw-headline"\\s+id="${p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`
+    );
+    if (re.test(s)) {
+      if (p === "Substantiv") return "Nomen";
+      return p;
+    }
+  }
+  return null;
+}
+
+function __extractIpa(germanHtml) {
+  const s = String(germanHtml || "");
+  const re = /class="IPA"[^>]*>([^<]+)</g;
+  const out = [];
+  let m;
+  while ((m = re.exec(s)) !== null) {
+    const raw = __stripTags(m[1]);
+    if (!raw) continue;
+    out.push(raw);
+  }
+  const uniq = __uniqLower(out);
+  return uniq.length > 0 ? `/${uniq[0].replace(/^\/+|\/+$/g, "")}/` : null;
+}
+
+function __extractDefinitions(germanHtml, max = 8) {
+  const s = String(germanHtml || "");
+  const m = s.match(/<ol[^>]*>[\s\S]*?<\/ol>/i);
+  if (!m) return [];
+  const ol = m[0];
+  const reLi = /<li[^>]*>([\s\S]*?)<\/li>/gi;
+  const defs = [];
+  let mm;
+  while ((mm = reLi.exec(ol)) !== null) {
+    const txt = __stripTags(mm[1]);
+    if (!txt) continue;
+    const clean = txt.replace(/\[\d+\]/g, "").trim();
+    if (!clean) continue;
+    defs.push(clean);
+    if (defs.length >= max) break;
+  }
+  return defs;
+}
+
+function __extractWordListBySection(germanHtml, sectionIdCandidates, max = 12) {
+  const s = String(germanHtml || "");
+  for (const id of sectionIdCandidates || []) {
+    const idx = s.search(
+      new RegExp(`mw-headline"\\s+id="${id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`)
+    );
+    if (idx < 0) continue;
+    const tail = s.slice(idx);
+    const mUl = tail.match(/<ul[^>]*>[\s\S]*?<\/ul>/i);
+    if (!mUl) continue;
+    const ul = mUl[0];
+    const reLi = /<li[^>]*>([\s\S]*?)<\/li>/gi;
+    const out = [];
+    let mm;
+    while ((mm = reLi.exec(ul)) !== null) {
+      const txt = __stripTags(mm[1]);
+      if (!txt) continue;
+      const first = txt.split(/[,;，；]/)[0].trim();
+      if (!first) continue;
+      if (first.length > 40) continue;
+      out.push(first);
+      if (out.length >= max) break;
+    }
+    return __uniqLower(out);
+  }
+  return [];
+}
+
+async function __lookupWiktionaryAuthority(lemma) {
+  const title = String(lemma || "").trim();
+  if (!title) return null;
+
+  const cacheKey = `wiktionary:de:${title.toLowerCase()}`;
+  const cached = __cacheGet(cacheKey);
+  if (cached) return cached;
+
+  const api = new URL("https://de.wiktionary.org/w/api.php");
+  api.searchParams.set("action", "parse");
+  api.searchParams.set("page", title);
+  api.searchParams.set("prop", "text");
+  api.searchParams.set("format", "json");
+  api.searchParams.set("formatversion", "2");
+  api.searchParams.set("redirects", "1");
+
+  let json;
+  try {
+    json = await __httpGetJson(api.toString());
+  } catch (e) {
+    return __cacheSet(cacheKey, null);
+  }
+
+  const html = json && json.parse && json.parse.text;
+  const pageTitle =
+    json && json.parse && json.parse.title ? String(json.parse.title) : title;
+
+  if (!html) return __cacheSet(cacheKey, null);
+
+  const germanSection = __sliceGermanSection(html);
+  if (!germanSection) return __cacheSet(cacheKey, null);
+
+  const partOfSpeech = __detectPos(germanSection) || null;
+  const ipa = __extractIpa(germanSection);
+  const defs = __extractDefinitions(germanSection, 8);
+  const synonyms = __extractWordListBySection(
+    germanSection,
+    ["Synonyme", "Sinnverwandte_Wörter", "Sinnverwandte_Wörter_und_Synonyme"],
+    12
+  );
+  const antonyms = __extractWordListBySection(
+    germanSection,
+    ["Gegenwörter", "Antonyme"],
+    12
+  );
+
+  const out = {
+    _authoritySource: "wiktionary",
+    word: pageTitle,
+    baseForm: pageTitle,
+    lemma: pageTitle,
+    partOfSpeech,
+    canonicalPos: partOfSpeech,
+    ipa: ipa || null,
+    definition_de: defs.length ? defs : null,
+    // 先暫存德文：讓 deriveSensesIfMissing 可以先跑起來（之後再由 LLM 翻成 zh）
+    definition_de_translation: defs.length ? defs : null,
+    recommendations: {
+      synonyms,
+      antonyms,
+    },
+  };
+
+  return __cacheSet(cacheKey, out);
+}
+
+function __mergeAuthorityIntoBase(baseEntry, authEntry) {
+  if (!baseEntry && !authEntry) return null;
+  if (!baseEntry) return authEntry;
+  if (!authEntry) return baseEntry;
+
+  const merged = { ...baseEntry };
+
+  // 只補缺的欄位（不覆蓋）
+  if (!merged.ipa && authEntry.ipa) merged.ipa = authEntry.ipa;
+
+  if (!merged.definition_de && authEntry.definition_de) {
+    merged.definition_de = authEntry.definition_de;
+  }
+  if (!merged.definition_de_translation && authEntry.definition_de_translation) {
+    merged.definition_de_translation = authEntry.definition_de_translation;
+  }
+
+  // pos / canonicalPos 只在缺時補
+  if (!merged.partOfSpeech && authEntry.partOfSpeech) merged.partOfSpeech = authEntry.partOfSpeech;
+  if (!merged.canonicalPos && authEntry.canonicalPos) merged.canonicalPos = authEntry.canonicalPos;
+
+  // recommendations：只補缺項
+  const baseRec = merged.recommendations && typeof merged.recommendations === "object"
+    ? merged.recommendations
+    : {};
+  const authRec = authEntry.recommendations && typeof authEntry.recommendations === "object"
+    ? authEntry.recommendations
+    : {};
+
+  const nextRec = { ...baseRec };
+  if ((!Array.isArray(nextRec.synonyms) || nextRec.synonyms.length === 0) && Array.isArray(authRec.synonyms) && authRec.synonyms.length) {
+    nextRec.synonyms = authRec.synonyms;
+  }
+  if ((!Array.isArray(nextRec.antonyms) || nextRec.antonyms.length === 0) && Array.isArray(authRec.antonyms) && authRec.antonyms.length) {
+    nextRec.antonyms = authRec.antonyms;
+  }
+  merged.recommendations = nextRec;
+
+  // 標記來源（可用於 debug）
+  if (!merged._authoritySource && authEntry._authoritySource) {
+    merged._authoritySource = authEntry._authoritySource;
+  }
+
+  return merged;
+}
+
+/**
+ * ✅ 對外 lookupWord（主線：導入權威辭典）
+ * - 不刪既有邏輯：先跑 legacy，再用 authority「補欄位」
+ * - signature 完全相容原本 lookupWord(text, explainLang, options)
+ */
+async function lookupWord(text, explainLang, options) {
+  // 先走原本流程（避免破壞既有 DB/LLM 行為）
+  const base = await lookupWordLegacy(text, explainLang, options);
+
+  // 再旁掛權威辭典（只補缺欄位）
+  if (!__DICT_AUTHORITY_ENABLED) return base;
+  if (__DICT_AUTHORITY_PROVIDER !== "wiktionary") return base;
+
+  const needAuthority =
+    !base ||
+    (!base.ipa &&
+      !base.definition_de &&
+      !base.definition_de_translation &&
+      !(base.recommendations && Array.isArray(base.recommendations.synonyms) && base.recommendations.synonyms.length) &&
+      !(base.recommendations && Array.isArray(base.recommendations.antonyms) && base.recommendations.antonyms.length));
+
+  // 若 base 已足夠，就不查 authority
+  if (!needAuthority) return base;
+
+  const auth = await __lookupWiktionaryAuthority(text);
+  return __mergeAuthorityIntoBase(base, auth);
+}
+
 
 // =============================
 // 功能初始化狀態（Production 排障用）
@@ -389,11 +733,225 @@ async function generateConversation({
   return finalTurns;
 }
 
+
+/**
+ * ✅ Task 4 — 匯入到學習本：LLM 產生候選項目（≤5）
+ * - 不做 analyze、不回傳完整字典結構
+ * - 只需要：type + importKey + display.de(+hint 可選)
+ */
+async function generateImportCandidates({
+  level = "A2",
+  type = "word",
+  scenario = "",
+  uiLang = "en",
+  excludeKeys = [],
+  userId = "",
+  email = "",
+  requestId = "",
+} = {}) {
+  const safeLevel = String(level || "A2").trim();
+  const safeType = String(type || "word").trim();
+  const safeScenario = String(scenario || "").trim();
+  const safeUiLang = String(uiLang || "en").trim();
+  const ex0 = Array.isArray(excludeKeys) ? excludeKeys.filter(Boolean).slice(0, 300) : [];
+
+  // ============================================================
+  // Task4 (UX 強化)：推薦字更像「推薦」
+  // 1) 強制只產生 safeType（word/phrase/grammar 擇一）
+  // 2) 一律只輸出德文：display 只提供 de（不回傳 hint，避免混入英文/中文）
+  // 3) 若 LLM 混入其他 type：丟棄並補滿（最多重試一次）
+  // 注意：本任務仍只回傳候選，不做 analyze / 不寫 dict
+  // ============================================================
+
+  const normalizeKey = (s) => String(s || "").trim();
+  const normalizeType = (t) => {
+    const v = String(t || "").trim().toLowerCase();
+    if (v === "vocab") return "word";
+    if (v === "words") return "word";
+    if (v === "phrases") return "phrase";
+    if (v === "grammars") return "grammar";
+    return v;
+  };
+
+
+  const buildPrompts = ({ excludeKeysForPrompt, needCount }) => {
+    const exForPrompt = Array.isArray(excludeKeysForPrompt)
+      ? excludeKeysForPrompt.filter(Boolean).slice(0, 500)
+      : [];
+
+    const system = [
+      "You are a helpful assistant that generates German learning candidates.",
+      "Return STRICT JSON only. No markdown, no explanation.",
+      "The JSON must be an array of objects.",
+      "Each object: { candidateId: string, type: 'word'|'phrase'|'grammar', importKey: string, display: { de: string } }",
+      "HARD RULES:",
+      `- Output ONLY type = '${safeType}' (do not output other types).`,
+      "- German only: importKey and display.de MUST be German text (no English translations, no Chinese).",
+      "- Do NOT include any translation text in any language; only German terms/phrases/grammar labels.",
+      `- Output exactly ${needCount} items (or as many as possible up to ${needCount} if constrained).`,
+      "- candidateId must be unique within the array.",
+      "- importKey must be unique within the array.",
+      "- For type=word: importKey should be ONE German word (no spaces).",
+      "- For type=phrase: importKey should be a short everyday German phrase.",
+      "- For type=grammar: importKey should be a short grammar label (e.g., 'Präsens').",
+      "- Do not output any candidate whose importKey is in excludeKeys (case-insensitive).",
+    ].join("\n");
+
+    const user = [
+      `level: ${safeLevel}`,
+      `type: ${safeType}`,
+      `scenario: ${safeScenario}`,
+      `uiLang: ${safeUiLang}`,
+      `excludeKeys: ${JSON.stringify(exForPrompt)}`,
+      "",
+      "Generate candidates that fit the scenario and level.",
+    ].join("\n");
+
+    return { system, user, exForPrompt };
+  };
+
+  const parseJsonArray = (raw) => {
+    if (!raw || typeof raw !== "string") return [];
+    try {
+      const p = JSON.parse(raw);
+      return Array.isArray(p) ? p : [];
+    } catch {
+      const m = raw.match(/\[[\s\S]*\]/);
+      if (m && m[0]) {
+        try {
+          const p2 = JSON.parse(m[0]);
+          return Array.isArray(p2) ? p2 : [];
+        } catch {}
+      }
+      return [];
+    }
+  };
+
+  const normalizeCandidates = ({ arr, exSet, needCount }) => {
+    const out = [];
+    const seenKey = new Set();
+    const wantType = normalizeType(safeType);
+
+    const __containsCJK = (s) => /[\u4E00-\u9FFF\u3040-\u30FF\uAC00-\uD7AF]/.test(String(s || ""));
+    const __isGermanOnly = (s) => {
+      const v = String(s || "").trim();
+      if (!v) return false;
+      if (__containsCJK(v)) return false;
+      // allow Latin letters + German umlauts/ß + common punctuation/spaces
+      return /^[A-Za-zÄÖÜäöüß0-9\s\-’'!.?,;:()\/]+$/.test(v);
+    };
+
+    for (const it of arr || []) {
+      if (!it) continue;
+      const k = normalizeKey(it.importKey || it.key || it.display?.de || "");
+      if (!k) continue;
+      const kLower = k.toLowerCase();
+      if (exSet.has(kLower)) continue;
+      if (seenKey.has(kLower)) continue;
+
+      const tRaw = it.type || wantType;
+      const t = normalizeType(tRaw);
+      if (t !== wantType) continue;
+
+      // type=word 額外保護：避免出現空白（多詞片語）
+      if (wantType === "word" && /\s/.test(k)) continue;
+
+      const cid = normalizeKey(it.candidateId || it.id || `cand_${Date.now()}_${Math.random()}`);
+      const de = normalizeKey(it.display?.de || k);
+
+      // German-only guard: drop candidates that contain CJK or disallowed characters
+      if (!__isGermanOnly(k) || !__isGermanOnly(de)) continue;
+
+      out.push({
+        candidateId: cid,
+        type: wantType,
+        importKey: k,
+        display: { de },
+      });
+      seenKey.add(kLower);
+      if (out.length >= needCount) break;
+    }
+    return out;
+  };
+
+  const callOnce = async ({ excludeKeysForPrompt, needCount }) => {
+    const { system, user, exForPrompt } = buildPrompts({ excludeKeysForPrompt, needCount });
+
+    const model = resolveConversationModel();
+    const completion = await callGroqChat({
+      model,
+      temperature: 0.7,
+      maxTokens: 800,
+      systemPrompt: system,
+      userPrompt: user,
+    });
+
+    safeLogUsage({
+      completion,
+      endpoint: "importGenerate",
+      model,
+      userId,
+      email,
+      requestId,
+    });
+
+    const raw = completion?.choices?.[0]?.message?.content || "";
+    const arr = parseJsonArray(raw);
+
+    const exSet = new Set(exForPrompt.map((x) => String(x || "").toLowerCase()));
+    const out = normalizeCandidates({ arr, exSet, needCount });
+    return { out, raw };
+  };
+
+  // 第一次生成：用前端/後端組好的 excludeKeys
+  const ex1 = ex0;
+  const first = await callOnce({ excludeKeysForPrompt: ex1, needCount: 5 });
+  let out = Array.isArray(first.out) ? first.out : [];
+
+  // 補滿：若 LLM 混入其他 type 或重複，嘗試再要一次「剩餘數量」
+  if (out.length < 5) {
+    const usedKeys = out.map((x) => x.importKey).filter(Boolean);
+    const ex2 = [...ex1, ...usedKeys];
+    const need = Math.max(0, 5 - out.length);
+    if (need > 0) {
+      const second = await callOnce({ excludeKeysForPrompt: ex2, needCount: need });
+      const more = Array.isArray(second.out) ? second.out : [];
+      const existing = new Set(out.map((x) => String(x.importKey || "").toLowerCase()));
+      for (const it of more) {
+        const k = String(it.importKey || "").toLowerCase();
+        if (!k) continue;
+        if (existing.has(k)) continue;
+        out.push(it);
+        existing.add(k);
+        if (out.length >= 5) break;
+      }
+    }
+  }
+
+  // 最終保護：最多 5 筆
+  if (out.length > 5) out = out.slice(0, 5);
+
+  // ------------------------------------------------------------
+  // Legacy implementation (kept for trace; DO NOT DELETE)
+  // - 這段是舊版 prompt/parse，曾因 callGroqChat 參數不合導致不回 JSON
+  // - 保留註解避免未來追查困難
+  // ------------------------------------------------------------
+  /*
+  const systemLegacy = [
+    "You are a helpful assistant that generates German learning candidates.",
+    "Return STRICT JSON only. No markdown, no explanation.",
+  ].join("\n");
+  */
+
+  return out;
+}
+
 module.exports = {
   lookupWord,
   generateExamples,
   generateConversation,
   getInitStatus,
+  generateImportCandidates,
 };
 
 // backend/src/clients/dictionaryClient.js

@@ -19,6 +19,13 @@
  * 異動說明：
  * 1) 修正 admin usage 路徑：改回 /admin（避免前端誤打到 5173 /admin/usage 造成 404）
  * 2) 保留原掛載行但標示為 deprecated（不減少行數）
+ *
+ * 異動日期：2026-01-24
+ * 異動說明：
+ * 1) 新增並掛載 /api/support（即時客服服務 API）
+ * 2) 掛載方式採 app.use("/api", supportRoute) 以避免路徑重複 /support/support
+const supportAdminRoute = require("./routes/supportAdminRoute");
+app.use("/api", supportAdminRoute);
  */
 
 require("dotenv").config();
@@ -34,6 +41,10 @@ const adminUsageRoute = require("./routes/adminUsageRoute");
 const usageMeRoute = require("./routes/usageMeRoute");
 const libraryRoute = require("./routes/libraryRoute");
 const visitRoute = require("./routes/visitRoute");
+const speechRoute = require("./routes/speechRoute");
+const supportRoute = require("./routes/supportRoute");
+const queryNormalizeRoute = require("./routes/queryNormalizeRoute");
+
 
 const { errorMiddleware } = require("./utils/errorHandler");
 const { logger } = require("./utils/logger");
@@ -63,6 +74,9 @@ const INIT_STATUS = {
     library: false,
     adminUsage: false,
     visit: false,
+    speech: false,
+    support: false,
+    queryNormalize: false,
   },
 };
 
@@ -88,6 +102,20 @@ function mountRoutes(app) {
 
   app.use("/api/tts", ttsRoute);
   INIT_STATUS.routes.tts = true;
+
+  app.use("/api/speech", speechRoute);
+  INIT_STATUS.routes.speech = true;
+
+  // ✅ 2026-01-24：即時客服 Support API（/api/support/*）
+  // 掛載方式：app.use("/api", supportRoute) + route 檔內定義 /support/...
+  // ✅ 最終生效路徑：POST /api/support/session, GET/POST /api/support/messages ...
+  app.use("/api", supportRoute);
+  INIT_STATUS.routes.support = true;
+
+  // ✅ Query Normalize（查詢前置修正：拼字 / 變形）
+  // 最終路徑：POST /api/query/normalize
+  app.use("/api/query", queryNormalizeRoute);
+  INIT_STATUS.routes.queryNormalize = true;
 
   app.use("/api/dictionary", dictionaryRoute);
   INIT_STATUS.routes.dictionary = true;

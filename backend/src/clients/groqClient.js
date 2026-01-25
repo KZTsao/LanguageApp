@@ -336,6 +336,46 @@ function createRotatingGroqClient() {
   return rotatingClient;
 }
 
-module.exports = createRotatingGroqClient();
+const __groqClient = createRotatingGroqClient();
+
+/**
+ * ✅ NEW: groqChatCompletion（給 route / service 用的統一 helper）
+ * - 目的：提供「只拿 content」的輕量介面，避免各處重複寫 choices[0] 取值
+ * - 注意：底層仍走 rotatingClient.chat.completions.create（保留 rotation/retry 行為）
+ *
+ * @param {Object} opts
+ * @param {Array} opts.messages
+ * @param {number} [opts.temperature]
+ * @param {number} [opts.max_tokens]
+ * @param {string} [opts.model]
+ * @returns {Promise<{ content: string, raw: any }>} content 為 LLM 回覆文字
+ */
+__groqClient.groqChatCompletion = async (opts = {}) => {
+  const params = {
+    // ✅ model 必填：若呼叫端未提供，則依序使用 env GROQ_MODEL → fallback default
+    // - 避免 Groq SDK 回：'model' : property 'model' is missing
+    model: (opts && opts.model) || process.env.GROQ_MODEL || "llama-3.1-8b-instant",
+    messages: Array.isArray(opts.messages) ? opts.messages : [],
+    ...(typeof opts.temperature === "number" ? { temperature: opts.temperature } : {}),
+    ...(typeof opts.max_tokens === "number" ? { max_tokens: opts.max_tokens } : {}),
+  };
+
+  const resp = await __groqClient.chat.completions.create(params);
+
+  const content =
+    resp && resp.choices && resp.choices[0] && resp.choices[0].message
+      ? String(resp.choices[0].message.content || "")
+      : "";
+
+  return { content, raw: resp };
+};
+
+module.exports = __groqClient;
+
+// ✅ Compatibility exports: 支援 CJS destructuring / 可能的 ESM interop
+// - 讓 route 可以用：const { groqChatCompletion } = require('../clients/groqClient')
+// - 若未來有 ESM import default，也能運作（避免混用時爆炸）
+module.exports.groqChatCompletion = __groqClient.groqChatCompletion;
+module.exports.default = __groqClient;
 
 // backend/src/clients/groqClient.js

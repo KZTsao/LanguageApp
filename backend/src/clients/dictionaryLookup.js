@@ -45,16 +45,64 @@
 
 // backend/src/clients/dictionaryLookup.js
 
-const client = require('./groqClient');
+// const client = require('./groqClient'); // (moved to lazy-load to avoid require-time side effects)
+let __groqClient = null;
+function getGroqClient() {
+  if (__groqClient) return __groqClient;
+  // Lazy-load: avoid loading Groq client (and its deps) unless we truly need LLM fallback.
+  // This prevents noisy warnings / stack traces during DB-hit or authority-hit paths.
+  __groqClient = require('./groqClient');
+  return __groqClient;
+}
 const {
   fallback,
   mapExplainLang,
   normalizeDictionaryResult,
 } = require('./dictionaryUtils');
-const { systemPrompt, buildUserPrompt } = require('./dictionaryPrompts');
+const {
+  systemPrompt,
+  buildUserPrompt,
+  glossSystemPrompt,
+  buildGlossUserPrompt,
+  senseSplitSystemPrompt,
+  buildSenseSplitUserPrompt,
+} = require('./dictionaryPrompts');
+// ✅ Plugin-based authorities (DWDS/Wiktionary/etc.)
+let __authorities = null;
+function getAuthoritiesRegistry() {
+  if (__authorities) return __authorities;
+  // Lazy-load to avoid require-time side effects
+  __authorities = require('./dictionary/authorities');
+  return __authorities;
+}
+
 
 // ✅ Step 2-3（本次新增）：LLM 真實 tokens 記帳（回寫 profiles 由 usageLogger 負責）
 const { logLLMUsage } = require('../utils/usageLogger');
+/**
+ * ✅ Learner language label (for LLM prompts)
+ * - 不信任 mapExplainLang 對某些 locale 的 fallback（例如 zh-TW 有時會落到 English）
+ * - 在這裡先做最小保底：只要是 zh-*，就給明確中文標籤，避免 LLM 產出英文 gloss
+ */
+function getTargetLangLabelSafe(explainLang) {
+  const code = String(explainLang || '').trim();
+  const lower = code.toLowerCase();
+
+  if (lower === 'zh-tw' || lower === 'zh-hant' || lower.startsWith('zh-hant-')) {
+    return `Chinese (Traditional) [${code}]`;
+  }
+  if (lower === 'zh-cn' || lower === 'zh-hans' || lower.startsWith('zh-hans-') || lower.startsWith('zh-')) {
+    return `Chinese (Simplified) [${code}]`;
+  }
+
+  const label = mapExplainLang(code);
+  if (label) return `${label} [${code}]`;
+
+  // Fallback: still pass code so model knows it's not English by default
+  return `(${code})`;
+}
+
+
 
 // ✅ Phase 2-2：DB 落地寫入（dict_entries / dict_entry_props / dict_senses）
 const {
@@ -939,7 +987,7 @@ async function lookupWord(rawWord, explainLang = 'zh-TW', options = {}) {
       console.log('[dictionary][db] DB-first enabled, start lookup:', { word, explainLang });
     }
 
-    const dbHit = await tryLookupFromDB(word, explainLang);
+    let dbHit = await tryLookupFromDB(word, explainLang);
     if (dbHit) {
       // ✅ Step 2-2：若指定 targetPosKey，但 DB hit 的 pos 不符 → 視為 miss，改走 LLM（避免卡在錯誤 POS）
       if (targetPosKey) {
@@ -959,6 +1007,100 @@ async function lookupWord(rawWord, explainLang = 'zh-TW', options = {}) {
             // eslint-disable-next-line no-console
             console.log('[dictionary][db] DB-first hit, skip LLM:', { word, explainLang });
           }
+
+          // ============================
+          // Authority dictionary (Wiktionary) augmentation on DB HIT (no LLM)
+          // NOTE: old injected block kept below (commented) to preserve history/line count.
+          // Goal: if DB entry is missing authority fields (e.g., ipa/definitions), try Wiktionary and merge only missing fields.
+          // Controlled by env:
+          //   DICT_AUTHORITY_ENABLED=0 disables
+          //   DICT_AUTHORITY_PROVIDER=wiktionary
+          //   DICT_AUTHORITY_UA="YourApp/1.0 (contact@example.com)"  <-- strongly recommended by MediaWiki etiquette
+          try {
+            const needAuthorityOnHit =
+              process.env.DICT_AUTHORITY_ENABLED !== '0' &&
+              (!dbHit ||
+                !dbHit.definition_de ||
+                (Array.isArray(dbHit.definitions) && dbHit.definitions.length === 0) ||
+                !dbHit.ipa);
+
+            if (needAuthorityOnHit) {
+              const authorityHit = await authorityLookup(word, explainLang, { targetPosKey });
+              if (authorityHit) {
+                if (DEBUG_DICT_DB) {
+                  // eslint-disable-next-line no-console
+                  console.log('[dictionary][authority] augment (db-hit) wiktionary hit:', {
+                    word,
+                    got: {
+                      ipa: !!authorityHit.ipa,
+                      definition_de: !!authorityHit.definition_de,
+                      defs: Array.isArray(authorityHit.definitions) ? authorityHit.definitions.length : 0,
+                      synonyms: authorityHit?.recommendations?.synonyms?.length || 0,
+                      antonyms: authorityHit?.recommendations?.antonyms?.length || 0,
+                      roots: authorityHit?.recommendations?.roots?.length || 0,
+                    },
+                  });
+                }
+
+                // Merge only missing fields; do not override DB values.
+                dbHit = {
+                  ...dbHit,
+                  ipa: dbHit.ipa || authorityHit.ipa || null,
+                  definition_de: dbHit.definition_de || authorityHit.definition_de || null,
+                  definition_de_translation:
+                    dbHit.definition_de_translation || authorityHit.definition_de_translation || null,
+                  definitions:
+                    (Array.isArray(dbHit.definitions) && dbHit.definitions.length > 0)
+                      ? dbHit.definitions
+                      : (authorityHit.definitions || []),
+                  recommendations: {
+                    ...(authorityHit.recommendations || {}),
+                    ...(dbHit.recommendations || {}),
+                    synonyms:
+                      (dbHit.recommendations &&
+                        Array.isArray(dbHit.recommendations.synonyms) &&
+                        dbHit.recommendations.synonyms.length > 0)
+                        ? dbHit.recommendations.synonyms
+                        : (authorityHit.recommendations && authorityHit.recommendations.synonyms) || [],
+                    antonyms:
+                      (dbHit.recommendations &&
+                        Array.isArray(dbHit.recommendations.antonyms) &&
+                        dbHit.recommendations.antonyms.length > 0)
+                        ? dbHit.recommendations.antonyms
+                        : (authorityHit.recommendations && authorityHit.recommendations.antonyms) || [],
+                    roots:
+                      (dbHit.recommendations &&
+                        Array.isArray(dbHit.recommendations.roots) &&
+                        dbHit.recommendations.roots.length > 0)
+                        ? dbHit.recommendations.roots
+                        : (authorityHit.recommendations && authorityHit.recommendations.roots) || [],
+                  },
+                  _authority: dbHit._authority || authorityHit._authority || authorityHit._source || 'wiktionary',
+                };
+              } else {
+                if (DEBUG_DICT_DB) {
+                  // eslint-disable-next-line no-console
+                  console.log('[dictionary][authority] augment (db-hit) wiktionary miss:', { word });
+                }
+              }
+            }
+          } catch (e) {
+            if (DEBUG_DICT_DB) {
+              // eslint-disable-next-line no-console
+              console.log('[dictionary][authority] augment (db-hit) error, skip:', e?.message || e);
+            }
+          }
+
+          /* ============================
+           * OLD_AUTHORITY_BLOCK (commented out)
+           * The previous injected block had brace/flow issues; kept for reference to avoid line deletions.
+           *
+           * // ============================
+           * // Authority dictionary (Wiktionary) augmentation on DB HIT (no LLM)
+           * // Goal: if DB entry is missing authority fields (e.g., ipa/definitions), tr...
+           * ... (removed from execution) ...
+           */
+
           return dbHit;
         }
       } else {
@@ -975,6 +1117,24 @@ async function lookupWord(rawWord, explainLang = 'zh-TW', options = {}) {
       console.log('[dictionary][db] DB-first miss, fallback to LLM:', { word, explainLang });
     }
   }
+
+
+  // ============================
+  // Authority dictionary (Wiktionary) BEFORE LLM
+  // - Only runs on DB-first miss
+  // - If hit: return a full dictionary object (based on fallback(word)) without calling LLM
+  // ============================
+  try {
+    const authorityHit = await authorityLookup(word, explainLang, { targetPosKey });
+    if (authorityHit) {
+      console.log('[dictionary][authority] hit (wiktionary):', { word, explainLang, targetPosKey });
+      return authorityHit;
+    }
+    console.log('[dictionary][authority] miss (wiktionary):', { word, explainLang, targetPosKey });
+  } catch (e) {
+    console.log('[dictionary][authority] error (wiktionary), skip:', e?.message || e);
+  }
+
 
   const targetLangLabel = mapExplainLang(explainLang);
 
@@ -1015,6 +1175,7 @@ async function lookupWord(rawWord, explainLang = 'zh-TW', options = {}) {
       });
     }
 
+    const client = getGroqClient();
     const response = await client.chat.completions.create({
       model: 'llama-3.3-70b-versatile',
       temperature: 0.2,
@@ -1084,7 +1245,288 @@ async function lookupWord(rawWord, explainLang = 'zh-TW', options = {}) {
     const normalized = normalizeDictionaryResult(parsed, word);
 
 
-    // ✅ Step 3：把模型回傳的 posOptions 帶到 normalized（若 normalize 尚未處理）
+    // ============================================================
+    // ✅ Phase B/C：提高 definition（母語短釋義）品質
+    // - Phase B：額外做一次「gloss-only」LLM 呼叫，只產生 definition（1~3詞短釋義）
+    //           避免把 definition_de_translation 誤當成 definition
+    // - Phase C：若 definition 仍出現混義（例如 "城堡,鎖"）或中文卻回英文，做 sense-splitting 修正
+    //
+    // 注意：本段只在 LLM 路徑生效（DB-first hit 不會跑，避免額外成本）
+    // ============================================================
+
+    // ✅ language 欄位代表「學習者母語 / UI language」，永遠用 explainLang 覆蓋（不可寫死 de）
+    normalized.language = explainLang;
+
+    const __looksLikeAsciiGloss = (s) => {
+      const t = String(s || '').trim();
+      return !!t && /^[\x00-\x7F]+$/.test(t) && /[A-Za-z]/.test(t);
+    };
+
+    const __hasMixedSenseSeparator = (s) => {
+      const t = String(s || '').trim();
+      if (!t) return false;
+      return (
+        t.includes(',') ||
+        t.includes('，') ||
+        t.includes('、') ||
+        t.includes('/') ||
+        t.includes(' 或 ') ||
+        t.includes(' 和 ') ||
+        t.includes(' 以及 ')
+      );
+    };
+
+    const __shouldGlossSplit = () => {
+      const label = String(mapExplainLang(explainLang) || '').toLowerCase();
+      // If learner language is German, no need.
+      if (label.includes('german') || label.includes('deutsch')) return false;
+      // Need DE definition to derive gloss. If empty, skip.
+      const defDe = normalized.definition_de;
+      if (Array.isArray(defDe)) return defDe.some((x) => String(x || '').trim());
+      return !!String(defDe || '').trim();
+    };
+
+    const __shouldSenseSplit = () => {
+      // If definition already an array with >1, assume OK.
+      if (Array.isArray(normalized.definition) && normalized.definition.length > 1) return false;
+      const s = Array.isArray(normalized.definition)
+        ? String(normalized.definition[0] || '')
+        : String(normalized.definition || '');
+      return __hasMixedSenseSeparator(s);
+    };
+
+    const __callGroqJson = async ({ system, user, label }) => {
+      const client2 = getGroqClient();
+      const resp2 = await client2.chat.completions.create({
+        model: process.env.DICT_LLM_MODEL || 'llama-3.3-70b-versatile',
+        temperature: 0.2,
+        response_format: { type: 'json_object' },
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: user },
+        ],
+      });
+      const content2 = resp2?.choices?.[0]?.message?.content || '';
+      if (process.env.DEBUG_LLM_DICT_GLOSS === '1') {
+        // eslint-disable-next-line no-console
+        console.log(`${label} raw content preview:`, String(content2).slice(0, 200));
+      }
+      try {
+        return JSON.parse(content2);
+      } catch (e) {
+        logger.warn(`${label} JSON parse failed (ignore)`, {
+          word,
+          explainLang,
+          err: e && e.message ? e.message : String(e),
+          contentPreview: String(content2).slice(0, 200),
+        });
+        return null;
+      }
+    };
+
+    // Phase B: gloss-only
+    try {
+      const __enableGlossSplit = String(process.env.DICT_LLM_GLOSS_SPLIT || '1') !== '0';
+      if (__enableGlossSplit && __shouldGlossSplit()) {
+        const __targetLangLabel = getTargetLangLabelSafe(explainLang);
+        const __glossUser = buildGlossUserPrompt(word, __targetLangLabel, normalized.definition_de);
+        const __glossJson = await __callGroqJson({
+          system: glossSystemPrompt,
+          user: __glossUser,
+          label: '[dictionary][llm][gloss]',
+        });
+
+        if (__glossJson && (__glossJson.definition !== undefined)) {
+          normalized.definition = __glossJson.definition;
+
+          // Keep normalized.definitions in sync
+          if (Array.isArray(normalized.definition)) normalized.definitions = normalized.definition;
+          else if (typeof normalized.definition === 'string' && normalized.definition.trim())
+            normalized.definitions = [normalized.definition.trim()];
+        }
+      }
+    } catch (e) {
+      logger.warn('[dictionary][llm][gloss] failed (ignore)', {
+        word,
+        explainLang,
+        err: e && e.message ? e.message : String(e),
+      });
+    }
+
+    // Phase C: sense-splitting (only if still mixed OR Chinese but looks English)
+    try {
+      const __enableSenseSplit = String(process.env.DICT_LLM_SENSE_SPLIT || '1') !== '0';
+
+      const __defSample = Array.isArray(normalized.definition)
+        ? String(normalized.definition[0] || '')
+        : String(normalized.definition || '');
+
+      if (
+        __enableSenseSplit &&
+        (__shouldSenseSplit() ||
+          ((String(explainLang || '').toLowerCase().startsWith('zh')) && __looksLikeAsciiGloss(__defSample)))
+      ) {
+        const __targetLangLabel2 = getTargetLangLabelSafe(explainLang);
+        const __senseUser = buildSenseSplitUserPrompt(word, __targetLangLabel2, {
+          definition_de: normalized.definition_de,
+          definition_de_translation: normalized.definition_de_translation,
+          definition: normalized.definition,
+        });
+
+        const __senseJson = await __callGroqJson({
+          system: senseSplitSystemPrompt,
+          user: __senseUser,
+          label: '[dictionary][llm][sense-split]',
+        });
+
+        if (__senseJson && typeof __senseJson === 'object') {
+          if (__senseJson.definition_de !== undefined) normalized.definition_de = __senseJson.definition_de;
+          if (__senseJson.definition_de_translation !== undefined)
+            normalized.definition_de_translation = __senseJson.definition_de_translation;
+          if (__senseJson.definition !== undefined) normalized.definition = __senseJson.definition;
+
+          if (Array.isArray(normalized.definition)) normalized.definitions = normalized.definition;
+          else if (typeof normalized.definition === 'string' && normalized.definition.trim())
+            normalized.definitions = [normalized.definition.trim()];
+        }
+      }
+    } catch (e) {
+      logger.warn('[dictionary][llm][sense-split] failed (ignore)', {
+        word,
+        explainLang,
+        err: e && e.message ? e.message : String(e),
+      });
+    }
+
+
+
+  
+    // ✅ Phase B：Gloss 來源切分（definition 一律由「gloss-only」第二次呼叫產生）
+// 中文功能說明：
+// - 目標：definition 是「單字本身」的母語短釋義（flashcard 1–3詞），不是德德釋義翻譯（definition_de_translation）
+// - 做法：主呼叫仍負責產出 definition_de / definition_de_translation / 例句等；接著用第二次 LLM 呼叫只產出 definition（更穩）
+// - 設定：DICT_LLM_GLOSS_SPLIT=0 可關閉（回到單次輸出），預設開啟
+const DICT_LLM_GLOSS_SPLIT = process.env.DICT_LLM_GLOSS_SPLIT !== '0';
+
+// 小工具：確保輸出型態可用
+function __isNonEmptyString(v) {
+  return typeof v === 'string' && v.trim() !== '';
+}
+function __isNonEmptyArray(v) {
+  return Array.isArray(v) && v.length > 0 && v.some((x) => __isNonEmptyString(String(x || '')));
+}
+
+// 僅針對「學習者語言 != de」才需要 split gloss（de 本身不需要翻譯）
+function __shouldSplitGloss(targetLangLabel) {
+  if (!__isNonEmptyString(targetLangLabel)) return false;
+  const t = String(targetLangLabel).toLowerCase();
+  // 常見德語標籤：de / deutsch / german
+  if (t === 'de' || t.includes('deutsch') || t.includes('german')) return false;
+  return true;
+}
+
+async function __generateGlossOnlySplit({ word, targetLangLabel, definitionDe }) {
+  const client2 = getGroqClient();
+
+  const user2 = buildGlossUserPrompt(word, targetLangLabel, definitionDe);
+
+  const resp2 = await client2.chat.completions.create({
+    model: 'llama-3.3-70b-versatile',
+    temperature: 0.2,
+    response_format: { type: 'json_object' },
+    messages: [
+      { role: 'system', content: glossSystemPrompt },
+      { role: 'user', content: user2 },
+    ],
+  });
+
+  const content2 = String(resp2?.choices?.[0]?.message?.content || '').trim();
+  let parsed2;
+  try {
+    parsed2 = JSON.parse(content2);
+  } catch (e) {
+    console.error('[dictionary][gloss] JSON parse error in split gloss:', e);
+    console.error('[dictionary][gloss] raw content that failed to parse in split gloss:', content2);
+    return null;
+  }
+
+  const out = parsed2 && typeof parsed2 === 'object' ? parsed2.definition : null;
+  if (__isNonEmptyString(out)) return out;
+  if (__isNonEmptyArray(out)) return out;
+  return null;
+}
+
+if (DICT_LLM_GLOSS_SPLIT && __shouldSplitGloss(targetLangLabel)) {
+  try {
+    const beforeDef = normalized.definition;
+
+    const gloss = await __generateGlossOnlySplit({
+      word,
+      targetLangLabel,
+      definitionDe: normalized.definition_de,
+    });
+
+    if (gloss) {
+      normalized.definition = gloss;
+      console.log('[dictionary][gloss] split-gloss applied', {
+        word,
+        explainLang,
+        beforeType: Array.isArray(beforeDef) ? 'array' : typeof beforeDef,
+        afterType: Array.isArray(gloss) ? 'array' : typeof gloss,
+      });
+    } else {
+      console.log('[dictionary][gloss] split-gloss returned empty; keep original', {
+        word,
+        explainLang,
+      });
+    }
+  } catch (e) {
+    console.error('[dictionary][gloss] split-gloss failed; keep original', e);
+  }
+}
+
+/*
+DEPRECATED (2026-01-24):
+原本的「gloss repair patch」屬於 hit-or-miss 補丁：只有在偵測到缺失/重複時才補修。
+現在改成 Phase B 的「源頭切分」：definition 由獨立呼叫產生，避免單次輸出混欄。
+
+// ✅ Phase B：Gloss 補強（definition 必須是「單字本身的母語短釋義」，不可用德語解釋翻譯頂替）
+// 中文功能說明：
+// - 問題：LLM 有時會把 definition 直接填成 definition_de_translation（變成長句），導致字卡「釋義」不夠短、不夠像 flashcard
+// - 作法：若偵測到 definition 缺失 / 或與 definition_de_translation 重複，則用更小的 prompt 單獨要求 gloss
+// - 範圍：僅補強 definition，不改動 definition_de / definition_de_translation
+const DICT_LLM_GLOSS_REPAIR_ENABLED = process.env.DICT_LLM_GLOSS_REPAIR_ENABLED !== '0';
+
+function __toArrayMaybe(v) {
+  if (Array.isArray(v)) return v;
+  if (typeof v === 'string' && v.trim() !== '') return [v];
+  return [];
+}
+
+function __needsGlossRepair(dictObj) {
+  if (!dictObj) return false;
+  const defArr = __toArrayMaybe(dictObj.definition);
+  const detArr = __toArrayMaybe(dictObj.definition_de_translation);
+
+  // 沒 definition，但有德語解釋翻譯（常見：definition 被漏掉）
+  if (!defArr.length && detArr.length) return true;
+
+  // definition 跟 definition_de_translation 重複（常見：用長句頂替短釋義）
+  if (defArr.length && detArr.length) {
+    const a0 = String(defArr[0] || '').trim();
+    const b0 = String(detArr[0] || '').trim();
+    if (a0 && b0 && a0 === b0) return true;
+  }
+
+  return false;
+}
+
+async function __repairGlossOnly({ word, targetLangLabel, definition_de, definition_de_translation }) {
+  // ... (保留原碼，略)
+}
+*/
+
+// ✅ Step 3：把模型回傳的 posOptions 帶到 normalized（若 normalize 尚未處理）
     // 中文功能說明：
     // - 目的：讓上游（analyzeWord/analyzeRoute/frontend）在第一次查詢就能拿到可切換詞性清單
     // - 設計：不強行推測；僅透過模型回傳 + 本地正規化
@@ -1195,6 +1637,423 @@ async function lookupWord(rawWord, explainLang = 'zh-TW', options = {}) {
   }
 }
 
+
+// ============================
+// Authority lookup helpers (Wiktionary)
+// - This is a best-effort HTML parse via MediaWiki parse API.
+// - We keep it conservative: if we can't confidently parse, return null.
+// - We NEVER override existing DB fields here because this only runs on DB miss.
+// ============================
+function _dwds_or_wiktionary_stripTags(html) {
+  return String(html || '')
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#039;/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function _wiktionary_sliceGermanSection(html) {
+  // de.wiktionary parse HTML does NOT reliably contain `mw-headline id="Deutsch"`.
+  // Common structure:
+  //   <h2 id="..._(Deutsch)"> ... <span id="Deutsch"></span> ...
+  // So we anchor on `id="Deutsch"` span OR a heading containing "Deutsch".
+  const s = String(html || '');
+
+  // 1) Prefer the explicit span marker
+  let idx = s.search(/\bid="Deutsch"\b/);
+  if (idx < 0) {
+    // 2) Fallback: h2 heading id contains "Deutsch" (encoded variants exist)
+    idx = s.search(/<h2[^>]*\bid="[^"]*Deutsch[^"]*"[^>]*>/i);
+  }
+  if (idx < 0) return null;
+
+  const tail = s.slice(idx);
+
+  // Slice until the next H2 heading (next language section) if present
+  const reNextH2 = /<h2\b[^>]*>/ig;
+  let m;
+  let first = true;
+  while ((m = reNextH2.exec(tail)) !== null) {
+    if (first) { first = false; continue; }
+    return tail.slice(0, m.index);
+  }
+  return tail;
+}
+
+function _wiktionary_detectPos(germanHtml) {
+  // de.wiktionary often renders:
+  //   <h3 id="Substantiv,_n"><a ...>Substantiv</a>, <em ...>n</em></h3>
+  // or other heading shapes. We'll detect POS primarily from headings.
+  const s = String(germanHtml || '');
+
+  const candidates = [
+    { word: 'Substantiv', pos: 'Nomen' },
+    { word: 'Nomen', pos: 'Nomen' },
+    { word: 'Verb', pos: 'Verb' },
+    { word: 'Adjektiv', pos: 'Adjektiv' },
+    { word: 'Adverb', pos: 'Adverb' },
+    { word: 'Pronomen', pos: 'Pronomen' },
+    { word: 'Präposition', pos: 'Präposition' },
+    { word: 'Konjunktion', pos: 'Konjunktion' },
+    { word: 'Interjektion', pos: 'Interjektion' },
+    { word: 'Artikel', pos: 'Artikel' },
+    { word: 'Numerale', pos: 'Numerale' },
+    { word: 'Partikel', pos: 'Partikel' },
+  ];
+
+  // 1) Headings (h3/h4) and mw-headline blocks.
+  for (const c of candidates) {
+    const w = c.word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp(
+      `(?:<h3[^>]*>|<h4[^>]*>|mw-headline"[^>]*>)\\s*(?:<[^>]+>\\s*)*${w}\\b`,
+      'i'
+    );
+    if (re.test(s)) return c.pos;
+  }
+
+  // 2) Hilfe:Wortart links.
+  for (const c of candidates) {
+    const w = c.word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp(`Hilfe:Wortart[^"<>]*"[^>]*>\\s*${w}\\b`, 'i');
+    if (re.test(s)) return c.pos;
+  }
+
+  // 3) Last resort: visible text patterns (kept conservative).
+  for (const c of candidates) {
+    const w = c.word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp(`>\\s*${w}\\s*<`, 'i');
+    if (re.test(s)) return c.pos;
+  }
+
+  return null;
+}
+
+function _wiktionary_extractIpa(germanHtml) {
+  const s = String(germanHtml || '');
+
+  // Preferred (de.wiktionary):
+  //   IPA: [<span class="ipa">ˈliːla</span>]
+  const out = [];
+  let m;
+
+  const reIpaSpan = /class="ipa"[^>]*>([^<]+)</gi;
+  while ((m = reIpaSpan.exec(s)) !== null) {
+    const raw = _dwds_or_wiktionary_stripTags(m[1]);
+    if (raw) out.push(raw);
+    if (out.length >= 3) break;
+  }
+
+  // Backward-compatible: class="IPA"
+  if (out.length === 0) {
+    const re = /class="IPA"[^>]*>([^<]+)</g;
+    while ((m = re.exec(s)) !== null) {
+      const raw = _dwds_or_wiktionary_stripTags(m[1]);
+      if (raw) out.push(raw);
+      if (out.length >= 3) break;
+    }
+  }
+
+  if (out.length === 0) return null;
+  const first = String(out[0]).trim().replace(/^\//, '').replace(/\/$/, '');
+  return first ? `/${first}/` : null;
+}
+
+function _wiktionary_extractDefinitions(germanHtml, max = 8) {
+  const s = String(germanHtml || '');
+
+  // de.wiktionary often uses:
+  //   <p ...>Bedeutungen:</p>
+  //   <dl><dd>[1] ...</dd></dl>
+  // We'll extract the first dl after "Bedeutungen:" and parse dd entries.
+  let block = null;
+
+  const idx = s.search(/>\s*Bedeutungen:\s*</i);
+  if (idx >= 0) {
+    const tail = s.slice(idx);
+    const mDl = tail.match(/<dl>[\s\S]*?<\/dl>/i);
+    if (mDl) block = mDl[0];
+  }
+
+  // Fallback: old <ol> structure
+  if (!block) {
+    const mOl = s.match(/<ol[^>]*>[\s\S]*?<\/ol>/i);
+    if (mOl) block = mOl[0];
+  }
+
+  if (!block) return [];
+
+  const defs = [];
+  let m;
+
+  const reDd = /<dd[^>]*>([\s\S]*?)<\/dd>/gi;
+  while ((m = reDd.exec(block)) !== null) {
+    const raw = _dwds_or_wiktionary_stripTags(m[1])
+      .replace(/^\s*\[[0-9]+\]\s*/, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (raw) defs.push(raw);
+    if (defs.length >= max) break;
+  }
+
+  if (defs.length === 0) {
+    const reLi = /<li[^>]*>([\s\S]*?)<\/li>/gi;
+    while ((m = reLi.exec(block)) !== null) {
+      const raw = _dwds_or_wiktionary_stripTags(m[1]).replace(/\s+/g, ' ').trim();
+      if (raw) defs.push(raw);
+      if (defs.length >= max) break;
+    }
+  }
+
+  return defs;
+}
+
+function _wiktionary_extractWordListBySection(germanHtml, sectionIds, max = 12) {
+  const s = String(germanHtml || '');
+  for (const id of sectionIds) {
+    const idx = s.search(new RegExp(`mw-headline"\\s+id="${id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`));
+    if (idx < 0) continue;
+    const tail = s.slice(idx);
+    const mUl = tail.match(/<ul[^>]*>[\s\S]*?<\/ul>/i);
+    if (!mUl) continue;
+    const ul = mUl[0];
+
+    const reLi = /<li[^>]*>([\s\S]*?)<\/li>/gi;
+    const out = [];
+    let mm;
+    while ((mm = reLi.exec(ul)) !== null) {
+      const txt = _dwds_or_wiktionary_stripTags(mm[1]);
+      if (!txt) continue;
+      const first = txt.split(/[,;，；]/)[0].trim();
+      if (!first) continue;
+      if (first.length > 40) continue;
+      out.push(first);
+      if (out.length >= max) break;
+    }
+
+    // uniq lower
+    const seen = new Set();
+    const uniq = [];
+    for (const w of out) {
+      const k = String(w).toLowerCase();
+      if (seen.has(k)) continue;
+      seen.add(k);
+      uniq.push(w);
+    }
+    return uniq;
+  }
+  return [];
+}
+
+function _wiktionary_buildApiUrl(word) {
+  const u = new URL('https://de.wiktionary.org/w/api.php');
+  u.searchParams.set('action', 'parse');
+  u.searchParams.set('page', String(word || '').trim());
+  u.searchParams.set('prop', 'text');
+  u.searchParams.set('format', 'json');
+  u.searchParams.set('formatversion', '2');
+  u.searchParams.set('redirects', '1');
+  return u.toString();
+}
+
+function _wiktionary_httpGetJson(url) {
+  const https = require('https');
+
+  // MediaWiki API may return a plain-text error like:
+  // "Please set a User-Agent header..." (NOT JSON). We must send UA and be tolerant.
+  const headers = {
+    'User-Agent': process.env.DICT_AUTHORITY_UA || 'LanguageApp/1.0 (authority-lookup; local dev)',
+    'Accept': 'application/json',
+  };
+
+  return new Promise((resolve, reject) => {
+    const req = https.request(
+      url,
+      { method: 'GET', headers },
+      (res) => {
+        let data = '';
+        res.on('data', (c) => (data += c));
+        res.on('end', () => {
+          // Non-200 → treat as miss (resolve null)
+          if (res.statusCode && res.statusCode >= 400) {
+            console.log('[dictionary][authority] wiktionary http error:', {
+              status: res.statusCode,
+              sample: String(data || '').slice(0, 120),
+            });
+            return resolve(null);
+          }
+
+          try {
+            resolve(JSON.parse(data));
+          } catch (e) {
+            // Non-JSON response → resolve null (do NOT throw)
+            console.log('[dictionary][authority] wiktionary non-json response:', {
+              sample: String(data || '').slice(0, 120),
+            });
+            resolve(null);
+          }
+        });
+      }
+    );
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+const __DICT_AUTHORITY_CACHE = new Map(); // key -> { at, value }
+function _authorityCacheGet(key, ttlMs) {
+  const hit = __DICT_AUTHORITY_CACHE.get(key);
+  if (!hit) return null;
+  if (Date.now() - hit.at > ttlMs) {
+    __DICT_AUTHORITY_CACHE.delete(key);
+    return null;
+  }
+  return hit.value;
+}
+function _authorityCacheSet(key, value) {
+  __DICT_AUTHORITY_CACHE.set(key, { at: Date.now(), value });
+  return value;
+}
+
+
+async function authorityLookup(word, explainLang, options = {}) {
+  // ============================================================
+  // Plugin-based authority lookup (parsing providers are isolated as plugins)
+  // - Controlled by env: DICT_AUTHORITIES="dwds,llm" (order matters)
+  // - IMPORTANT: LLM is handled by main pipeline; authorityLookup only runs non-LLM authorities.
+  // - Default: DICT_AUTHORITIES="llm" -> no authority providers -> treat as miss (return null)
+  // ============================================================
+  const envList = String(process.env.DICT_AUTHORITIES || 'llm')
+    .split(',')
+    .map((s) => String(s || '').trim().toLowerCase())
+    .filter(Boolean);
+
+  // Only run non-LLM authorities here (LLM is the existing fallback in lookupWord)
+  const providers = envList.filter((p) => p !== 'llm');
+  if (providers.length === 0) return null;
+
+  const registry = getAuthoritiesRegistry();
+  for (const name of providers) {
+    const plugin = registry?.[name];
+    if (!plugin || typeof plugin.lookup !== 'function') continue;
+    try {
+      const hit = await plugin.lookup(word, explainLang, options);
+      if (hit) return hit;
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn('[dictionary][authority] plugin error (skip):', { name, word, msg: e?.message || String(e) });
+    }
+  }
+  return null;
+}
+
+/* ============================================================
+ * LEGACY: Inline Wiktionary parsing authorityLookup (paused)
+ * - Kept for history / line count
+ * - Do NOT execute unless explicitly re-enabled and migrated into plugin.
+ * ============================================================
+async function authorityLookup(word, explainLang, options = {}) {
+  if (process.env.DICT_AUTHORITY_ENABLED === '0') return null;
+  const provider = (process.env.DICT_AUTHORITY_PROVIDER || 'wiktionary').toLowerCase();
+  if (provider !== 'wiktionary') return null;
+
+  const ttlMs = Number(process.env.DICT_AUTHORITY_TTL_MS || 6 * 60 * 60 * 1000);
+  const cacheKey = `wiktionary:de:${String(word || '').toLowerCase()}`;
+  const cached = _authorityCacheGet(cacheKey, ttlMs);
+  if (cached) return cached;
+
+  const url = _wiktionary_buildApiUrl(word);
+  const json = await _wiktionary_httpGetJson(url);
+  if (!json) {
+    console.debug("[dictionary][authority] wiktionary: no json payload (treated as miss)", { word });
+    return null;
+  }
+  const html = json?.parse?.text;
+  if (!html) return _authorityCacheSet(cacheKey, null);
+
+  const german = _wiktionary_sliceGermanSection(html);
+  if (!german) return _authorityCacheSet(cacheKey, null);
+
+  const detectedPosRaw = _wiktionary_detectPos(german);
+  const ipa = _wiktionary_extractIpa(german);
+  const defs = _wiktionary_extractDefinitions(german, 8);
+
+  // Heuristic POS fallback: German nouns are capitalized (helps for inflected forms like "Produkte")
+  let detectedPos = detectedPosRaw;
+  if (!detectedPos) {
+    const w = String(word || '');
+    if (/^[A-ZÄÖÜ]/.test(w)) detectedPos = 'Nomen';
+  }
+
+  const DEBUG_AUTH = process.env.DEBUG_DICT_AUTHORITY === '1';
+  if (DEBUG_AUTH) {
+    // eslint-disable-next-line no-console
+    console.log('[dictionary][authority] wiktionary parsed:', {
+      word,
+      detectedPosRaw,
+      detectedPos,
+      hasIpa: !!ipa,
+      defs: Array.isArray(defs) ? defs.length : 0,
+    });
+  }
+
+  const synonyms = _wiktionary_extractWordListBySection(
+    german,
+    ['Synonyme', 'Sinnverwandte_Wörter', 'Sinnverwandte_Wörter_und_Synonyme'],
+    12
+  );
+  const antonyms = _wiktionary_extractWordListBySection(german, ['Gegenwörter', 'Antonyme'], 12);
+
+  if (!detectedPos && !ipa && defs.length === 0) {
+    // Avoid "hit but empty" results (e.g. inflected-form pages with no useful POS/defs).
+    // If we can't confidently derive a POS or definition, treat as miss and fall back to LLM.
+    return _authorityCacheSet(cacheKey, null);
+  }
+
+  // Build a full dictionary object using existing fallback(word) to keep shape stable.
+  const base = fallback(word);
+
+  // POS: only set if we detected something; keep caller's targetPosKey as a hint, not a requirement.
+  if (detectedPos) {
+    base.partOfSpeech = detectedPos;
+    base.canonicalPos = detectedPos;
+    base.primaryPos = detectedPos;
+    base.posKey = detectedPos;
+    base.posOptions = Array.isArray(base.posOptions) && base.posOptions.length > 0
+      ? Array.from(new Set([detectedPos, ...base.posOptions]))
+      : [detectedPos];
+  }
+
+  if (ipa) base.ipa = ipa;
+  if (defs.length > 0) {
+    // Keep as array to match normalizeDictionaryResult behavior (your pipeline already supports array)
+    base.definition_de = defs;
+    // We intentionally put German into definition_de_translation as a placeholder so downstream can derive senses.
+    base.definition_de_translation = defs;
+  }
+
+  // Recommendations
+  if (!base.recommendations || typeof base.recommendations !== 'object') base.recommendations = { synonyms: [], antonyms: [], roots: [] };
+  if (synonyms.length > 0) base.recommendations.synonyms = synonyms;
+  if (antonyms.length > 0) base.recommendations.antonyms = antonyms;
+
+  // Lightweight marker for debugging (UI can ignore)
+  base._authority = { provider: 'wiktionary', explainLang: String(explainLang || ''), at: new Date().toISOString() };
+
+  return _authorityCacheSet(cacheKey, base);
+}
+
+
+*/
+
 module.exports = { lookupWord };
 
+
+// backend/src/clients/dictionaryLookup.js
+
+// [patch] strict Deutsch marker not found; no-op
 // backend/src/clients/dictionaryLookup.js

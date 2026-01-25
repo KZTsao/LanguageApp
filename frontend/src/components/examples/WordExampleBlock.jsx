@@ -1,3 +1,4 @@
+// FILE: frontend/src/components/examples/WordExampleBlock.jsx
 // frontend/src/components/examples/WordExampleBlock.jsx
 /**
  * 文件說明
@@ -34,6 +35,7 @@ import { callTTS } from "../../utils/ttsClient";
 import uiText from "../../uiText";
 
 import ExampleList from "./ExampleList";
+import { upsertLastPronRecording } from "./pronReplayStore";
 import useExamples from "./useExamples";
 import WordPosInfo from "../posInfo/WordPosInfo";
 
@@ -78,6 +80,18 @@ export default function WordExampleBlock({
   conversationPlayLabel,
   conversationCloseLabel,
   conversationLoadingLabel,
+
+  // ✅ Task F2：Favorites/Learning 例句回寫快取（可選）
+  // - 上游（App → ResultPanel → WordCard）注入
+  // - 若未提供：不影響既有行為
+  onExamplesResolved,
+  // ✅ Task F2：例句 auto-refresh 開關（上游可注入；favorites-learning 會強制開啟）
+  examplesAutoRefreshEnabled,
+
+  // ✅ Task F2：提供 mode/learningContext 以便關閉 favorites replay auto-refresh
+  // - 若上游未傳：fallback 不會影響既有 search/history 行為
+  mode,
+  learningContext,
 }) {
 
   // =========================
@@ -94,6 +108,40 @@ export default function WordExampleBlock({
 
   // ✅ 方案 M：保留接線（不顯示 debug UI）
   const [selectedForm, setSelectedForm] = useState(null);
+
+  // ✅ 2026-01-24：POS 補充資訊收合狀態（全域）
+  // 中文功能說明：
+  // - 需求：瀏覽不同單字時，維持「收/合」狀態一致
+  // - 做法：用 localStorage + window 變數（同分頁立即生效）
+  // - 不影響查詢 / 快取 / 例句產生，只是 UI 展示
+  const POSINFO_COLLAPSE_KEY = "langapp::ui::posinfo_collapsed_v1";
+
+  const [posInfoCollapsed, setPosInfoCollapsed] = useState(() => {
+    try {
+      // 1) 優先用 window 快取（同分頁立刻一致）
+      if (typeof window !== "undefined" && window.__langappPosInfoCollapsed != null) {
+        return !!window.__langappPosInfoCollapsed;
+      }
+    } catch (e) {}
+    try {
+      // 2) 再讀 localStorage（可跨 reload）
+      const v = window.localStorage.getItem(POSINFO_COLLAPSE_KEY);
+      if (v === "1") return true;
+      if (v === "0") return false;
+    } catch (e) {}
+    return false; // 預設展開
+  });
+
+  useEffect(() => {
+    try {
+      if (typeof window !== "undefined") {
+        window.__langappPosInfoCollapsed = !!posInfoCollapsed;
+      }
+    } catch (e) {}
+    try {
+      window.localStorage.setItem(POSINFO_COLLAPSE_KEY, posInfoCollapsed ? "1" : "0");
+    } catch (e) {}
+  }, [posInfoCollapsed]);
 
   // ✅ Phase 2-UX（Step A-6）：例句標題顯示 headword（銳角外方匡）
   // 中文功能說明：
@@ -308,8 +356,10 @@ export default function WordExampleBlock({
   // - 原則：優先讀 uiText；未補齊 key 時 fallback 回既有 hardcode（避免中斷）
   // - 下一階段：補齊 uiText[uiLang].wordCard.exampleBlock.* 對應 key
   // =========================
-  const __ui = (uiText && uiLang && uiText[uiLang]) || (uiText && uiText["zh-TW"]) || {};
-  const __uiFallback = (uiText && uiText["zh-TW"]) || {};
+  // NOTE 2026/01/24: 多國字串來源一律由 App.jsx 的 explainLang/uiLang 決定
+  // - 這裡不再做 "zh-TW" 預設判斷，抓不到 key 時用 "----" 讓缺字可見
+  const __ui = (uiText && uiLang && uiText[uiLang]) || {};
+  const __uiFallback = {};
   const __tWordCard = (__ui && __ui.wordCard) || {};
   const __tExampleBlock = (__tWordCard && __tWordCard.exampleBlock) || {};
   const __tWordCardFallback = (__uiFallback && __uiFallback.wordCard) || {};
@@ -324,13 +374,13 @@ export default function WordExampleBlock({
 
   // ✅ i18n（強制）：共用文字只透過 uiText 取用
   // 中文功能說明：
-  // - 取字順序：uiText[uiLang] -> uiText["zh-TW"] -> hardFallback（最後保底，避免空字串造成 UI 斷裂）
+  // - 取字順序：uiText[uiLang] -> hardFallback（預設 "----"；刻意不再 fallback 到 zh-TW，方便抓缺字）
   // - key 規則：
   //   - wordCard.* 直接用 "refreshExamplesTooltipLabel"
   //   - exampleBlock.* 用 "exampleBlock.multiRefLabel"（映射到 wordCard.exampleBlock.multiRefLabel）
   const __t = useCallback(
     (key, hardFallback) => {
-      if (typeof key !== "string" || !key) return hardFallback || "";
+      if (typeof key !== "string" || !key) return hardFallback || "----";
 
       const parts = key.split(".");
       const k0 = parts[0];
@@ -353,7 +403,7 @@ export default function WordExampleBlock({
       }
 
       if (typeof v === "string" && v.trim()) return v;
-      return hardFallback || "";
+      return hardFallback || "----";
     },
     [__tWordCard, __tExampleBlock, __tWordCardFallback, __tExampleBlockFallback]
   );
@@ -479,6 +529,57 @@ export default function WordExampleBlock({
     "有參考未被使用，請再重新產生"
   );
 
+  // ============================================================
+  // Task F2 — Favorites/Learning：auto-refresh 預設關閉（deprecated）
+  // - 目標：Favorites 左右切換「不自動」打 /api/dictionary/examples
+  // - 若該字沒有例句：僅顯示「無例句」狀態，讓使用者手動補齊
+  // - 不影響：search/history 既有 auto-refresh 行為
+  //
+  // ✅ 2026/01/20（需求變更）：取消 favorites-learning 預設關閉 auto-refresh
+  // - 需求：學習本連到 ResultPanel 時也要自動產生/補齊（含翻譯）
+  // - 策略：favorites-learning 一律強制開啟；其他模式尊重上游注入（未注入則預設 true）
+  // ============================================================
+  const __examplesAutoRefreshEnabledDeprecated = !(
+    mode === "learning" &&
+    learningContext &&
+    learningContext.sourceType === "favorites"
+  );
+
+  const __examplesAutoRefreshEnabledFromUpstream =
+    typeof examplesAutoRefreshEnabled === "boolean"
+      ? examplesAutoRefreshEnabled
+      : true;
+
+  const __examplesAutoRefreshEnabledEffective =
+    mode === "learning" &&
+    learningContext &&
+    learningContext.sourceType === "favorites"
+      ? true
+      : __examplesAutoRefreshEnabledFromUpstream;
+
+  // ============================================================
+  // Task 3 — Examples Auto-Refresh（策略：切換/Replay 不重打、缺資料才補齊）
+  // - favorites-learning：不要寫死 true，改成 needsRefresh gate
+  // - 其他模式：維持上游注入（或預設 true）的行為
+  // ============================================================
+  const __isFavoritesLearning =
+    mode === "learning" &&
+    learningContext &&
+    learningContext.sourceType === "favorites";
+
+  const __hasExamplesFromDict =
+    (Array.isArray(d?.examples) && d.examples.length > 0) ||
+    (typeof d?.example === "string" && d.example.trim() !== "");
+
+  const __hasTranslationFromDict =
+    typeof d?.exampleTranslation === "string" && d.exampleTranslation.trim() !== "";
+
+  const __needsAutoRefresh = !__hasExamplesFromDict || !__hasTranslationFromDict;
+
+  const __examplesAutoRefreshEnabledEffective__task3 = __isFavoritesLearning
+    ? __needsAutoRefresh
+    : __examplesAutoRefreshEnabledFromUpstream;
+
   // ===== useExamples（不改查詢規則）=====
   const {
     examples,
@@ -493,8 +594,20 @@ export default function WordExampleBlock({
     d,
     senseIndex,
     explainLang,
+    // ✅ Task F2：補齊完成回寫 favorites cache（若上游有注入）
+    onExamplesResolved,
+    // ✅ Task 3：favorites-learning 以 needsRefresh gate 決定是否開啟 auto-refresh
+    // - 有例句+翻譯 → skip（不重打）
+    // - 缺例句 or 缺翻譯 → 補齊一次
+    examplesAutoRefreshEnabled: __examplesAutoRefreshEnabledEffective__task3,
     multiRefEnabled,
     refs,
+
+    // ✅ 2026/01/14：例句 refresh 的 req.word 以例句標題 headword 為準（例如：des Berges）
+    // - 目的：確保重新產生例句時，後端/LLM 看到的「目標字形」與 UI 顯示一致
+    // - 注意：只影響 /api/dictionary/examples 的 word 欄位；baseForm 仍保留原本 d.baseForm
+    exampleHeadword: headwordForExampleTitle,
+    headwordOverride: headwordForExampleTitle,
   });
 
   const safeUsedRefs = Array.isArray(usedRefs) ? usedRefs : [];
@@ -777,8 +890,155 @@ export default function WordExampleBlock({
     return false;
   }, [normalizeRefText]);
 
+  // ============================================================
+  // Task A — WordExampleBlock.jsx
+  // - 目標：Favorites snapshot replay 時，必須吃得到 snapshot/result 內已存在的例句翻譯
+  // - 規則：翻譯來源優先序 = generatedTranslation（即時補齊） > snapshot/result 內翻譯 > 空字串
+  // - 注意：不改 useExamples 行為；不改 snapshot 結構；不影響 History/Search（僅在 favorites-learning 啟用掃描）
+  // ============================================================
+
+
+  // ✅ 嘗試從 snapshot/result 的例句資料中找出可用翻譯
+  // - 由於 snapshot 可能把翻譯掛在 examples[] item（exampleTranslation / translation）
+  //   而不是傳進 exampleTranslation prop，所以這裡做保守型掃描
+  const __snapshotExampleTranslationCandidate = useMemo(() => {
+    if (!__isFavoritesLearning) return "";
+    if (!Array.isArray(examples)) return "";
+
+    for (const ex of examples) {
+      if (!ex || typeof ex !== "object") continue;
+      const cand =
+        (typeof ex.exampleTranslation === "string" && ex.exampleTranslation) ||
+        (typeof ex.translation === "string" && ex.translation) ||
+        "";
+      const t = (cand || "").toString().trim();
+      if (t) return t;
+    }
+    return "";
+  }, [__isFavoritesLearning, examples]);
+
+  // ✅ 有效翻譯（供下游 ExampleList / ExampleSentence 使用）
   const effectiveExampleTranslation =
-    generatedTranslation || exampleTranslation || "";
+    generatedTranslation ||
+    (typeof exampleTranslation === "string" ? exampleTranslation : "") ||
+    __snapshotExampleTranslationCandidate ||
+    "";
+
+  const hasExamples = Array.isArray(examples) && examples.length > 0;
+  const hasTranslation =
+    typeof effectiveExampleTranslation === "string" &&
+    effectiveExampleTranslation.trim() !== "";
+
+  const needsRefresh = !hasExamples || !hasTranslation;
+
+
+  // ============================================================
+  // Task 2 — Favorites Snapshot「可更新」：例句/翻譯補齊後回拋上游
+  // - 目的：讓 App.jsx 能把最新補齊內容 upsert 回 favorites snapshot
+  // - 技術約束：不新增 API、不改 DB schema、不影響 History/Search
+  // - 注意：上游（App.jsx）仍會做 mode===learning && sourceType===favorites 的 gate
+  // ============================================================
+  const __lastExamplesResolvedRef = useRef({
+    key: null,
+    examplesLen: 0,
+    exampleTranslation: "",
+  });
+
+  useEffect(() => {
+    try {
+      if (typeof onExamplesResolved !== "function") return;
+
+      // ✅ 僅在 favorites-learning 時才允許「可更新」語意
+      if (!(mode === "learning" && learningContext && learningContext.sourceType === "favorites")) {
+        return;
+      }
+
+      const headwordForKey =
+        (typeof d?.dictionary?.baseForm === "string" && d.dictionary.baseForm) ||
+        (typeof d?.dictionary?.word === "string" && d.dictionary.word) ||
+        "";
+
+      // 這裡不做 normalize（由上游 handleFavoritesExamplesResolved 內部統一 normalize）
+      const nowKey = String(headwordForKey || "");
+
+      const prev = __lastExamplesResolvedRef.current || {
+        key: null,
+        examplesLen: 0,
+        exampleTranslation: "",
+      };
+
+      const nextLen = Array.isArray(examples) ? examples.length : 0;
+      const nextTran = typeof generatedTranslation === "string" ? generatedTranslation : "";
+
+      const improved =
+        // 例句：從空 → 有、或數量增加
+        (prev.examplesLen === 0 && nextLen > 0) ||
+        nextLen > prev.examplesLen ||
+        // 翻譯：從空 → 有（不要求一次全齊）
+        (!prev.exampleTranslation && !!nextTran);
+
+      // ✅ 只要有新增/補齊就回拋一次（避免 render 連續回拋造成噪音）
+      if (improved) {
+        try {
+          onExamplesResolved(examples, {
+            exampleTranslation: nextTran,
+            headword: nowKey,
+            reason:
+              (!prev.exampleTranslation && !!nextTran)
+                ? "translation_filled"
+                : (prev.examplesLen === 0 && nextLen > 0)
+                  ? "examples_filled"
+                  : "examples_grew",
+          });
+        } catch {
+          // ignore
+        }
+
+        __lastExamplesResolvedRef.current = {
+          key: nowKey,
+          examplesLen: nextLen,
+          exampleTranslation: nextTran,
+        };
+      } else if (prev.key !== nowKey) {
+        // ✅ 換字時重置 tracking，避免字與字之間互相影響判斷
+        __lastExamplesResolvedRef.current = {
+          key: nowKey,
+          examplesLen: nextLen,
+          exampleTranslation: nextTran,
+        };
+      }
+    } catch {
+      // ignore
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [examples, generatedTranslation, onExamplesResolved, mode, learningContext, d]);
+
+
+
+  // ============================================================
+  // Phase 2.1 — Pronunciation audio handoff (store last recording)
+  // - 目的：把 ExampleSentence 錄下來的 blob 交給上層保存（先不接評分 API）
+  // - 策略：只保存「最後一次錄音」（會覆蓋），並在覆蓋時 revoke 舊 objectURL
+  // - 注意：不新增 API、不改後端；不影響既有例句/翻譯/refresh 流程
+  // ============================================================
+  const handlePronunciationAudioReady = useCallback(
+    (mainSentence, blob, meta) => {
+      try {
+        const hw = (headwordForExampleTitle || (d?.word || d?.baseForm || "")).toString().trim();
+        const sent = (mainSentence || "").toString().trim();
+        if (!hw || !sent || !blob) return;
+        const key = `${hw}::${sent}`;
+        upsertLastPronRecording(key, blob, {
+          headword: hw,
+          sentence: sent,
+          ...(meta && typeof meta === "object" ? meta : {}),
+        });
+      } catch (e) {
+        // 不影響主流程（僅保存用）
+      }
+    },
+    [d, headwordForExampleTitle]
+  );
 
   async function handleSpeak(sentence) {
     try {
@@ -1713,23 +1973,7 @@ setRefsByWordKey((prev) => {
 
   return (
     <div style={{ marginTop: 20 }}>
-      {d && (d.baseForm || d.word) && (
-        <WordPosInfo
-          partOfSpeech={d.partOfSpeech}
-          queryWord={d.word}
-          baseForm={d.baseForm || d.word}
-          gender={d.gender}
-          uiLabels={{}}
-          extraInfo={{ plural: injectedPlural, dictionary: d }}
-          type={d.type}
-          uiLang={uiLang}
-          onSelectForm={setSelectedForm}
-          onEntrySurfaceChange={onEntrySurfaceChange}
-          onWordClick={onWordClick}
-        />
-      )}
-
-      {/* ===== Multi-ref 控制列 ===== */}
+{/* ===== Multi-ref 控制列 ===== */}
       {/* deprecated: Phase 2-UX（Step A-2）後，refs 控制區塊改由 refControls 下移到例句區塊內；
           這個區塊保留原碼避免回溯困難，但不再顯示（避免 UI 重複/突兀）。 */}
       <div style={{ marginTop: 8, marginBottom: 10, display: "none", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
@@ -1884,8 +2128,77 @@ setRefsByWordKey((prev) => {
         refActionInline={refActionInlineForExampleList}
         refConfirm={refConfirmForExampleList}
 
+        onPronunciationAudioReady={handlePronunciationAudioReady}
+
       />
-    </div>
+
+      {/* ===== POS 補充資訊（放在例句下方 + 可收合） ===== */}
+      {d && (d.baseForm || d.word) && (() => {
+        // ✅ i18n：詞性補充標題（統一走 __t；抓不到就顯示 "----"）
+        const __posInfoTitle = __t("posInfoTitle", "----");
+
+
+        const __arrow = posInfoCollapsed ? "▶" : "▼";
+
+        return (
+          <div
+            style={{
+              marginTop: 14,
+              borderRadius: 10,
+              border: "1px solid var(--border-subtle)",
+              background: "var(--surface-2)",
+              color: "var(--text)",
+              overflow: "hidden",
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => setPosInfoCollapsed((v) => !v)}
+              style={{
+                width: "100%",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "flex-start",
+                gap: 8,
+                padding: "10px 12px",
+                border: "none",
+                background: "transparent",
+                color: "inherit",
+                cursor: "pointer",
+                textAlign: "left",
+              }}
+              aria-expanded={!posInfoCollapsed}
+            >
+              <span style={{ fontWeight: 700, fontSize: 13, lineHeight: "16px" }}>
+                {__arrow} {__posInfoTitle}
+              </span>
+            </button>
+
+            {!posInfoCollapsed && (
+              <div style={{ padding: "0 12px 12px 12px" }}>
+                <WordPosInfo
+                  partOfSpeech={d.partOfSpeech}
+                  queryWord={d.word}
+                  baseForm={d.baseForm || d.word}
+                  gender={d.gender}
+                  uiLabels={{}}
+                  extraInfo={{ plural: injectedPlural, dictionary: d }}
+                  type={d.type}
+                  uiLang={uiLang}
+                  onSelectForm={setSelectedForm}
+                  onEntrySurfaceChange={onEntrySurfaceChange}
+                  onWordClick={onWordClick}
+                />
+              </div>
+            )}
+          </div>
+        );
+      })()}
+</div>
   );
 }
+// __pad_keep_linecount_1
 // frontend/src/components/examples/WordExampleBlock.jsx
+// END FILE: frontend/src/components/examples/WordExampleBlock.jsx
+// __pad_keep_linecount_posinfo
+// __pad_keep_linecount_posinfo

@@ -11,6 +11,10 @@
  *   - 目的：避免例句為了塞 refs 變得不自然，同時讓 missingRefs 具備可觀測性
  *   - 注意：此規則不影響 Phase 1 的「只按 Refresh 才查詢」硬規則（該規則在 examples API route 端控管）
  *
+ * - 2026-01-16：✅ Sense 切分強制規則（CRITICAL SENSE-SPLITTING RULES）
+ *   - 目的：避免單一義項混合「具體/抽象」或用「或/以及」合併不同語意軸（例如 eng = schmal vs begrenzt）
+ *   - 設計：只改 prompt 規格，不改 schema、不改程式流程，讓 LLM 沒有混義的空間
+ *
  * 功能初始化狀態（Production 排查）
  * - PROMPT_REFS_RULES.enabled = true（此檔僅提供 prompt 文本，不做 runtime 判斷；此處為規格註記）
  */
@@ -199,6 +203,29 @@ Polysemy rules:
   - definition_de[i] ↔ definition_de_translation[i] ↔ definition[i]
 - If the word is clearly monosemous in common usage, you may return simple strings instead of arrays.
 
+===============================
+CRITICAL SENSE-SPLITTING RULES (MANDATORY)
+===============================
+
+- Each sense MUST represent exactly ONE semantic axis.
+- NEVER combine meanings using "or", "and", "以及", "或", or similar constructions.
+- If a word has BOTH:
+  - a concrete / physical meaning (e.g. space, size, shape),
+  - and an abstract / figurative meaning (e.g. limits, rules, conditions),
+  you MUST split them into separate senses.
+
+- Each sense MUST be valid with its own example sentence.
+- If one German synonym (e.g. "schmal") does NOT fit all meanings, the senses MUST be split.
+- Do NOT output combined synonym lines like: "schmal oder begrenzt".
+
+Bad (FORBIDDEN):
+- "狹窄或受限制"
+- "schmal oder begrenzt"
+
+Good (REQUIRED):
+- Sense 1: "狹窄（空間）" → schmal
+- Sense 2: "受限制的（條件／範圍）" → begrenzt / eingeschränkt
+
 Example / exampleTranslation rules:
 
 - "example" MUST be a single natural German sentence.
@@ -346,8 +373,111 @@ Return ONLY the JSON object, no markdown, no explanation.
 `;
 }
 
+
+/**
+ * ✅ Phase B：Gloss-only prompt（只產生 learner-language 的「簡短釋義 definition」）
+ * - 用於避免把 definition_de_translation 誤當成 definition
+ * - definition：1～3 個詞的短釋義；多義請回傳 array，且不得用逗號合併
+ */
+const glossSystemPrompt = `
+You are a precise gloss generator for a German dictionary app.
+
+Goal:
+- Given a German headword and its German dictionary explanation(s),
+  produce VERY SHORT gloss(es) in the learner's language.
+- Output ONLY a JSON object:
+  { "definition": "string OR string[]" }
+
+Rules:
+- "definition" MUST be in the learner's language (targetLangLabel).
+- 1–3 words per sense (flashcard style).
+- If there are multiple distinct senses, output an array and keep them separate.
+- NEVER join multiple senses into one string using ",", "，", "、", "/", "或", "和", "以及".
+- If learner language is any Chinese, NEVER output English.
+- Return ONLY JSON, nothing else.
+`;
+
+/**
+ * 產生 gloss-only user prompt
+ */
+function buildGlossUserPrompt(word, targetLangLabel, definitionDe) {
+  const defText = Array.isArray(definitionDe)
+    ? definitionDe.map((d, i) => `${i + 1}. ${d}`).join('\\n')
+    : `${definitionDe || ''}`;
+
+  return `
+Learner's language (targetLangLabel): ${targetLangLabel}
+
+German headword:
+"${word}"
+
+German definition(s) (definition_de):
+${defText}
+
+Generate gloss(es) in the learner's language.
+Return ONLY the JSON object with the field "definition".
+`;
+}
+
+/**
+ * ✅ Phase C：Sense-splitting prompt（把混義拆成 aligned arrays）
+ * - 用於修正像 "城堡,鎖" 這種混義輸出
+ */
+const senseSplitSystemPrompt = `
+You are a sense-splitting assistant for a German dictionary app.
+
+Input includes:
+- German definition_de (string or string[])
+- definition_de_translation (string or string[])
+- definition (string or string[])
+
+Your task:
+- If any field contains multiple meanings combined with separators (comma/、/或/和/以及/etc),
+  split them into multiple senses.
+- Output ONLY a JSON object with these fields:
+  { "definition_de": ..., "definition_de_translation": ..., "definition": ... }
+
+Rules:
+- Arrays MUST be aligned by index across the three fields.
+- Learner language is provided as targetLangLabel; definition_de_translation and definition MUST be in that language.
+- NEVER combine multiple senses in one string using separators.
+- Return ONLY JSON, nothing else.
+`;
+
+/**
+ * 產生 sense-splitting user prompt
+ */
+function buildSenseSplitUserPrompt(word, targetLangLabel, payload) {
+  const safe = (v) => (v === undefined ? null : v);
+  return `
+Learner's language (targetLangLabel): ${targetLangLabel}
+
+German headword:
+"${word}"
+
+Here is the current dictionary payload (may be wrong / mixed senses):
+${JSON.stringify(
+  {
+    definition_de: safe(payload.definition_de),
+    definition_de_translation: safe(payload.definition_de_translation),
+    definition: safe(payload.definition),
+  },
+  null,
+  2
+)}
+
+Split mixed senses if needed. Ensure aligned arrays by index.
+Return ONLY the JSON object with fields "definition_de", "definition_de_translation", "definition".
+`;
+}
+
 module.exports = {
   systemPrompt,
   buildUserPrompt,
+  // Phase B/C (multi-call for better quality)
+  glossSystemPrompt,
+  buildGlossUserPrompt,
+  senseSplitSystemPrompt,
+  buildSenseSplitUserPrompt,
 };
 // backend/src/clients/dictionaryPrompts.js

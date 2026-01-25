@@ -290,10 +290,10 @@ export default function WordPosInfoAdjektiv({ baseForm, labels = {}, uiLang }) {
     <div
       role="button"
       tabIndex={0}
-      onClick={() => setIsOpen((v) => !v)}
+      onClick={() => { /* deprecated: internal collapse removed */ }}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
-          setIsOpen((v) => !v);
+          /* deprecated: internal collapse removed */
           e.preventDefault();
         }
       }}
@@ -315,6 +315,7 @@ export default function WordPosInfoAdjektiv({ baseForm, labels = {}, uiLang }) {
         style={{
           display: "inline-block",
           width: 18,
+          display: "none",
           textAlign: "center",
           fontSize: ARROW_SIZE,
           lineHeight: 1,
@@ -322,7 +323,7 @@ export default function WordPosInfoAdjektiv({ baseForm, labels = {}, uiLang }) {
           opacity: 0.85,
         }}
       >
-        {isOpen ? "▾" : "▸"}
+        {""}
       </span>
 
       <div
@@ -337,16 +338,18 @@ export default function WordPosInfoAdjektiv({ baseForm, labels = {}, uiLang }) {
     </div>
   );
 
-  if (!isOpen) {
+  // ✅ 2026-01-24：由上層「詞性補充」區塊統一管理收合，本元件不再提供內部收合 UI
+  // - 保留舊收合邏輯（deprecated）避免誤刪既有紀錄，但永不進入
+  if (false && !isOpen) {
     return (
       <div style={OuterBoxStyle}>
         <div
           role="button"
           tabIndex={0}
-          onClick={() => setIsOpen(true)}
+          onClick={() => { /* deprecated: internal collapse removed */ }}
           onKeyDown={(e) => {
             if (e.key === "Enter" || e.key === " ") {
-              setIsOpen(true);
+              /* deprecated: internal collapse removed */
               e.preventDefault();
             }
           }}
@@ -367,6 +370,7 @@ export default function WordPosInfoAdjektiv({ baseForm, labels = {}, uiLang }) {
             style={{
               display: "inline-block",
               width: 18,
+          display: "none",
               textAlign: "center",
               fontSize: ARROW_SIZE,
               lineHeight: 1,
@@ -374,7 +378,7 @@ export default function WordPosInfoAdjektiv({ baseForm, labels = {}, uiLang }) {
               opacity: 0.85,
             }}
           >
-            {"▸"}
+            {""}
           </span>
 
           <div
