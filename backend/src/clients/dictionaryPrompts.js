@@ -28,11 +28,20 @@ Your job:
 - If you are unsure about a field, use the empty string "" or an empty array [] where appropriate.
 - For very common words, you MUST still provide at least one meaningful sense; do not leave all definitions empty.
 
+Additional rules:
+- The field "language" MUST equal the learner's language label (targetLangLabel) from the user prompt (e.g. zh-TW).
+- Do NOT set language="de"; the app is learning German so German is implied.
+- Prefer the most common everyday senses. Do NOT invent rare/unrelated senses.
+- Common polysemy guidance (when confident):
+  - "Bank" (Nomen): include Geldinstitut and Sitzmöbel/Bank (bench). Avoid English-like "Ufer" unless you are very sure it is intended.
+  - "Schloss" (Nomen): include (1) lock and (2) castle/palace.
+
+
 JSON schema:
 
 {
   "word": "string, lemma or headword in German",
-  "language": "de",
+  "language": "string, learner\'s language label (targetLangLabel), e.g. zh-TW",
   "partOfSpeech": "Nomen | Verb | Adjektiv | Adverb | Pronomen | Präposition | Konjunktion | Interjektion | unknown",
 
   "type": "common_noun | brand | product_name | proper_person | proper_place | organization | ''",
@@ -363,6 +372,7 @@ You MUST:
 
 Please:
 - Interpret "${targetLangLabel}" as the learner's primary language.
+- Set the JSON field "language" to "${targetLangLabel}".
 - Fill ALL fields in the JSON schema from the system prompt as well as you can.
 - Obey ALL language rules about "definition", "definition_de_translation", "example", and "exampleTranslation".
 - Apply STRICT proper-name translation rules for cities, landmarks, buildings, and all named entities.

@@ -210,9 +210,127 @@ async function commitUsageEvent(payload) {
   return { ok: true };
 }
 
+/**
+ * ✅ ASR 秒數記帳（daily/monthly 主帳本）
+ * - 依賴欄位（你需要在 DB 補欄位，否則會被 catch 住而不影響主流程）：
+ *   - usage_daily.asr_seconds (bigint default 0)
+ *   - usage_monthly.asr_seconds_total (bigint default 0)
+ * - events 先留：由呼叫端 logUsage / 其他機制處理
+ */
+async function commitAsrSecondsSafe(payload) {
+  try {
+    return await commitAsrSeconds(payload);
+  } catch (e) {
+    console.warn("[usageIO][commitAsrSecondsSafe] failed:", e?.message || String(e));
+    return { ok: false, reason: "exception" };
+  }
+}
+
+async function commitAsrSeconds(payload) {
+  const supa = getSupabaseServiceClient();
+  if (!supa) return { ok: false, reason: "missing_env_or_client" };
+
+  const userId = String(payload?.userId || "").trim();
+  if (!userId) return { ok: false, reason: "missing_userId" };
+
+  const usedSeconds = Number(payload?.usedSeconds || 0) || 0;
+  if (usedSeconds <= 0) return { ok: true, skipped: true, reason: "no_seconds" };
+
+  const day = getTodayDateStr();
+  const ym = getMonthDateStr();
+
+  // 1) usage_daily：原子累加（如果欄位不存在，會被 catch，且不影響主流程）
+  try {
+    const { error: dailyErr } = await supa.from("usage_daily").upsert(
+      {
+        user_id: userId,
+        day,
+        asr_seconds: usedSeconds,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "user_id,day" }
+    );
+
+    if (dailyErr) {
+      // 如果欄位不存在，supabase 會回 column not found
+      console.warn("[usageIO][daily][asr] upsert failed:", dailyErr.message || String(dailyErr));
+    } else {
+      // 👆 upsert 無法做到 +=（除非 RPC），先用兩段式：select + upsert（維持最小改動）
+      // 你若要更穩（併發不漏算），下一步我會改成 SQL function: INSERT ... ON CONFLICT DO UPDATE SET asr_seconds = usage_daily.asr_seconds + EXCLUDED.asr_seconds
+      const sel = await supa
+        .from("usage_daily")
+        .select("asr_seconds")
+        .eq("user_id", userId)
+        .eq("day", day)
+        .maybeSingle();
+
+      if (!sel.error) {
+        const cur = Number(sel.data?.asr_seconds || 0) || 0;
+        const next = cur + usedSeconds;
+        const { error: upErr } = await supa
+          .from("usage_daily")
+          .upsert(
+            { user_id: userId, day, asr_seconds: next, updated_at: new Date().toISOString() },
+            { onConflict: "user_id,day" }
+          );
+        if (upErr) console.warn("[usageIO][daily][asr] add failed:", upErr.message || String(upErr));
+      } else {
+        console.warn("[usageIO][daily][asr] select failed:", sel.error.message || String(sel.error));
+      }
+    }
+  } catch (e) {
+    console.warn("[usageIO][daily][asr] exception:", e?.message || String(e));
+  }
+
+  // 2) usage_monthly：原子累加（同上，先兩段式保守做）
+  try {
+    const { error: mErr } = await supa.from("usage_monthly").upsert(
+      {
+        user_id: userId,
+        ym,
+        asr_seconds_total: usedSeconds,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "user_id,ym" }
+    );
+
+    if (mErr) {
+      console.warn("[usageIO][monthly][asr] upsert failed:", mErr.message || String(mErr));
+    } else {
+      const selM = await supa
+        .from("usage_monthly")
+        .select("asr_seconds_total")
+        .eq("user_id", userId)
+        .eq("ym", ym)
+        .maybeSingle();
+
+      if (!selM.error) {
+        const curM = Number(selM.data?.asr_seconds_total || 0) || 0;
+        const nextM = curM + usedSeconds;
+        const { error: upMErr } = await supa
+          .from("usage_monthly")
+          .upsert(
+            { user_id: userId, ym, asr_seconds_total: nextM, updated_at: new Date().toISOString() },
+            { onConflict: "user_id,ym" }
+          );
+        if (upMErr) console.warn("[usageIO][monthly][asr] add failed:", upMErr.message || String(upMErr));
+      } else {
+        console.warn("[usageIO][monthly][asr] select failed:", selM.error.message || String(selM.error));
+      }
+    }
+  } catch (e) {
+    console.warn("[usageIO][monthly][asr] exception:", e?.message || String(e));
+  }
+
+  return { ok: true };
+}
+
 module.exports = {
-  commitUsageEventSafe,
+commitUsageEventSafe,
   commitUsageEvent,
+  commitAsrSecondsSafe,
+  commitAsrSeconds,
+
 };
 
 // backend/src/utils/usageIO.js

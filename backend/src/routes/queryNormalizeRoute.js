@@ -55,37 +55,21 @@ function analyzeInputShape(text) {
   return { tokenCount, hasSentencePunct, looksLikeSentence };
 }
 
-/**
- * ✅ 泛化：可分動詞片語（2~3 詞）lemma 合併（不靠白名單）
- * 例：nimmt mit → LLM 可能回 lemma=nehmen，但正確查字 headword 應是 mitnehmen
- * 規則：若 variantType=separable_verb，且輸入像「動詞 + 分離前綴(粒子)」，而 lemma 沒包含該粒子，則合併。
- */
-function tryMergeSeparableLemma(inputText, lemma, variantType) {
-  if (!inputText || !lemma) return lemma;
-  if (variantType !== "separable_verb") return lemma;
+/** ✅ 基礎預檢：避免把 URL/Email/程式碼/怪符號當查字輸入，浪費 token */
+function looksLikeUrlOrEmail(text) {
+  const t = String(text || "").trim();
+  return /:\/\//.test(t) || /\S+@\S+\./.test(t);
+}
 
-  const t = String(inputText || "").trim();
-  const toks = t.split(/\s+/).filter(Boolean);
-  // 常見是 2 詞：nimmt mit / sieht aus
-  // 有些會 3 詞（含反身代名詞）但這裡只做「最後一詞粒子」合併，避免過度猜測
-  if (toks.length < 2 || toks.length > 3) return lemma;
+function looksLikeCodeSnippet(text) {
+  const t = String(text || "").trim();
+  return /[{}\[\];]|=>|<\/?\w+|\bconst\b|\bfunction\b|\bimport\b|\bexport\b/.test(t);
+}
 
-  const particle = toks[toks.length - 1];
-  if (!particle) return lemma;
-
-  const base = String(lemma).trim();
-  if (!base) return lemma;
-
-  const p = particle.toLowerCase();
-  const b = base.toLowerCase();
-
-  // 若 lemma 已經是 particle+verb（如 aussehen），就不動
-  if (b.startsWith(p)) return lemma;
-
-  // 只允許字母/變音/ß 的粒子，避免把奇怪符號合進來
-  if (!/^[A-Za-zÄÖÜäöüß]+$/.test(particle)) return lemma;
-
-  return `${particle}${base}`;
+// 允許：字母、空白、-、'、德文變音；其餘視為不適合「查字」的噪音
+function hasWeirdNonQuerySymbols(text) {
+  const t = String(text || "").trim();
+  return /[^A-Za-zÄÖÜäöüß\s\-']/u.test(t);
 }
 
 
@@ -121,6 +105,7 @@ function buildPrompt(text) {
     "}",
     "",
     "規則：",
+    "- 這是查字/查片語的輸入：短輸入（1~3 個詞）很常見，不要因為短就判定 false",
     "- 可分動詞片語例：'sieht aus' → lemma='aussehen'，variantType='separable_verb'，normalized='aussehen'，bestGuess=null",
     "- 反身動詞：包含 mich/dich/sich/uns/euch/sich 時，lemma 以 'sich + infinitiv' 回傳，variantType='reflexive_verb'",
     "- 若看起來是句子（含 . ! ? 或詞數>3）：仍要盡量抽取 lemma/variantType，但 normalized 請回輸入原文（不要改寫整句）",
@@ -142,6 +127,7 @@ function buildPromptStage1(text) {
     "",
     "請輸出：{\"isGermanLikely\":boolean,\"shape\":\"word\"|\"phrase\"|\"sentence\"|\"unknown\",\"confidence\":number,\"reason\":string}",
     "規則：",
+    "- 這是查字/查片語的輸入：短輸入（1~3 個詞）很常見，不要因為短就判定 false",
     "- 德文可分動詞片語（如 'sieht aus'）應判定為 isGermanLikely=true, shape=phrase",
     "- 反身動詞片語（如 'erinnert sich'）也算 isGermanLikely=true",
     "- 若含 . ! ? 或詞數>3，shape=sentence",
@@ -167,6 +153,7 @@ function buildPromptStage2(text, shape) {
     "}",
     "",
     "規則：",
+    "- 這是查字/查片語的輸入：短輸入（1~3 個詞）很常見，不要因為短就判定 false",
     "- 可分動詞片語例：'sieht aus' → lemma='aussehen', variantType='separable_verb'",
     "- 反身動詞：'erinnert sich' → lemma='sich erinnern', variantType='reflexive_verb'",
     "- 若 shape=sentence：不要改寫整句；normalizedSuggestion 可為 null",
@@ -174,6 +161,22 @@ function buildPromptStage2(text, shape) {
     "- 不要輸出 bestGuess/candidates",
   ].join("\n");
 }
+
+function buildPromptStage2b(phrase, particle, baseLemma) {
+  return [
+    "你是德文可分動詞片語的原形還原器。只輸出 JSON。",
+    `片語：${phrase}`,
+    `分離粒子（particle）：${particle}`,
+    `LLM猜到的base lemma：${baseLemma}`,
+    "",
+    "請輸出：{\"lemma\": string|null, \"confidence\": number, \"reason\": string}",
+    "規則：",
+    "- lemma 必須是可查字典的原形（Infinitiv），且要包含 particle（例如 nimmt mit → mitnehmen）",
+    "- 若無法確定，lemma=null",
+    "- confidence 0~1，reason 要短",
+  ].join("\n");
+}
+
 
 function buildPromptStage3(text) {
   return [
@@ -183,6 +186,7 @@ function buildPromptStage3(text) {
     "",
     "請輸出：{\"bestGuess\":string|null,\"candidates\":string[],\"confidence\":number,\"reason\":string}",
     "規則：",
+    "- 這是查字/查片語的輸入：短輸入（1~3 個詞）很常見，不要因為短就判定 false",
     "- candidates 0~5 個",
     "- 若你無法確定，bestGuess=null",
   ].join("\n");
@@ -245,9 +249,34 @@ router.post("/normalize", async (req, res) => {
       (shapeLocal && shapeLocal.looksLikeSentence ? "sentence" : (shapeLocal && shapeLocal.tokenCount > 1 ? "phrase" : "word")) ||
       "unknown";
 
-    const stage1IsGermanLikely = stage1 ? Boolean(stage1.isGermanLikely) : true;
-    const stage1Conf =
+    const stage1IsGermanLikelyRaw = stage1 ? Boolean(stage1.isGermanLikely) : true;
+    const stage1ConfRaw =
       stage1 && typeof stage1.confidence === "number" ? Math.max(0, Math.min(1, stage1.confidence)) : null;
+
+    // ✅ 泛化 fail-open（不靠白名單）：不要因為「短」就判定 not-german
+    // 放行條件：像查字輸入（1~3 詞）、不像 URL/Email、不像 code、沒有數字、沒有奇怪符號
+    const __t = String(quickNormalized || "").trim();
+    const __tokenCount = shapeLocal && typeof shapeLocal.tokenCount === "number" ? shapeLocal.tokenCount : 0;
+    const __looksLikeUrlOrEmail = /:\/\//.test(__t) || /\S+@\S+\./.test(__t);
+    const __looksLikeCode = /[{}\[\];]|=>|<\/?\w+|\bconst\b|\bfunction\b|\bimport\b|\bexport\b/.test(__t);
+    const __hasDigits = /\d/.test(__t);
+    const __hasLatinOrUmlaut = /[A-Za-zÄÖÜäöüß]/.test(__t);
+    const __hasWeirdSymbols = /[^A-Za-zÄÖÜäöüß\s\-']/u.test(__t);
+
+    const __hardAllowShortQuery =
+      __hasLatinOrUmlaut &&
+      __tokenCount > 0 &&
+      __tokenCount <= 3 &&
+      !__looksLikeUrlOrEmail &&
+      !__looksLikeCode &&
+      !__hasDigits &&
+      !__hasWeirdSymbols;
+
+    const stage1IsGermanLikely = __hardAllowShortQuery ? true : stage1IsGermanLikelyRaw;
+    const stage1Conf =
+      __hardAllowShortQuery && stage1IsGermanLikelyRaw === false
+        ? (stage1ConfRaw !== null ? Math.max(stage1ConfRaw, 0.6) : 0.6)
+        : stage1ConfRaw;
 
     // Stage2：僅做 lemma/variantType（不做拼字）
     const stage2 = stage1IsGermanLikely
@@ -262,8 +291,7 @@ router.post("/normalize", async (req, res) => {
     const stage2Conf =
       stage2 && typeof stage2.confidence === "number" ? Math.max(0, Math.min(1, stage2.confidence)) : null;
 
-    const lemmaRaw = sanitizeText(stage2?.lemma || "") || null;
-    const lemma = tryMergeSeparableLemma(quickNormalized, lemmaRaw, sanitizeText(stage2?.variantType || "") || null) || lemmaRaw || null;
+    let lemma = sanitizeText(stage2?.lemma || "") || null;
     const pos = sanitizeText(stage2?.pos || "") || null;
     const variantType = sanitizeText(stage2?.variantType || "") || null;
     const features = stage2?.features && typeof stage2.features === "object" ? stage2.features : null;
@@ -272,7 +300,42 @@ router.post("/normalize", async (req, res) => {
     const allowRewrite = stage1Shape !== "sentence";
 
     // normalized（優先用 lemma；其次 normalizedSuggestion；最後原字）
-    const normalized = allowRewrite
+    
+
+    // ✅ Stage2b：小幅度再問一次 LLM（不靠白名單）
+    // 觸發：可分動詞片語 + lemma 看起來只有 base verb（缺 particle）
+    if (allowRewrite && variantType === "separable_verb" && lemma) {
+      const toks = String(quickNormalized || "").trim().split(/\s+/).filter(Boolean);
+      if (toks.length >= 2 && toks.length <= 3) {
+        const particle = toks[toks.length - 1];
+        const base = String(lemma || "").trim();
+        const p = particle ? particle.toLowerCase() : "";
+        const b = base ? base.toLowerCase() : "";
+        const particleLooksOk = particle && /^[A-Za-zÄÖÜäöüß]+$/.test(particle);
+        const baseLooksOk = base && /^[A-Za-zÄÖÜäöüß]+$/.test(base);
+        const missingParticle = particleLooksOk && baseLooksOk && !b.startsWith(p);
+
+        const safeToAsk =
+          particleLooksOk &&
+          !looksLikeUrlOrEmail(quickNormalized) &&
+          !looksLikeCodeSnippet(quickNormalized) &&
+          !hasWeirdNonQuerySymbols(quickNormalized);
+
+        if (missingParticle && safeToAsk) {
+          const stage2b = await callLLMJsonOrNull({
+            prompt: buildPromptStage2b(quickNormalized, particle, base),
+            max_tokens: 80,
+            temperature: 0.1,
+          });
+
+          const lemma2 = sanitizeText(stage2b?.lemma || "") || null;
+          if (lemma2 && lemma2.toLowerCase().startsWith(p)) {
+            lemma = lemma2;
+          }
+        }
+      }
+    }
+const normalized = allowRewrite
       ? (sanitizeText(lemma || stage2?.normalizedSuggestion || "") || quickNormalized)
       : quickNormalized;
 

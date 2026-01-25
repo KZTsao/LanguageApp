@@ -18,6 +18,8 @@
  */
 
 const express = require("express");
+
+const jwt = require('jsonwebtoken');
 const multer = require("multer");
 const { SpeechClient } = require("@google-cloud/speech");
 
@@ -32,6 +34,50 @@ const upload = multer({
 });
 
 const router = express.Router();
+
+
+
+// 嘗試從 Authorization Bearer token 解析出 user（不強制登入）
+// 規則：同 analyzeRoute.js（verify -> decode fallback）
+// - 目的：ASR 秒數歸戶到正確 userId（否則無法累積）
+function tryGetAuthUser(req) {
+  const authHeader =
+    req.headers["authorization"] || req.headers["Authorization"];
+  if (!authHeader || !authHeader.startsWith("Bearer ")) return null;
+
+  const token = authHeader.slice("Bearer ".length).trim();
+  if (!token) return null;
+
+  // ① 優先嘗試 verify
+  if (process.env.SUPABASE_JWT_SECRET) {
+    try {
+      const decoded = jwt.verify(token, process.env.SUPABASE_JWT_SECRET);
+      return {
+        id: decoded.sub || "",
+        email: decoded.email || "",
+        source: "verify",
+      };
+    } catch (e) {
+      console.warn(
+        "[tryGetAuthUser][speech] jwt.verify failed, fallback to decode"
+      );
+    }
+  }
+
+  // ② fallback：decode（不驗證，只做用量歸戶）
+  try {
+    const decoded = jwt.decode(token);
+    if (!decoded) return null;
+
+    return {
+      id: decoded.sub || "",
+      email: decoded.email || "",
+      source: "decode",
+    };
+  } catch {
+    return null;
+  }
+}
 
 // 共享 Speech client（ADC：GOOGLE_APPLICATION_CREDENTIALS）
 const speechClient = new SpeechClient();
@@ -144,8 +190,8 @@ router.post("/asr", upload.single("audio"), async (req, res) => {
       },
       // userId/email/ip：若你之後有 auth middleware，可補上
       ip: req.ip || "",
-      userId: (req.user && req.user.id) || "",
-      email: (req.user && req.user.email) || "",
+      userId: authUser?.id || (req.user && req.user.id) || "",
+      email: authUser?.email || (req.user && req.user.email) || "",
     });
 
     return res.json({

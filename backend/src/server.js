@@ -62,6 +62,9 @@ const supportRoute = require("./routes/supportRoute");
 const queryNormalizeRoute = require("./routes/queryNormalizeRoute");
 
 
+
+// ✅ Lemon Squeezy Webhook
+const lemonWebhookRoute = require("./routes/lemonWebhookRoute");
 const { errorMiddleware } = require("./utils/errorHandler");
 const { logger } = require("./utils/logger");
 
@@ -156,8 +159,18 @@ function mountRoutes(app) {
   app.use("/api", visitRoute);
   INIT_STATUS.routes.visit = true;
 
-  // 初始化狀態補充（便於 runtime 排查）
+  
+
+  // ✅ Lemon Squeezy Webhook（POST /api/webhooks/lemon）
+  // 路徑說明：
+  // - 本檔掛載：app.use("/api", lemonWebhookRoute)
+  // - route 檔內定義：POST /webhooks/lemon
+  // ✅ 最終生效路徑：POST /api/webhooks/lemon
+  app.use("/api", lemonWebhookRoute);
+  INIT_STATUS.routes.lemonWebhook = true;
+// 初始化狀態補充（便於 runtime 排查）
   logger.info(`[INIT] routes.adminUsage mounted at: /admin`);
+  logger.info(`[INIT] routes.lemonWebhook mounted at: /api/webhooks/lemon`);
 }
 
 /** 功能：掛載錯誤處理（集中管理） */
