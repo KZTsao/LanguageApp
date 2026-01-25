@@ -49,7 +49,8 @@ const uiText = {
 
     // ★ Layout（新增）
     layout: {
-      mutterspracheLabel: "母語：",
+      
+      termsOfService: "服務條款",mutterspracheLabel: "母語：",
     },
 
     // ★ Auth（新增）
@@ -73,24 +74,8 @@ const uiText = {
       sectionExampleTranslation: "翻譯",
       sectionNotes: "補充說明",
 
-
-
-
-
-
-
-
-
       // ★ 詞性補充（NEW）
       posInfoSupplementTitle: "詞性補充",
-
-
-
-
-
-
-
-
 
       // ✅ Alias key（同義）：給舊/新元件統一取用（不可刪）
       posInfoTitle: "詞性補充",
@@ -378,32 +363,32 @@ const uiText = {
         setTitleA1Grammar: "A1 文法",
         setTitleCommonPhrases: "常用語",
         setTitleTest: "測驗",
-},
+      },
+    },
+    // ✅ Speak Analyze Panel (ASR once)
+    speakAnalyzePanel: {
+      title: "口說分析",
+      targetLabel: "目標",
+      resultLabel: "分析結果",
+      startRecording: "開始錄音",
+      stopRecording: "停止錄音",
+      replay: "重播",
+      analyze: "分析",
+      close: "關閉",
+      asrLabel: "系統判定",
+      asrProcessing: "系統判定中…",
+      asrPrefix: "系統判定：",
+      analyzeDone: "分析完成",
+      analyzeFailedPrefix: "分析失敗：",
+      recording: "錄音中",
+      secondsSuffix: "秒",
+      perfect: "全對",
+      closeAria: "關閉",
+      waveformAria: "口說波形",
     },
   },
 
-      // ✅ Speak Analyze Panel (ASR once)
-      speakAnalyzePanel: {
-        title: "口說分析",
-        targetLabel: "目標",
-        resultLabel: "分析結果",
-        startRecording: "開始錄音",
-        stopRecording: "停止錄音",
-        replay: "重播",
-        analyze: "分析",
-        close: "關閉",
-        asrLabel: "系統判定",
-        asrProcessing: "系統判定中…",
-        asrPrefix: "系統判定：",
-        analyzeDone: "分析完成",
-        analyzeFailedPrefix: "分析失敗：",
-        recording: "錄音中",
-        secondsSuffix: "秒",
-        perfect: "全對",
-        closeAria: "關閉",
-        waveformAria: "口說波形",
-      },
-
+      
 
   // ----------------------------
   // English
@@ -424,7 +409,8 @@ const uiText = {
     ],
 
     layout: {
-      mutterspracheLabel: "Native language:",
+      
+      termsOfService: "Terms of Service",mutterspracheLabel: "Native language:",
     },
 
     auth: {
@@ -446,24 +432,8 @@ const uiText = {
       sectionExampleTranslation: "Translation",
       sectionNotes: "Notes",
 
-
-
-
-
-
-
-
-
       // ★ POS info supplement（NEW）
       posInfoSupplementTitle: "POS info",
-
-
-
-
-
-
-
-
 
       // ✅ Alias key（同義）：給舊/新元件統一取用（不可刪）
       posInfoTitle: "POS info",
@@ -721,70 +691,47 @@ const uiText = {
         favoriteCategoryEmpty: "No categories",
         favoriteCategoryAll: "All",
 
-      
-
-// ✅ Alias keys (for backward compatibility with WordLibraryPanel.jsx; do not delete)
-setSelectLabel: "Learning set",
-setSelectTitle: "Select what to study",
-setSelectAria: "Learning set menu",
-setFavoritesLabel: "My Favorites",
-setNotReadyLine1: "This learning set isn’t available yet.",
-setNotReadyLine2: "Only the menu is available for now; content and progress will be added later.",
-testDisabledTitle: "Test is not available yet.",
+        // ✅ Alias keys (for backward compatibility with WordLibraryPanel.jsx; do not delete)
+        setSelectLabel: "Learning set",
+        setSelectTitle: "Select what to study",
+        setSelectAria: "Learning set menu",
+        setFavoritesLabel: "My Favorites",
+        setNotReadyLine1: "This learning set isn’t available yet.",
+        setNotReadyLine2: "Only the menu is available for now; content and progress will be added later.",
+        testDisabledTitle: "Test is not available yet.",
 
         // ✅ Learning set titles (NEW)
         setTitleA1Vocab: "A1 Vocabulary",
         setTitleA1Grammar: "A1 Grammar",
         setTitleCommonPhrases: "Common Phrases",
         setTitleTest: "Test",
-},
+      },
     },
-  
 
-      // ✅ Speak Analyze Panel (ASR once)
-      speakAnalyzePanel__deprecated_misplaced_20260124: {
-        title: "口說分析",
-        targetLabel: "目標",
-        resultLabel: "分析結果",
-        startRecording: "開始錄音",
-        stopRecording: "停止錄音",
-        replay: "重播",
-        analyze: "分析",
-        close: "關閉",
-        asrProcessing: "ASR 分析中…",
-        asrPrefix: "ASR：",
-        analyzeDone: "分析完成",
-        analyzeFailedPrefix: "分析失敗：",
-        recording: "錄音中",
-        secondsSuffix: "秒",
-        perfect: "全對",
-        closeAria: "關閉",
-        waveformAria: "口說波形",
-      },
-},
+    // ✅ Speak Analyze Panel (ASR once)
+    speakAnalyzePanel: {
+      title: "Speak Analyze",
+      targetLabel: "Target",
+      resultLabel: "Result",
+      startRecording: "Start recording",
+      stopRecording: "Stop recording",
+      replay: "Replay",
+      analyze: "Analyze",
+      close: "Close",
+      asrLabel: "System",
+      asrProcessing: "System processing…",
+      asrPrefix: "System: ",
+      analyzeDone: "Analysis complete",
+      analyzeFailedPrefix: "Analysis failed: ",
+      recording: "Recording",
+      secondsSuffix: "s",
+      perfect: "Perfect",
+      closeAria: "Close",
+      waveformAria: "Speech waveform",
+    },
+  },
 
-      // ✅ Speak Analyze Panel (ASR once)
-      speakAnalyzePanel: {
-        title: "Speak Analyze",
-        targetLabel: "Target",
-        resultLabel: "Result",
-        startRecording: "Start recording",
-        stopRecording: "Stop recording",
-        replay: "Replay",
-        analyze: "Analyze",
-        close: "Close",
-        asrLabel: "System",
-        asrProcessing: "System processing…",
-        asrPrefix: "System: ",
-        analyzeDone: "Analysis complete",
-        analyzeFailedPrefix: "Analysis failed: ",
-        recording: "Recording",
-        secondsSuffix: "s",
-        perfect: "Perfect",
-        closeAria: "Close",
-        waveformAria: "Speech waveform",
-      },
-
+      
 
   // ----------------------------
   // 簡體中文 zh-CN
@@ -805,7 +752,8 @@ testDisabledTitle: "Test is not available yet.",
     ],
 
     layout: {
-      mutterspracheLabel: "母语：",
+      
+      termsOfService: "服务条款",mutterspracheLabel: "母语：",
     },
 
     auth: {
@@ -1087,48 +1035,46 @@ testDisabledTitle: "Test is not available yet.",
         favoriteCategoryEmpty: "暂无分类",
         favoriteCategoryAll: "全部",
 
-      
-
-// ✅ Alias keys (for backward compatibility with WordLibraryPanel.jsx; do not delete)
-setSelectLabel: "学习本",
-setSelectTitle: "选择要学习的内容",
-setSelectAria: "学习本菜单",
-setFavoritesLabel: "我的收藏",
-setNotReadyLine1: "此学习本内容尚未导入",
-setNotReadyLine2: "目前仅显示菜单，稍后会加入完成度与内容",
-testDisabledTitle: "尚未导入测验功能",
+      // ✅ Alias keys (for backward compatibility with WordLibraryPanel.jsx; do not delete)
+      setSelectLabel: "学习本",
+      setSelectTitle: "选择要学习的内容",
+      setSelectAria: "学习本菜单",
+      setFavoritesLabel: "我的收藏",
+      setNotReadyLine1: "此学习本内容尚未导入",
+      setNotReadyLine2: "目前仅显示菜单，稍后会加入完成度与内容",
+      testDisabledTitle: "尚未导入测验功能",
 
         // ✅ 学习本标题（新增）
         setTitleA1Vocab: "A1 单词",
         setTitleA1Grammar: "A1 语法",
         setTitleCommonPhrases: "常用语",
         setTitleTest: "测验",
-},
+      },
+    },
+    // ✅ Speak Analyze Panel (ASR once)
+    speakAnalyzePanel: {
+      title: "口说分析",
+      targetLabel: "目标",
+      resultLabel: "分析结果",
+      startRecording: "开始录音",
+      stopRecording: "停止录音",
+      replay: "重播",
+      analyze: "分析",
+      close: "关闭",
+      asrLabel: "系统判定",
+      asrProcessing: "系统判定中…",
+      asrPrefix: "系统判定：",
+      analyzeDone: "分析完成",
+      analyzeFailedPrefix: "分析失败：",
+      recording: "录音中",
+      secondsSuffix: "秒",
+      perfect: "全对",
+      closeAria: "关闭",
+      waveformAria: "口说波形",
     },
   },
 
-      // ✅ Speak Analyze Panel (ASR once)
-      speakAnalyzePanel: {
-        title: "口说分析",
-        targetLabel: "目标",
-        resultLabel: "分析结果",
-        startRecording: "开始录音",
-        stopRecording: "停止录音",
-        replay: "重播",
-        analyze: "分析",
-        close: "关闭",
-        asrLabel: "系统判定",
-        asrProcessing: "系统判定中…",
-        asrPrefix: "系统判定：",
-        analyzeDone: "分析完成",
-        analyzeFailedPrefix: "分析失败：",
-        recording: "录音中",
-        secondsSuffix: "秒",
-        perfect: "全对",
-        closeAria: "关闭",
-        waveformAria: "口说波形",
-      },
-
+      
 
   // ----------------------------
   // Deutsch de
@@ -1149,7 +1095,8 @@ testDisabledTitle: "尚未导入测验功能",
     ],
 
     layout: {
-      mutterspracheLabel: "Muttersprache:",
+      
+      termsOfService: "Nutzungsbedingungen",mutterspracheLabel: "Muttersprache:",
     },
 
     auth: {
@@ -1171,24 +1118,8 @@ testDisabledTitle: "尚未导入测验功能",
       sectionExampleTranslation: "Übersetzung",
       sectionNotes: "Notizen",
 
-
-
-
-
-
-
-
-
       // ★ Wortart-Zusatzinfo（NEW）
       posInfoSupplementTitle: "Wortart-Info",
-
-
-
-
-
-
-
-
 
       // ✅ Alias key（同義）：給舊/新元件統一取用（不可刪）
       posInfoTitle: "Wortart-Info",
@@ -1447,70 +1378,47 @@ testDisabledTitle: "尚未导入测验功能",
         favoriteCategoryEmpty: "Keine Kategorien",
         favoriteCategoryAll: "Alle",
 
-      
-
-// ✅ Alias keys (for backward compatibility with WordLibraryPanel.jsx; do not delete)
-setSelectLabel: "Lernset",
-setSelectTitle: "Wähle, was du lernen möchtest",
-setSelectAria: "Lernset-Menü",
-setFavoritesLabel: "Meine Favoriten",
-setNotReadyLine1: "Dieses Lernset ist noch nicht verfügbar.",
-setNotReadyLine2: "Derzeit ist nur das Menü verfügbar; Inhalte und Fortschritt kommen später.",
-testDisabledTitle: "Test ist noch nicht verfügbar.",
+        // ✅ Alias keys (for backward compatibility with WordLibraryPanel.jsx; do not delete)
+        setSelectLabel: "Lernset",
+        setSelectTitle: "Wähle, was du lernen möchtest",
+        setSelectAria: "Lernset-Menü",
+        setFavoritesLabel: "Meine Favoriten",
+        setNotReadyLine1: "Dieses Lernset ist noch nicht verfügbar.",
+        setNotReadyLine2: "Derzeit ist nur das Menü verfügbar; Inhalte und Fortschritt kommen später.",
+        testDisabledTitle: "Test ist noch nicht verfügbar.",
 
         // ✅ Lernset-Titel (NEU)
         setTitleA1Vocab: "A1 Wortschatz",
         setTitleA1Grammar: "A1 Grammatik",
         setTitleCommonPhrases: "Häufige Redewendungen",
         setTitleTest: "Test",
-},
+      },
     },
-  
 
-      // ✅ Speak Analyze Panel (ASR once)
-      speakAnalyzePanel__deprecated_misplaced_20260124: {
-        title: "口说分析",
-        targetLabel: "目标",
-        resultLabel: "分析结果",
-        startRecording: "开始录音",
-        stopRecording: "停止录音",
-        replay: "重播",
-        analyze: "分析",
-        close: "关闭",
-        asrProcessing: "ASR 分析中…",
-        asrPrefix: "ASR：",
-        analyzeDone: "分析完成",
-        analyzeFailedPrefix: "分析失败：",
-        recording: "录音中",
-        secondsSuffix: "秒",
-        perfect: "全对",
-        closeAria: "关闭",
-        waveformAria: "口说波形",
-      },
+    // ✅ Speak Analyze Panel (ASR once)
+    speakAnalyzePanel: {
+      title: "Sprech-Analyse",
+      targetLabel: "Ziel",
+      resultLabel: "Ergebnis",
+      startRecording: "Aufnahme starten",
+      stopRecording: "Aufnahme stoppen",
+      replay: "Wiedergeben",
+      analyze: "Analysieren",
+      close: "Schließen",
+      asrLabel: "System",
+      asrProcessing: "System wird ausgewertet…",
+      asrPrefix: "System: ",
+      analyzeDone: "Analyse abgeschlossen",
+      analyzeFailedPrefix: "Analyse fehlgeschlagen: ",
+      recording: "Aufnahme läuft",
+      secondsSuffix: "s",
+      perfect: "Perfekt",
+      closeAria: "Schließen",
+      waveformAria: "Sprachwellenform",
+    },
 },
 
-      // ✅ Speak Analyze Panel (ASR once)
-      speakAnalyzePanel: {
-        title: "Sprech-Analyse",
-        targetLabel: "Ziel",
-        resultLabel: "Ergebnis",
-        startRecording: "Aufnahme starten",
-        stopRecording: "Aufnahme stoppen",
-        replay: "Wiedergeben",
-        analyze: "Analysieren",
-        close: "Schließen",
-        asrLabel: "System",
-        asrProcessing: "System wird ausgewertet…",
-        asrPrefix: "System: ",
-        analyzeDone: "Analyse abgeschlossen",
-        analyzeFailedPrefix: "Analyse fehlgeschlagen: ",
-        recording: "Aufnahme läuft",
-        secondsSuffix: "s",
-        perfect: "Perfekt",
-        closeAria: "Schließen",
-        waveformAria: "Sprachwellenform",
-      },
-
+      
 
   // ----------------------------
   // العربية ar
@@ -1531,7 +1439,8 @@ testDisabledTitle: "Test ist noch nicht verfügbar.",
     ],
 
     layout: {
-      mutterspracheLabel: "اللغة الأم:",
+      
+      termsOfService: "شروط الخدمة",mutterspracheLabel: "اللغة الأم:",
     },
 
     auth: {
@@ -1553,23 +1462,8 @@ testDisabledTitle: "Test ist noch nicht verfügbar.",
       sectionExampleTranslation: "الترجمة",
       sectionNotes: "ملاحظات إضافية",
 
-
-
-
-
-
-
-
-
       // ★ معلومات إضافية عن نوع الكلمة（NEW）
       posInfoSupplementTitle: "معلومات نوع الكلمة",
-
-
-
-
-
-
-
 
       labelPos: "نوع الكلمة",
       labelGender: "الجنس",
@@ -1824,8 +1718,6 @@ testDisabledTitle: "Test ist noch nicht verfügbar.",
         favoriteCategoryEmpty: "لا توجد فئات",
         favoriteCategoryAll: "الكل",
 
-      
-
 // ✅ Alias keys (for backward compatibility with WordLibraryPanel.jsx; do not delete)
 setSelectLabel: "مجموعة التعلّم",
 setSelectTitle: "اختر ما تريد تعلمه",
@@ -1840,56 +1732,31 @@ testDisabledTitle: "الاختبار غير متاح بعد.",
         setTitleA1Grammar: "قواعد A1",
         setTitleCommonPhrases: "عبارات شائعة",
         setTitleTest: "اختبار",
-},
+      },
     },
-  
-
-      // ✅ Speak Analyze Panel (ASR once)
-      speakAnalyzePanel: {
-        title: "تحليل النطق",
-        targetLabel: "النص المستهدف",
-        resultLabel: "نتيجة التحليل",
-        startRecording: "بدء التسجيل",
-        stopRecording: "إيقاف التسجيل",
-        replay: "إعادة التشغيل",
-        analyze: "تحليل",
-        close: "إغلاق",
-        asrProcessing: "جارٍ تحليل ASR…",
-        asrPrefix: "ASR: ",
-        analyzeDone: "تم التحليل",
-        analyzeFailedPrefix: "فشل التحليل: ",
-      },
-      // ✅ Speak Analyze Panel (ASR once)
-      speakAnalyzePanel: {
-        title: "تحليل النطق",
-        targetLabel: "النص المستهدف",
-        resultLabel: "نتيجة التحليل",
-        startRecording: "بدء التسجيل",
-        stopRecording: "إيقاف التسجيل",
-        replay: "إعادة التشغيل",
-        analyze: "تحليل",
-        close: "إغلاق",
-        asrProcessing: "جارٍ تحليل ASR…",
-        asrPrefix: "ASR: ",
-        analyzeDone: "تم التحليل",
-        analyzeFailedPrefix: "فشل التحليل: ",
-        recording: "جارٍ التسجيل",
-        secondsSuffix: "ث",
-        perfect: "مثالي",
-        closeAria: "إغلاق",
-        waveformAria: "مخطط موجة النطق",
-      },
-
-
-},
+    // ✅ Speak Analyze Panel (ASR once)
+    speakAnalyzePanel: {
+      title: "تحليل النطق",
+      targetLabel: "النص المستهدف",
+      resultLabel: "نتيجة التحليل",
+      startRecording: "بدء التسجيل",
+      stopRecording: "إيقاف التسجيل",
+      replay: "إعادة التشغيل",
+      analyze: "تحليل",
+      close: "إغلاق",
+      asrProcessing: "جارٍ تحليل ASR…",
+      asrPrefix: "ASR: ",
+      analyzeDone: "تم التحليل",
+      analyzeFailedPrefix: "فشل التحليل: ",
+      recording: "جارٍ التسجيل",
+      secondsSuffix: "ث",
+      perfect: "مثالي",
+      closeAria: "إغلاق",
+      waveformAria: "مخطط موجة النطق",
+    },
+  },
 };
 
 export default uiText;
-
-
-
-
-
-
 
 // frontend/src/uiText.js

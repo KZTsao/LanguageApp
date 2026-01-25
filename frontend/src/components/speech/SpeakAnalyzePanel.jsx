@@ -257,19 +257,22 @@ export default function SpeakAnalyzePanel({
         title={title}
         aria-label={ariaLabel || title}
         style={{
-          width: 40,
-          height: 40,
-          borderRadius: 12,
-          border: "1px solid rgba(255,122,0,0.45)",
-          background: "rgba(255,255,255,0.96)",
-          color: __ORANGE,
+          width: 34,
+          height: 34,
+          borderRadius: 999,
+          border: "1px solid var(--border-subtle)",
           display: "inline-flex",
           alignItems: "center",
           justifyContent: "center",
+          lineHeight: 0,
+          padding: "0px",
           cursor: disabled ? "not-allowed" : "pointer",
-          opacity: disabled ? 0.45 : 1,
-          boxShadow: "0 1px 0 rgba(0,0,0,0.08)",
           userSelect: "none",
+          flex: "0 0 auto",
+          background: "var(--accent)",
+          color: "rgb(255, 255, 255)",
+          boxShadow: "rgba(0, 0, 0, 0.1) 0px 6px 16px",
+          opacity: disabled ? 0.45 : 1,
         }}
       >
         {children}
@@ -279,7 +282,7 @@ export default function SpeakAnalyzePanel({
 
   const __Icon = ({ pathD }) => (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path d={pathD} stroke={__ORANGE} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+      <path d={pathD} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 
@@ -306,45 +309,50 @@ export default function SpeakAnalyzePanel({
     return (__coloredTokens || []).map((t, idx) => {
       const style = __pickTokenStyle(t);
       const text = (t && (t.text || t.w || t.word || t.raw)) || "";
-  // ============================================================
-  // UI helpers (icons + tooltips)
-  // ============================================================
-  const __ORANGE = "rgba(255,122,0,1)";
-  const __ORANGE_BG = "rgba(255,122,0,0.10)";
-
-  const __IconButton = ({ title, ariaLabel, disabled, onClick, children }) => {
-    return (
-      <button
-        type="button"
-        onClick={onClick}
-        disabled={disabled}
-        title={title}
-        aria-label={ariaLabel || title}
-        style={{
-          width: 40,
-          height: 40,
-          borderRadius: 12,
-          border: "1px solid rgba(255,122,0,0.45)",
-          background: __ORANGE,
-          display: "inline-flex",
-          alignItems: "center",
-          justifyContent: "center",
-          cursor: disabled ? "not-allowed" : "pointer",
-          opacity: disabled ? 0.45 : 1,
-          boxShadow: "0 1px 0 rgba(0,0,0,0.08)",
-          userSelect: "none",
-        }}
-      >
-        {children}
-      </button>
-    );
-  };
-
-  const __Icon = ({ pathD }) => (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <path d={pathD} stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
+      /*
+      DEPRECATED (kept for history): duplicated UI helper block accidentally inserted here.
+      It caused __IconButton/__Icon scope + redeclare issues.
+      Original block preserved below (commented out):
+        // ============================================================
+        // UI helpers (icons + tooltips)
+        // ============================================================
+        const __ORANGE = "rgba(255,122,0,1)";
+        const __ORANGE_BG = "rgba(255,122,0,0.10)";
+      
+        const __IconButton = ({ title, ariaLabel, disabled, onClick, children }) => {
+          return (
+            <button
+              type="button"
+              onClick={onClick}
+              disabled={disabled}
+              title={title}
+              aria-label={ariaLabel || title}
+              style={{
+                width: 40,
+                height: 40,
+                borderRadius: 12,
+                border: "1px solid rgba(255,122,0,0.45)",
+                background: __ORANGE,
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                cursor: disabled ? "not-allowed" : "pointer",
+                opacity: disabled ? 0.45 : 1,
+                boxShadow: "0 1px 0 rgba(0,0,0,0.08)",
+                userSelect: "none",
+              }}
+            >
+              {children}
+            </button>
+          );
+        };
+      
+        const __Icon = ({ pathD }) => (
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d={pathD} stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        );
+      */
 
 
       return (
@@ -709,7 +717,7 @@ export default function SpeakAnalyzePanel({
           width: "min(920px, 96vw)",
           maxHeight: "88vh",
           overflow: "auto",
-          background: "linear-gradient(180deg, rgba(255,122,0,0.14) 0%, rgba(255,122,0,0.06) 55%, rgba(255,122,0,0.03) 100%), var(--panel-bg, var(--bg, #fff))",
+          background: "linear-gradient(180deg, rgba(255, 244, 234, 0.14) 0%, rgba(255,122,0,0.06) 55%, rgba(255,122,0,0.03) 100%), var(--panel-bg, var(--bg, #fff))",
           color: "var(--text)",
           borderRadius: 14,
           border: "1px solid rgba(127,127,127,0.22)",
@@ -752,11 +760,12 @@ export default function SpeakAnalyzePanel({
               <div style={{ fontSize: 12, opacity: 0.72, marginBottom: 6 }}>{__t("targetLabel")}</div>
               <div style={{ fontSize: 18, lineHeight: 1.6 }}>{targetText}</div>
             </div>
-
-            <div>
-              <div style={{ fontSize: 12, opacity: 0.72, marginBottom: 6 }}>{__t("asrLabel")}</div>
-              <div style={{ fontSize: 18, lineHeight: 1.6 }}>{asrText}</div>
-            </div>
+            {analyzeState === "done" ? (
+              <div>
+                <div style={{ fontSize: 12, opacity: 0.72, marginBottom: 6 }}>{__t("asrLabel")}</div>
+                <div style={{ fontSize: 18, lineHeight: 1.6 }}>{asrText}</div>
+              </div>
+            ) : null}
           </div>
         </div>
 
@@ -925,10 +934,6 @@ export default function SpeakAnalyzePanel({
             </div>
 
             <div style={{ display: "flex", flexWrap: "wrap" }}>{__tokenNodes}</div>
-
-            {transcript ? (
-              <div style={{ marginTop: 8, fontSize: 12, opacity: 0.78 }}>{__t("asrPrefix")}{transcript}</div>
-            ) : null}
           </div>
         ) : null}
       </div>

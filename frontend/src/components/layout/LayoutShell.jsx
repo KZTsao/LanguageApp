@@ -29,6 +29,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import LoginButton from "../auth/LoginButton";
 import { useAuth } from "../../context/AuthProvider";
 import { apiFetch } from "../../utils/apiClient";
+import uiText from "../../uiText";
 
 /** 模組：將字串 seed 穩定映射到色相（供頭像底色使用） */
 function hashToHue(seed = "") {
@@ -827,7 +828,7 @@ function LayoutShell({
                   // ⬇️ 這行：白底
                   background: "#fff",
                   // ⬇️ 這行：黑字
-                  color: "#000",
+                  color: "var(--text-muted)",
                   textDecoration: "none",
                   fontSize: 12,
                   // ⬇️ 這行：字重稍降，質感會好一點
@@ -992,6 +993,40 @@ function LayoutShell({
         </div>
 
         {children}
+
+        {/* ====== 2026/02/01 新增：Footer - Terms of Service（最小插入，不影響既有邏輯） ====== */}
+        <div
+          style={{
+            marginTop: 8,
+            paddingTop: 0,
+            borderTop: "none",
+            textAlign: "left",
+            fontSize: 12,
+            color: "var(--text-muted)",
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => {
+              try {
+                window.dispatchEvent(new CustomEvent("open-terms"));
+              } catch {}
+            }}
+            style={{
+              background: "transparent",
+              border: "none",
+              padding: 0,
+              color: "var(--text-muted)",
+              cursor: "pointer",
+              textDecoration: "none",
+              fontWeight: 600,
+              display: "block", 
+              margin: "0 auto",
+            }}
+          >
+            {uiText?.[uiLang]?.layout?.termsOfService || "Terms of Service"}
+          </button>
+        </div>
       </div>
 
       {/* ====== 2025/12/18 新增：dbg 固定顯示在整個畫面最右下方（Production 排查） ====== */}

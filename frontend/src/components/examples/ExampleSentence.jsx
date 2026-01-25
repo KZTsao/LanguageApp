@@ -14,6 +14,7 @@ import SpeakAnalyzePanel from "../speech/SpeakAnalyzePanel";
 // ----------------------------------------------------------------------------
 
 const MOSAIC_LINE = "----------------------------";
+const API_BASE = import.meta.env.VITE_API_BASE_URL || "";
 
 const EyeIconOpen = () => (
   <svg
@@ -985,7 +986,7 @@ const __effectivePronReplayMeta = __USE_PRONUNCIATION_RECORDER_HOOK
     fd.append("lang", "de-DE");
     fd.append("mode", "coverage");
 
-    const resp = await fetch("/api/speech/asr", { method: "POST", body: fd });
+    const resp = await fetch(`${API_BASE}/api/speech/asr`, { method: "POST", body: fd });
     const data = await resp.json().catch(() => null);
     if (!resp.ok || !data || data.ok !== true) {
       const err = (data && data.error) || "ASR_FAILED";
@@ -1044,7 +1045,7 @@ const __effectivePronReplayMeta = __USE_PRONUNCIATION_RECORDER_HOOK
   // - 你若已有既定 endpoint，把 URL 改到你現有的即可
   // - 失敗不阻斷 coverage 上色顯示
   const callCoverageOnceLLMFeedback = async (payload) => {
-    const resp = await fetch("/api/llm/coverage-feedback", {
+    const resp = await fetch(`${API_BASE}/api/llm/coverage-feedback`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -1788,7 +1789,7 @@ if (__USE_PRONUNCIATION_RECORDER_HOOK && __pronHook && typeof __pronHook.replay 
               const fd = new FormData();
               fd.append("audio", blob, "speak.webm");
               fd.append("lang", "de-DE");
-              const resp = await fetch("/api/speech/asr", { method: "POST", body: fd });
+              const resp = await fetch(`${API_BASE}/api/speech/asr`, { method: "POST", body: fd });
               const data = await resp.json().catch(() => null);
               if (!resp.ok || !data) throw new Error((data && data.error) || "ASR_FAILED");
               const built = buildCoverageColoredTokens({

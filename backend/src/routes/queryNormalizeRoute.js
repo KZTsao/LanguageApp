@@ -55,6 +55,40 @@ function analyzeInputShape(text) {
   return { tokenCount, hasSentencePunct, looksLikeSentence };
 }
 
+/**
+ * ✅ 泛化：可分動詞片語（2~3 詞）lemma 合併（不靠白名單）
+ * 例：nimmt mit → LLM 可能回 lemma=nehmen，但正確查字 headword 應是 mitnehmen
+ * 規則：若 variantType=separable_verb，且輸入像「動詞 + 分離前綴(粒子)」，而 lemma 沒包含該粒子，則合併。
+ */
+function tryMergeSeparableLemma(inputText, lemma, variantType) {
+  if (!inputText || !lemma) return lemma;
+  if (variantType !== "separable_verb") return lemma;
+
+  const t = String(inputText || "").trim();
+  const toks = t.split(/\s+/).filter(Boolean);
+  // 常見是 2 詞：nimmt mit / sieht aus
+  // 有些會 3 詞（含反身代名詞）但這裡只做「最後一詞粒子」合併，避免過度猜測
+  if (toks.length < 2 || toks.length > 3) return lemma;
+
+  const particle = toks[toks.length - 1];
+  if (!particle) return lemma;
+
+  const base = String(lemma).trim();
+  if (!base) return lemma;
+
+  const p = particle.toLowerCase();
+  const b = base.toLowerCase();
+
+  // 若 lemma 已經是 particle+verb（如 aussehen），就不動
+  if (b.startsWith(p)) return lemma;
+
+  // 只允許字母/變音/ß 的粒子，避免把奇怪符號合進來
+  if (!/^[A-Za-zÄÖÜäöüß]+$/.test(particle)) return lemma;
+
+  return `${particle}${base}`;
+}
+
+
 
 /**
  * LLM Prompt（精簡、可控）
@@ -228,7 +262,8 @@ router.post("/normalize", async (req, res) => {
     const stage2Conf =
       stage2 && typeof stage2.confidence === "number" ? Math.max(0, Math.min(1, stage2.confidence)) : null;
 
-    const lemma = sanitizeText(stage2?.lemma || "") || null;
+    const lemmaRaw = sanitizeText(stage2?.lemma || "") || null;
+    const lemma = tryMergeSeparableLemma(quickNormalized, lemmaRaw, sanitizeText(stage2?.variantType || "") || null) || lemmaRaw || null;
     const pos = sanitizeText(stage2?.pos || "") || null;
     const variantType = sanitizeText(stage2?.variantType || "") || null;
     const features = stage2?.features && typeof stage2.features === "object" ? stage2.features : null;

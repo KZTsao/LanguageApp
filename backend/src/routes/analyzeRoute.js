@@ -200,6 +200,7 @@ const { analyzeSentence } = require('../services/analyzeSentence'); // 先保留
 const { AppError } = require('../utils/errorHandler');
 const { detectMode } = require('../core/languageRules');
 const { logUsage } = require('../utils/usageLogger');
+const { commitUsageEventSafe } = require('../utils/usageIO');
 
 /**
  * 功能初始化狀態（Production 排查）
@@ -320,6 +321,90 @@ function getRequestId(req) {
     return "";
   }
 }
+
+/**
+ * ✅ 2026-01-25：Usage Event（完成交易才算）
+ * 中文功能說明：
+ * - 目的：/api/analyze 成功後，將本次 LLM 用量記入：
+ *   - public.usage_events（明細）
+ *   - public.usage_daily（今日聚合）
+ *   - public.usage_monthly（本月聚合）
+ * - 原則：
+ *   - 只在成功回傳後才記帳（完成交易才算）
+ *   - 不影響主流程：任何錯誤只 console.warn
+ * - 備註：
+ *   - token 欄位會嘗試從 result 的常見位置抽取；抽不到就記 0
+ */
+function extractLlmTokensFromResult(result) {
+  try {
+    if (!result || typeof result !== "object") {
+      return {
+        promptTokens: 0,
+        completionTokens: 0,
+        totalTokens: 0,
+        provider: "",
+        model: "",
+      };
+    }
+
+    // 常見 1：OpenAI/Groq 類回傳 usage
+    const usage =
+      result.usage ||
+      (result.meta && result.meta.usage) ||
+      (result.llm && result.llm.usage) ||
+      (result.llmUsage) ||
+      (result.data && result.data.usage) ||
+      null;
+
+    const promptTokens =
+      Number(usage?.prompt_tokens ?? usage?.promptTokens ?? result.prompt_tokens ?? result.promptTokens ?? 0) || 0;
+
+    const completionTokens =
+      Number(
+        usage?.completion_tokens ??
+          usage?.completionTokens ??
+          result.completion_tokens ??
+          result.completionTokens ??
+          0
+      ) || 0;
+
+    const totalTokens =
+      Number(usage?.total_tokens ?? usage?.totalTokens ?? result.total_tokens ?? result.totalTokens ?? 0) ||
+      (promptTokens + completionTokens) ||
+      0;
+
+    // provider/model（盡量抽取，不依賴特定結構）
+    const provider =
+      String(
+        result.provider ||
+          result.llmProvider ||
+          result.meta?.provider ||
+          usage?.provider ||
+          ""
+      ) || "";
+
+    const model =
+      String(
+        result.model ||
+          result.llmModel ||
+          result.meta?.model ||
+          usage?.model ||
+          ""
+      ) || "";
+
+    return {
+      promptTokens,
+      completionTokens,
+      totalTokens,
+      provider,
+      model,
+    };
+  } catch (e) {
+    return { promptTokens: 0, completionTokens: 0, totalTokens: 0, provider: "", model: "" };
+  }
+}
+
+
 
 /**
  * 中文功能說明：
@@ -483,6 +568,36 @@ router.post('/', async (req, res, next) => {
       seen_item_type: INIT_STATUS.runtime.lastSeenItemType,
       seen_item_ref: INIT_STATUS.runtime.lastSeenItemRef,
     });
+
+    // ✅ 2026-01-25：Usage Event（完成交易才算）
+    // - 在 /api/analyze 全流程成功後才記帳（包含 analyzeWord 已完成、seen 已 touch）
+    // - 不擋主流程：失敗只 console.warn
+    try {
+      const t = extractLlmTokensFromResult(result);
+
+      await commitUsageEventSafe({
+        userId: options.userId || "",
+        email: options.email || "",
+        ip: options.ip || req.ip || "",
+        endpoint: options.endpoint || "/api/analyze",
+        path: req.originalUrl || req.path || "/api/analyze",
+        requestId: options.requestId || "",
+        eventType: "llm",
+        kind: "llm",
+        provider: t.provider || "",
+        model: t.model || "",
+        llmInTokens: t.promptTokens || 0,
+        llmOutTokens: t.completionTokens || 0,
+        llmTotalTokens: t.totalTokens || 0,
+        promptTokens: t.promptTokens || 0,
+        completionTokens: t.completionTokens || 0,
+        totalTokens: t.totalTokens || 0,
+        ttsChars: 0,
+        source: authUser?.source || "",
+      });
+    } catch (e) {
+      console.warn("[usage][commit][analyze] failed:", options.requestId ? `rid=${options.requestId}` : "", e?.message || String(e));
+    }
 
     res.json(result);
   } catch (err) {
