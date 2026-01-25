@@ -107,6 +107,10 @@ function createApp() {
 /** 功能：掛載中介層（CORS、JSON、static） */
 function mountMiddlewares(app) {
   app.use(cors());
+  // ✅ Lemon Webhook 需要 raw body 驗簽：先用 express.raw() 接住此路徑
+  // 這樣後面的 express.json() 會自動跳過，不會把 body 吃掉
+  app.use("/api/webhooks/lemon", express.raw({ type: "*/*" }));
+
   app.use(express.json());
 
   // 靜態檔案（測試頁用）
@@ -167,10 +171,11 @@ function mountRoutes(app) {
   // - route 檔內定義：POST /webhooks/lemon
   // ✅ 最終生效路徑：POST /api/webhooks/lemon
   app.use("/api", lemonWebhookRoute);
-  INIT_STATUS.routes.lemonWebhook = true;
-// 初始化狀態補充（便於 runtime 排查）
-  logger.info(`[INIT] routes.adminUsage mounted at: /admin`);
-  logger.info(`[INIT] routes.lemonWebhook mounted at: /api/webhooks/lemon`);
+    INIT_STATUS.routes.lemonWebhook = true;
+
+  // 初始化狀態補充（便於 runtime 排查）
+    logger.info(`[INIT] routes.adminUsage mounted at: /admin`);
+    logger.info(`[INIT] routes.lemonWebhook mounted at: /api/webhooks/lemon`);
 }
 
 /** 功能：掛載錯誤處理（集中管理） */

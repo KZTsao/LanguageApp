@@ -248,6 +248,149 @@ function LayoutShell({
   children,
 }) {
   const { user, profile, signOut } = useAuth();
+  // ============================================================
+  // ✅ 2026/01/25 Step 1 — Terms Modal（全域視窗 + scroll）
+  // 觸發：window.dispatchEvent(new CustomEvent("open-terms"))
+  // ============================================================
+  const [__isTermsOpen, __setIsTermsOpen] = useState(false);
+  const [__termsText, __setTermsText] = useState("");
+  const [__termsLoadErr, __setTermsLoadErr] = useState("");
+
+  const __loadTermsMd = async (__lang) => {
+    try {
+      __setTermsLoadErr("");
+      const lang = (__lang || "en").toString();
+      const res = await fetch(`/terms/terms.${lang}.md`);
+      if (!res.ok) throw new Error(String(res.status));
+      const txt = await res.text();
+      __setTermsText(txt || "");
+    } catch (e) {
+      // fallback to en
+      try {
+        const res2 = await fetch(`/terms/terms.en.md`);
+        if (!res2.ok) throw new Error(String(res2.status));
+        const txt2 = await res2.text();
+        __setTermsText(txt2 || "");
+      } catch {
+        __setTermsText("");
+        __setTermsLoadErr("Failed to load Terms.");
+      }
+    }
+  };
+
+  useEffect(() => {
+    const __onOpen = () => {
+      __setIsTermsOpen(true);
+      try {
+        __loadTermsMd(uiLang || "en");
+      } catch {}
+    };
+    window.addEventListener("open-terms", __onOpen);
+    return () => window.removeEventListener("open-terms", __onOpen);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const __onKeyDown = (e) => {
+      if (!__isTermsOpen) return;
+      if (e && e.key === "Escape") {
+        __setIsTermsOpen(false);
+      }
+    };
+    window.addEventListener("keydown", __onKeyDown);
+    return () => window.removeEventListener("keydown", __onKeyDown);
+  }, [__isTermsOpen]);
+
+  const __renderTermsModal = () => {
+    if (!__isTermsOpen) return null;
+    return (
+      <div
+        role="dialog"
+        aria-modal="true"
+        onMouseDown={(e) => {
+          if (e && e.target && e.target === e.currentTarget) {
+            __setIsTermsOpen(false);
+          }
+        }}
+        style={{
+          position: "fixed",
+          inset: 0,
+          zIndex: 9999,
+          background: "rgba(0,0,0,0.45)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: 16,
+        }}
+      >
+        <div
+          onMouseDown={(e) => e.stopPropagation()}
+          style={{
+            width: "100%",
+            maxWidth: 760,
+            maxHeight: "85vh",
+            background: "var(--card-bg)",
+            border: "1px solid var(--border-subtle)",
+            borderRadius: 14,
+            boxShadow: "0 18px 60px rgba(0,0,0,0.28)",
+            overflow: "hidden",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              padding: "12px 14px",
+              borderBottom: "1px solid var(--border-subtle)",
+            }}
+          >
+            <div style={{ fontWeight: 800, fontSize: 13 }}>
+              {uiText?.[uiLang]?.layout?.termsOfService || "Terms of Service"}
+            </div>
+            <button
+              type="button"
+              onClick={() => __setIsTermsOpen(false)}
+              style={{
+                background: "transparent",
+                border: "none",
+                cursor: "pointer",
+                padding: 6,
+                lineHeight: 1,
+                color: "var(--text-muted)",
+                fontSize: 16,
+                fontWeight: 900,
+              }}
+              aria-label="Close"
+              title="Close"
+            >
+              ×
+            </button>
+          </div>
+
+          <div
+            style={{
+              padding: "12px 14px",
+              maxHeight: "calc(85vh - 52px)",
+              overflowY: "auto",
+              whiteSpace: "pre-wrap",
+              fontSize: 13,
+              lineHeight: 1.7,
+            }}
+          >
+            {__termsLoadErr ? (
+              <div style={{ color: "var(--text-muted)" }}>{__termsLoadErr}</div>
+            ) : __termsText ? (
+              <div>{__termsText}</div>
+            ) : (
+              <div style={{ color: "var(--text-muted)" }}>Loading…</div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
 
   // ============================================================
   // Init Gating（2026/01/24）
@@ -711,6 +854,8 @@ function LayoutShell({
           </div>
 
           {children}
+
+          {__renderTermsModal()}
         </div>
       </div>
     );
@@ -992,6 +1137,8 @@ function LayoutShell({
         </div>
 
         {children}
+
+        {__renderTermsModal()}
 
         {/* ====== 2026/02/01 新增：Footer - {uiText[uiLang]?.layout?.termsOfService || 'Terms of Service'}（最小插入，不影響既有邏輯） ====== */}
         <div

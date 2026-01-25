@@ -1,5 +1,49 @@
 // backend/src/routes/speechRoute.js
 
+
+// ============================================================
+// Auth helper (NO dependency: no jsonwebtoken)
+// - Purpose: usage accounting needs userId for DB accumulation
+// - Strategy: decode JWT payload only (no signature verify)
+// ============================================================
+function decodeJwtPayload(token) {
+  try {
+    const parts = String(token || "").split(".");
+    if (parts.length < 2) return null;
+
+    const raw = parts[1];
+    const payloadB64 = raw
+      .replace(/-/g, "+")
+      .replace(/_/g, "/")
+      .padEnd(Math.ceil(raw.length / 4) * 4, "=");
+
+    const jsonStr = Buffer.from(payloadB64, "base64").toString("utf8");
+    return JSON.parse(jsonStr);
+  } catch {
+    return null;
+  }
+}
+
+function tryGetAuthUser(req) {
+  const authHeader =
+    req.headers["authorization"] || req.headers["Authorization"];
+  if (!authHeader || !String(authHeader).startsWith("Bearer ")) return null;
+
+  const token = String(authHeader).slice("Bearer ".length).trim();
+  if (!token) return null;
+
+  const decoded = decodeJwtPayload(token);
+  if (!decoded) return null;
+
+  return {
+    id: decoded.sub || "",
+    email: decoded.email || "",
+    source: "jwt_payload_decode",
+  };
+}
+
+// backend/src/routes/speechRoute.js
+
 /**
  * 文件說明：
  * - Speech-to-Text（ASR）API：提供 coverage 模式用的轉文字能力
@@ -18,13 +62,13 @@
  */
 
 const express = require("express");
-
-const jwt = require('jsonwebtoken');
 const multer = require("multer");
 const { SpeechClient } = require("@google-cloud/speech");
 
 const { logUsage } = require("../utils/usageLogger");
 
+
+const { commitAsrSecondsSafe } = require('../utils/usageIO');
 // 使用 memory storage（不落地、不保存檔案）
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -34,50 +78,6 @@ const upload = multer({
 });
 
 const router = express.Router();
-
-
-
-// 嘗試從 Authorization Bearer token 解析出 user（不強制登入）
-// 規則：同 analyzeRoute.js（verify -> decode fallback）
-// - 目的：ASR 秒數歸戶到正確 userId（否則無法累積）
-function tryGetAuthUser(req) {
-  const authHeader =
-    req.headers["authorization"] || req.headers["Authorization"];
-  if (!authHeader || !authHeader.startsWith("Bearer ")) return null;
-
-  const token = authHeader.slice("Bearer ".length).trim();
-  if (!token) return null;
-
-  // ① 優先嘗試 verify
-  if (process.env.SUPABASE_JWT_SECRET) {
-    try {
-      const decoded = jwt.verify(token, process.env.SUPABASE_JWT_SECRET);
-      return {
-        id: decoded.sub || "",
-        email: decoded.email || "",
-        source: "verify",
-      };
-    } catch (e) {
-      console.warn(
-        "[tryGetAuthUser][speech] jwt.verify failed, fallback to decode"
-      );
-    }
-  }
-
-  // ② fallback：decode（不驗證，只做用量歸戶）
-  try {
-    const decoded = jwt.decode(token);
-    if (!decoded) return null;
-
-    return {
-      id: decoded.sub || "",
-      email: decoded.email || "",
-      source: "decode",
-    };
-  } catch {
-    return null;
-  }
-}
 
 // 共享 Speech client（ADC：GOOGLE_APPLICATION_CREDENTIALS）
 const speechClient = new SpeechClient();
@@ -108,6 +108,7 @@ function normalizeWords(words) {
 }
 
 router.post("/asr", upload.single("audio"), async (req, res) => {
+    const authUser = tryGetAuthUser(req);
   const startedAt = Date.now();
 
   try {
@@ -194,7 +195,24 @@ router.post("/asr", upload.single("audio"), async (req, res) => {
       email: authUser?.email || (req.user && req.user.email) || "",
     });
 
-    return res.json({
+    
+
+    // ✅ 2026-01-25：ASR 秒數入帳（daily/monthly 主帳本）
+    // - 不影響主流程：任何錯誤只 warn
+    await commitAsrSecondsSafe({
+      userId: authUser?.id || (req.user && req.user.id) || "",
+      email: authUser?.email || (req.user && req.user.email) || "",
+      ip: req.ip || "",
+      endpoint: "/api/speech/asr",
+      path: req.originalUrl || req.path || "/api/speech/asr",
+      usedSeconds,
+      provider: "google",
+      model: "",
+      requestId: "",
+      source: authUser?.source || "",
+    });
+
+return res.json({
       ok: true,
       transcript,
       confidence: transcript ? Number(bestConfidence || 0) : 0,
