@@ -29,6 +29,22 @@ app.use("/api", supportAdminRoute);
  */
 
 require("dotenv").config();
+// =========================
+// GCP ADC bootstrap (for Render)
+// 說明：
+// - Render 無法直接放 JSON 金鑰檔
+// - 將 GCP_SA_JSON（env）寫成暫存檔
+// - 設定 GOOGLE_APPLICATION_CREDENTIALS 供 Google SDK 使用
+// =========================
+const fs = require("fs");
+
+if (!process.env.GOOGLE_APPLICATION_CREDENTIALS && process.env.GCP_SA_JSON) {
+  const credPath = "/tmp/gcp-sa.json";
+  fs.writeFileSync(credPath, process.env.GCP_SA_JSON, "utf8");
+  process.env.GOOGLE_APPLICATION_CREDENTIALS = credPath;
+  console.log("[GCP] GOOGLE_APPLICATION_CREDENTIALS set via GCP_SA_JSON");
+}
+
 const express = require("express");
 const cors = require("cors");
 const path = require("path");
