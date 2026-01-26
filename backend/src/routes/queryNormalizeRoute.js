@@ -35,8 +35,72 @@ const express = require("express");
 // - 若你已經有 groqClient.js 的統一介面，請在這裡替換成實際呼叫方式
 // - 以下用「最小可讀」的抽象，避免綁死特定 SDK
 const groqClient = require("../clients/groqClient");
+const { guessLanguage } = require("../core/languageRules");
 const groqChatCompletion = groqClient && groqClient.groqChatCompletion ? groqClient.groqChatCompletion : null;
 const router = express.Router();
+
+// ✅ DB preflight：用 DB 先判斷「是否為合法詞形」，避免過早進入 typo / lemma rewrite
+// - 目的：只要 DB 能證明是合法詞形，就禁止 spell correction 與 query 改寫（包含 lemma 改寫）
+// - 注意：fail-open：DB 不可用時不擋流程
+let _supabaseClient = null;
+function getSupabaseClient() {
+  try {
+    if (_supabaseClient) return _supabaseClient;
+    const url = process.env.SUPABASE_URL;
+    const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    if (!url || !key) return null;
+    const { createClient } = require("@supabase/supabase-js");
+    _supabaseClient = createClient(url, key, { auth: { persistSession: false } });
+    return _supabaseClient;
+  } catch (e) {
+    console.warn("[queryNormalize][db] init failed:", e?.message || String(e));
+    return null;
+  }
+}
+
+// ✅ 詞形探測：利用 extra_props 的 tenses（字串）快速判斷是否包含該 form（保守命中）
+// - 命中：視為合法詞形（禁止 typo / rewrite）
+// - miss：不代表不是合法詞形（fail-open）
+async function probeInflectedFormInDb(form) {
+  const w = String(form || "").trim();
+  if (!w) return { hit: false };
+  const supa = getSupabaseClient();
+  if (!supa) return { hit: false, reason: "missing_env" };
+
+  try {
+    const like = `%${w}%`;
+
+    const { data, error } = await supa
+      .from("dict_entry_props")
+      .select("entry_id, extra_props")
+      .or(
+        [
+          `extra_props->tenses->>present.ilike.${like}`,
+          `extra_props->tenses->>preterite.ilike.${like}`,
+          `extra_props->tenses->>perfect.ilike.${like}`,
+        ].join(",")
+      )
+      .limit(3);
+
+    if (error) {
+      console.warn("[queryNormalize][db] probe failed:", error.message || String(error));
+      return { hit: false, reason: "probe_failed" };
+    }
+
+    const row = Array.isArray(data) ? data[0] : null;
+    if (!row) return { hit: false };
+
+    const baseForm =
+      row && row.extra_props && typeof row.extra_props.baseForm === "string"
+        ? row.extra_props.baseForm
+        : "";
+
+    return { hit: true, entryId: row.entry_id || null, baseForm };
+  } catch (e) {
+    console.warn("[queryNormalize][db] probe exception:", e?.message || String(e));
+    return { hit: false, reason: "exception" };
+  }
+}
 
 function sanitizeText(s) {
   return String(s || "")
@@ -71,8 +135,6 @@ function hasWeirdNonQuerySymbols(text) {
   const t = String(text || "").trim();
   return /[^A-Za-zÄÖÜäöüß\s\-']/u.test(t);
 }
-
-
 
 /**
  * LLM Prompt（精簡、可控）
@@ -177,7 +239,6 @@ function buildPromptStage2b(phrase, particle, baseLemma) {
   ].join("\n");
 }
 
-
 function buildPromptStage3(text) {
   return [
     "你是拼字校正器（德文）。只輸出 JSON。",
@@ -211,7 +272,6 @@ async function callLLMJsonOrNull(opts) {
     return null;
   }
 }
-
 
 router.post("/normalize", async (req, res) => {
   
@@ -299,6 +359,42 @@ router.post("/normalize", async (req, res) => {
     // 是否允許改寫 query（句子不改寫）
     const allowRewrite = stage1Shape !== "sentence";
 
+    // ============================================================
+    // ✅ Stage2.5 — 德文合法詞形鎖定（禁止 typo / lemma rewrite）
+    // 中文功能說明：
+    // - 若輸入包含 ä/ö/ü/ß 或語言判定為 de，優先視為德文查字輸入
+    // - 先用 DB extra_props.tenses 做「詞形是否存在」探測（命中就鎖定）
+    // - 一旦鎖定：normalized 必須維持 original（不改寫成 lemma / bestGuess）
+    // - 目的：避免 sägt/sägen 被錯誤改寫成 sagen
+    // ============================================================
+    const __shapeLocal2 = analyzeInputShape(quickNormalized);
+    const __tokenCount2 =
+      __shapeLocal2 && typeof __shapeLocal2.tokenCount === "number" ? __shapeLocal2.tokenCount : 0;
+    const __looksLikeSentence2 = Boolean(__shapeLocal2 && __shapeLocal2.looksLikeSentence);
+
+    const __hasUmlautOrEszett = /[äöüß]/i.test(quickNormalized);
+    const __langGuess = (() => {
+      try {
+        const g = guessLanguage(quickNormalized);
+        return g && typeof g.lang === "string" ? g.lang : "";
+      } catch {
+        return "";
+      }
+    })();
+    const __germanLikely2 = __hasUmlautOrEszett || __langGuess === "de";
+
+    // 單字查詢才做 DB preflight（避免句子/長文本）
+    let __dbInflectHit = null;
+    if (__germanLikely2 && !__looksLikeSentence2 && __tokenCount2 === 1) {
+      __dbInflectHit = await probeInflectedFormInDb(quickNormalized);
+    }
+
+    // 鎖定條件（保守）：
+    // - 有變音符：直接鎖（避免任何去變音 rewrite）
+    // - 或 DB 命中詞形：鎖
+    const __lockOriginal =
+      (__germanLikely2 && __hasUmlautOrEszett) ||
+      (__dbInflectHit && __dbInflectHit.hit === true);
     // normalized（優先用 lemma；其次 normalizedSuggestion；最後原字）
     
 
@@ -335,9 +431,9 @@ router.post("/normalize", async (req, res) => {
         }
       }
     }
-const normalized = allowRewrite
-      ? (sanitizeText(lemma || stage2?.normalizedSuggestion || "") || quickNormalized)
-      : quickNormalized;
+const normalized = (__lockOriginal || !allowRewrite)
+      ? quickNormalized
+      : (sanitizeText(lemma || stage2?.normalizedSuggestion || "") || quickNormalized);
 
     // Stage3：只有在「明顯不是德文」或「形態辨識信心低」時才做拼字猜測
     const needSpell =
@@ -377,7 +473,6 @@ const normalized = allowRewrite
     const shape = stage1Shape === "sentence" ? { looksLikeSentence: true } : analyzeInputShape(quickNormalized);
 
     const isGerman = Boolean(stage2IsGermanLikely);
-
 
     // ✅ message（前端紅字提示）
     let message = null;
@@ -443,6 +538,35 @@ const normalized = allowRewrite
     // Case D：正常可用，不要一直彈提示
     // ✅ 形態辨識（無錯字）但有 lemma：在「查字輸入」情境下改用 lemma 查；在「句子」情境下不改寫，只給提示
     if (!bestGuess && lemma && lemma !== quickNormalized) {
+      // ✅ 若已鎖定 original（德文合法字形/詞形），則不改寫 query
+      // - 仍可提供 lemma 作為參考候選（讓前端決定是否要提示「可改查原形」）
+      if (__lockOriginal) {
+        const __lemmaFromDb =
+          __dbInflectHit && __dbInflectHit.hit && typeof __dbInflectHit.baseForm === "string"
+            ? __dbInflectHit.baseForm.trim()
+            : "";
+        const __lemmaCandidate = __lemmaFromDb || lemma;
+
+        return res.json({
+          original: quickNormalized,
+          normalized: quickNormalized,
+          lemma: __lemmaCandidate,
+          pos,
+          variantType,
+          features,
+          isGerman: true,
+          candidates: Array.from(new Set([__lemmaCandidate].filter(Boolean))).slice(0, 5),
+          reason: "locked_original_lemma_hint",
+          confidence,
+          message: {
+            type: "info",
+            text: __lemmaCandidate
+              ? `偵測到原形：${__lemmaCandidate}（${variantType || "variant"}），但保留原輸入不改寫`
+              : "偵測為德文合法字形/詞形，保留原輸入不改寫",
+          },
+        });
+      }
+
       if (shape && shape.looksLikeSentence) {
         return res.json({
           original: quickNormalized,
@@ -508,3 +632,5 @@ const normalized = allowRewrite
 module.exports = router;
 
 // backend/src/routes/queryNormalizeRoute.js
+
+// END FILE: backend/src/routes/queryNormalizeRoute.js

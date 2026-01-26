@@ -6,6 +6,7 @@ import usePronunciationRecorder from "./usePronunciationRecorder";
 import CoverageOnceSentence from "./coverage/CoverageOnceSentence";
 import { buildCoverageColoredTokens } from "./coverage/coverageOnce";
 import SpeakAnalyzePanel from "../speech/SpeakAnalyzePanel";
+import SpeakButton from "../common/SpeakButton";
 
 // ----------------------------------------------------------------------------
 // NOTE
@@ -1454,29 +1455,10 @@ if (__USE_PRONUNCIATION_RECORDER_HOOK && __pronHook && typeof __pronHook.replay 
         }}
       >
         {hasExamples && !__speakPanelOpen && onSpeak && (
-          <button
-            type="button"
+          <SpeakButton
             onClick={handleSpeakSentence}
             title="播放語音"
-            className="icon-button sound-button"
-          >
-            <svg
-              className="sound-icon"
-              viewBox="0 0 24 24"
-              fill="currentColor"
-              xmlns="http://www.w3.org/2000/svg"
-            >
-              <circle
-                cx="12"
-                cy="12"
-                r="10"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.6"
-              />
-              <polygon points="10,8 10,16 16,12" />
-            </svg>
-          </button>
+          />
         )}
 
         {hasExamples && onToggleConversation && (
@@ -1762,6 +1744,19 @@ if (__USE_PRONUNCIATION_RECORDER_HOOK && __pronHook && typeof __pronHook.replay 
       {__speakPanelOpen && (
         <SpeakAnalyzePanel
           expectedText={mainSentence || ""}
+          // ✅ Play target sentence (TTS) - shown only when onSpeak exists upstream
+          // - SpeakAnalyzePanel will hide the button if onPlayTarget is not a function
+          onPlayTarget={
+            onSpeak && typeof onSpeak === "function"
+              ? () => {
+                  try {
+                    onSpeak(mainSentence || "");
+                  } catch (e) {
+                    // ignore
+                  }
+                }
+              : undefined
+          }
           disabled={!!pronunciationDisabled || !!loading || !__effectiveHasMediaRecorderSupport}
           recordState={(__effectivePronStatus && __effectivePronStatus.state) || "idle"}
           seconds={(__effectivePronStatus && __effectivePronStatus.seconds) || 0}

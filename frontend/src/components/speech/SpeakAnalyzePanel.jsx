@@ -1,6 +1,7 @@
 // frontend/src/components/speech/SpeakAnalyzePanel.jsx (file start)
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import uiText from "../../uiText";
+import SpeakButton from "../common/SpeakButton";
 
 // ============================================================
 // SpeakAnalyzePanel
@@ -730,6 +731,16 @@ export default function SpeakAnalyzePanel({
       >
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div style={{ fontSize: 14, fontWeight: 700, opacity: 0.92 }}>{__t("title")}</div>
+          {typeof onPlayTarget === "function" && (
+            <SpeakButton
+              onClick={() => {
+                try { onPlayTarget(); } catch (e) {}
+              }}
+              title={__t("playTarget") || "播放語音"}
+              ariaLabel="play-target"
+              style={{ width: 34, height: 34, borderRadius: 999, marginLeft: 8 }}
+            />
+          )}
           <button
             type="button"
             onClick={() => {

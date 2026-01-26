@@ -63,6 +63,9 @@ const queryNormalizeRoute = require("./routes/queryNormalizeRoute");
 
 
 
+
+// ✅ Billing（Lemon Checkout URL / external_id）
+const billingRoute = require("./routes/billingRoute");
 // ✅ Lemon Squeezy Webhook
 const lemonWebhookRoute = require("./routes/lemonWebhookRoute");
 const { errorMiddleware } = require("./utils/errorHandler");
@@ -165,16 +168,22 @@ function mountRoutes(app) {
 
   
 
+
+  // ✅ Billing（建立 Lemon 付款連結，帶 external_id=profiles.id）
+  // 最終路徑：POST /api/billing/checkout-url
+  app.use("/api/billing", billingRoute);
+  INIT_STATUS.routes.billing = true;
+
   // ✅ Lemon Squeezy Webhook（POST /api/webhooks/lemon）
   // 路徑說明：
   // - 本檔掛載：app.use("/api", lemonWebhookRoute)
   // - route 檔內定義：POST /webhooks/lemon
   // ✅ 最終生效路徑：POST /api/webhooks/lemon
   app.use("/api", lemonWebhookRoute);
-    INIT_STATUS.routes.lemonWebhook = true;
-
+  INIT_STATUS.routes.lemonWebhook = true;
   // 初始化狀態補充（便於 runtime 排查）
     logger.info(`[INIT] routes.adminUsage mounted at: /admin`);
+    logger.info(`[INIT] routes.billing mounted at: /api/billing/checkout-url`);
     logger.info(`[INIT] routes.lemonWebhook mounted at: /api/webhooks/lemon`);
 }
 

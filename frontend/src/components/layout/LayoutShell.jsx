@@ -248,6 +248,9 @@ function LayoutShell({
   children,
 }) {
   const { user, profile, signOut } = useAuth();
+  // ✅ 2026/01/26: uiText fallback guard (avoid ReferenceError if uiText is not wired yet)
+  // If your app later provides uiText via props/context, feel free to replace this stub.
+  const uiText = (typeof window !== "undefined" && window.uiText) ? window.uiText : {};
   // ============================================================
   // ✅ 2026/01/25 Step 1 — Terms Modal（全域視窗 + scroll）
   // 觸發：window.dispatchEvent(new CustomEvent("open-terms"))
@@ -255,6 +258,12 @@ function LayoutShell({
   const [__isTermsOpen, __setIsTermsOpen] = useState(false);
   const [__termsText, __setTermsText] = useState("");
   const [__termsLoadErr, __setTermsLoadErr] = useState("");
+
+  // ✅ 2026/01/26: keep latest uiLang for global event listeners (avoid stale closure)
+  const __uiLangRef = useRef(uiLang);
+  useEffect(() => {
+    __uiLangRef.current = uiLang;
+  }, [uiLang]);
 
   const __loadTermsMd = async (__lang) => {
     try {
@@ -282,7 +291,7 @@ function LayoutShell({
     const __onOpen = () => {
       __setIsTermsOpen(true);
       try {
-        __loadTermsMd(uiLang || "en");
+        __loadTermsMd(__uiLangRef.current || "en");
       } catch {}
     };
     window.addEventListener("open-terms", __onOpen);
@@ -300,6 +309,16 @@ function LayoutShell({
     window.addEventListener("keydown", __onKeyDown);
     return () => window.removeEventListener("keydown", __onKeyDown);
   }, [__isTermsOpen]);
+
+
+  // ✅ 2026/01/26: if user switches UI language while Terms modal is open, reload terms
+  useEffect(() => {
+    if (!__isTermsOpen) return;
+    try {
+      __loadTermsMd(uiLang || "en");
+    } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [uiLang, __isTermsOpen]);
 
   const __renderTermsModal = () => {
     if (!__isTermsOpen) return null;

@@ -3,7 +3,7 @@
  * Billing Route（Lemon Squeezy）
  *
  * 目的：
- * - 由後端產生「付款連結」，並把你系統的使用者 id 帶入 Lemon（custom data）
+ * - 由後端產生「付款連結」，並把你系統的使用者 id 帶入 Lemon（external_id）
  * - 讓 webhook 能回寫 profiles.plan
  *
  * 最終路徑：
@@ -70,11 +70,11 @@ router.post("/checkout-url", express.json(), async (req, res) => {
     const userId = await requireUserIdFromBearer(req);
     if (!userId) return res.status(401).json({ error: "Unauthorized" });
 
-    // ✅ 透過 query string 傳 custom data（Lemon 官方支援）
-    // checkout[custom][user_id]=<uuid> 會在 webhook 的 meta.custom_data 出現
+    // ✅ 透過 query string 傳 external_id（用於 webhook 對應 profiles.id）
+    // external_id=<uuid> 會在 webhook 的 attributes.external_id 出現
     const url =
       `https://${storeSlug}.lemonsqueezy.com/checkout/buy/${variantId}` +
-      `?checkout[custom][user_id]=${encodeURIComponent(userId)}`;
+      `?external_id=${encodeURIComponent(userId)}`;
 
     return res.json({ url });
   } catch (err) {

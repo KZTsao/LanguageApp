@@ -191,8 +191,8 @@ router.post("/asr", upload.single("audio"), async (req, res) => {
       },
       // userId/email/ip：若你之後有 auth middleware，可補上
       ip: req.ip || "",
-      userId: authUser?.id || (req.user && req.user.id) || "",
-      email: authUser?.email || (req.user && req.user.email) || "",
+      userId: authUser?.id || (req.authUser && req.authUser.id) || "",
+      email: authUser?.email || (req.authUser && req.authUser.email) || "",
     });
 
     
@@ -200,8 +200,8 @@ router.post("/asr", upload.single("audio"), async (req, res) => {
     // ✅ 2026-01-25：ASR 秒數入帳（daily/monthly 主帳本）
     // - 不影響主流程：任何錯誤只 warn
     await commitAsrSecondsSafe({
-      userId: authUser?.id || (req.user && req.user.id) || "",
-      email: authUser?.email || (req.user && req.user.email) || "",
+      userId: authUser?.id || (req.authUser && req.authUser.id) || "",
+      email: authUser?.email || (req.authUser && req.authUser.email) || "",
       ip: req.ip || "",
       endpoint: "/api/speech/asr",
       path: req.originalUrl || req.path || "/api/speech/asr",
@@ -212,7 +212,7 @@ router.post("/asr", upload.single("audio"), async (req, res) => {
       source: authUser?.source || "",
     });
 
-return res.json({
+    return res.json({
       ok: true,
       transcript,
       confidence: transcript ? Number(bestConfidence || 0) : 0,
