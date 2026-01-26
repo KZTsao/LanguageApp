@@ -1,3 +1,4 @@
+// PATH: frontend/src/components/search/SearchBox.jsx
 // frontend/src/components/search/SearchBox.jsx
 /**
  * ------------------------------------------------------------
@@ -809,3 +810,5 @@ function SearchBox({
 export default SearchBox;
 
 // frontend/src/components/search/SearchBox.jsx
+
+// END PATH: frontend/src/components/search/SearchBox.jsx

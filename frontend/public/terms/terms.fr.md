@@ -1,7 +1,6 @@
-<!-- frontend/public/terms/terms.fr.md -->
-# Conditions d’utilisation (Terms of Service)
+# Conditions d’utilisation
 
-Dernière mise à jour : 2026-02-01
+Dernière mise à jour : 2026-01-31
 
 Bienvenue sur **soLang** (le « Service »). En accédant au Service ou en l’utilisant, tu acceptes d’être lié(e) par les présentes Conditions d’utilisation (les « Conditions »). Si tu n’acceptes pas, n’utilise pas le Service.
 
@@ -66,5 +65,3 @@ Dans la limite autorisée par la loi, **soLang** et ses affiliés ne sont pas re
 ---
 
 Questions : contacte-nous via les moyens indiqués dans le Service.
-
-<!-- frontend/public/terms/terms.fr.md -->

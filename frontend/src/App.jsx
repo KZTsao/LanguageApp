@@ -1,3 +1,4 @@
+// PATH: frontend/src/App.jsx
 // frontend/src/App.jsx
 /**
  * 文件說明：
@@ -696,15 +697,20 @@ function AppInner() {
       const { finalText, hint } = await preflightNormalizeQuery(__rawText0);
       if (hint) {
         try {
-          setQueryHint(hint);
+          // ✅ 統一 queryHint 欄位：SearchBox 以 queryHint.text render
+          const __h = hint && typeof hint === "object" ? hint : null;
+          const __hint2 = __h ? ({ ...__h, text: (typeof __h.text === "string" && __h.text) ? __h.text : (typeof __h.message === "string" ? __h.message : "") }) : __h;
+          setQueryHint(__hint2);
         } catch {}
       }
       if (finalText && typeof finalText === "string" && finalText.trim() && finalText.trim() !== __rawText0.trim()) {
         __rawText = finalText;
-        // 回填到查詢框
-        try {
-          setText(finalText);
-        } catch {}
+        // ⚠️ QN-0：不要覆寫使用者輸入（raw input 必須保留）
+        // - 仍用 finalText 作為本次 analyze 的實際查詢字
+        // - UI 若要提示更正，請使用 queryHint（下游決定如何顯示）
+        // try {
+        //   setText(finalText);
+        // } catch {}
       }
     }
     const USE_SNAPSHOTSTORE_REPLAY_ONLY = true; // Task 4B-0：replay 唯一來源（避免舊 favoritesSnapshotStorage 誤判）
@@ -931,7 +937,7 @@ function AppInner() {
 
       const res = await apiFetch(`/api/analyze`, {
         method: "POST",
-        body: JSON.stringify({ text: q, uiLang, explainLang: uiLang, ...(apiOptions || {}) }),
+        body: JSON.stringify({ text: q, rawText: __rawText0, uiLang, explainLang: uiLang, ...(apiOptions || {}) }),
       });
 
       if (!res) throw new Error("[analyze] response is null");
@@ -2560,3 +2566,4 @@ function App() {
 export default App;
 
 // frontend/src/App.jsx
+// END PATH: frontend/src/App.jsx

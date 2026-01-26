@@ -41,6 +41,8 @@ export default function ExampleList({
 
   // ✅ 2026-01-07：例句標題顯示用（往下傳到 ExampleSentence）
   headword,
+  // ✅ 2026-01-26：例句標題可覆蓋（由上游點選詞形傳入）
+  headwordOverride,
 
   // 語言資訊（只給後端 / hook 用，不在這裡做文案判斷）
   explainLang,
@@ -86,6 +88,8 @@ export default function ExampleList({
 
       // ✅ 2026-01-07：headword presence
       hasHeadword: !!headword,
+      // ✅ 2026-01-26：headwordOverride presence
+      hasHeadwordOverride: !!headwordOverride,
 
       // ✅ 2026-01-07：multiRef presence
       multiRefEnabled: !!multiRefEnabled,
@@ -100,7 +104,14 @@ export default function ExampleList({
       hasRefBadgesInline: !!refBadgesInline,
       hasRefActionInline: !!refActionInline,
     }),
-    [refControls, headword, multiRefEnabled, refBadgesInline, refActionInline]
+    [
+      refControls,
+      headword,
+      headwordOverride,
+      multiRefEnabled,
+      refBadgesInline,
+      refActionInline,
+    ]
   );
 
   // DEPRECATED 2026-01-06：早期插入的控制旗標（避免重複宣告造成 syntax error）
@@ -153,7 +164,9 @@ export default function ExampleList({
       // eslint-disable-next-line no-console
       console.debug("[ExampleList][presence] =", {
         headword: headword || null,
+        headwordOverride: headwordOverride || null,
         hasHeadword: !!headword,
+        hasHeadwordOverride: !!headwordOverride,
         hasRefControls: !!refControls,
         multiRefEnabled: !!multiRefEnabled,
 
@@ -170,6 +183,7 @@ export default function ExampleList({
   }, [
     refControls,
     headword,
+    headwordOverride,
     multiRefEnabled,
     refBadgesInline,
     refActionInline,
@@ -286,6 +300,8 @@ export default function ExampleList({
         conversationToggleTooltip={tConversationToggleTooltip}
         // ✅ 2026-01-07：headword 往下傳（例句標題顯示用）
         headword={headword}
+        // ✅ 2026-01-26：headwordOverride 往下傳（支援點選詞形只改標題，不自動造句）
+        headwordOverride={headwordOverride}
         // ✅ 2026-01-13：headword 可點擊（由 ExampleSentence 端決定是否使用）
         // - 目的：讓「點 headword badge」可以重新產生例句（不改既有 onRefresh button 行為）
         // - 注意：此處只做「把 handler 往下傳」；實際 click 行為要由 ExampleSentence 實作

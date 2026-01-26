@@ -1,3 +1,4 @@
+// PATH: backend/src/services/analyzeWord.js
 // backend/src/services/analyzeWord.js
 
 /**
@@ -90,6 +91,114 @@ function normalizePosKey(posKey) {
  *     - 透傳 userId/email/ip/endpoint/requestId（Step 4：供 usageLogger 記帳）
  *   - 若 lookupWord 不支援第三參數，多餘參數在 JS 也不會造成錯誤
  */
+
+// ============================================================
+// Phrase Query Meta (reflexive / separable / noun plural) — Task: raw/canonical 分層
+// - 目標：不新做一套，只在 analyzeWord 內補足「查詢輸入不是 lemma」的常見情境
+// - 回傳：lookupText（實際查字用）、canonical/display/cardTarget/hints（供前端呈現/對齊）
+// ============================================================
+function derivePhraseQueryMeta(raw) {
+  const s0 = (raw || '').toString().trim();
+  if (!s0) return null;
+
+  const tokens = s0.split(/\s+/).filter(Boolean);
+  if (tokens.length < 2) return null;
+
+  const lowerTokens = tokens.map((t) => String(t || '').toLowerCase());
+
+  const reflexiveSet = new Set(['mich', 'dich', 'sich', 'uns', 'euch']);
+  const isReflexivePhrase = lowerTokens.some((t) => reflexiveSet.has(t));
+
+  // --- Separable verb (very common 2-token pattern): "nimmt mit" -> "mitnehmen"
+  // 保守：只處理「2 tokens 且第二個是常見前綴」的情境，避免誤判
+  const sepPrefixSet = new Set([
+    'mit','an','auf','ein','aus','vor','nach','zu','zurück','bei','fest','fort','her','hin','los','um','weg','weiter','zusammen'
+  ]);
+
+  if (tokens.length === 2 && sepPrefixSet.has(lowerTokens[1])) {
+    const verbForm = tokens[0];
+    const prefix = tokens[1];
+
+    // 用 tokenizeWord 把動詞變位還原成 base lemma（nehmen）
+    let baseLemma = null;
+    try {
+      baseLemma = tokenizeWord(String(verbForm || '').trim());
+    } catch {}
+    if (!baseLemma) baseLemma = String(verbForm || '').trim();
+
+    const combinedLemma = String(prefix || '').trim() + String(baseLemma || '').trim();
+    // 例：mit + nehmen => mitnehmen
+    return {
+      type: 'separable',
+      raw: s0,
+      lookupText: combinedLemma,
+      canonical: combinedLemma,
+      display: baseLemma, // 依你的規格：呈現用 base verb
+      hints: { separable: true, prefix, combinedLemma, baseLemma },
+      cardTarget: inferVerbCardTarget({ rawTokens: tokens, baseLemma, prefix, type: 'separable' }),
+    };
+  }
+
+  // --- Reflexive verb phrase: "kümmern sich", "kümmere sich"
+  // 規格：canonical/display 皆以 "infinitiv + sich" 呈現，但卡片要對齊人稱（ich ... mich / du ... dich）
+  if (isReflexivePhrase) {
+    // 找第一個非反身代名詞 token 當作動詞候選（簡化）
+    const verbTokenIdx = lowerTokens.findIndex((t) => !reflexiveSet.has(t));
+    const verbForm = verbTokenIdx >= 0 ? tokens[verbTokenIdx] : tokens[0];
+
+    let baseLemma = null;
+    try {
+      baseLemma = tokenizeWord(String(verbForm || '').trim());
+    } catch {}
+    if (!baseLemma) baseLemma = String(verbForm || '').trim();
+
+    const canonical = `${baseLemma} sich`;
+    return {
+      type: 'reflexive',
+      raw: s0,
+      lookupText: baseLemma, // 以 lemma 查字，讓 dictEntry 的 reflexive=true 自然回來
+      canonical,
+      display: canonical,
+      hints: { reflexive: true },
+      cardTarget: inferVerbCardTarget({ rawTokens: tokens, baseLemma, type: 'reflexive' }),
+    };
+  }
+
+  return null;
+}
+
+// 卡片指向推斷（保守版）：只處理你列出的核心情境
+function inferVerbCardTarget({ rawTokens = [], baseLemma = '', prefix = '', type = '' } = {}) {
+  const t0 = Array.isArray(rawTokens) ? rawTokens[0] : '';
+  const v0 = String(t0 || '').trim();
+  const v0Lower = v0.toLowerCase();
+
+  // 推人稱（非常保守，只用字尾）
+  let person = null; // 'ich'|'du'|'er'|'wir'
+  if (/st$/.test(v0Lower)) person = 'du';
+  else if (/e$/.test(v0Lower) && !/en$/.test(v0Lower)) person = 'ich';
+  else if (/t$/.test(v0Lower)) person = 'er';
+  else if (/en$/.test(v0Lower)) person = 'wir';
+
+  // 反身代名詞對應
+  const reflPron = person === 'ich' ? 'mich' : person === 'du' ? 'dich' : 'sich';
+
+  if (type === 'reflexive') {
+    if (person === 'ich') return `ich ${v0} ${reflPron}`;
+    if (person === 'du') return `du ${v0} ${reflPron}`;
+    if (person === 'er') return `er ${v0} sich`;
+    // 依你的規格：kümmern sich → wir kümmern sich
+    return `wir ${baseLemma} sich`;
+  }
+
+  if (type === 'separable') {
+    // 依你的規格：nimmt mit → er nimmt mit
+    return `er ${v0} ${prefix}`.trim();
+  }
+
+  return null;
+}
+
 function buildLookupWordOptions(options = {}) {
   const payload = {};
 
@@ -549,13 +658,26 @@ async function analyzeWord(rawText, options = {}) {
 
     // ✅ 2026-01-05：Step 2-2：前端可指定「目標詞性」來 re-query（預設為 null，不影響既有行為）
     targetPosKey = null,
+    // ✅ raw input（使用者輸入）保留：可由上游傳入（例如 preflight normalize 前的字串）
+    rawInput = null,
   } = options;
 
   INIT_STATUS.runtime.lastExplainLang = explainLang;
 
-  const input = (rawText || '').trim();
-  const text = queryMode === 'word' ? tokenizeWord(input) : input;
-  const length = text.length;
+  const lookupInput = (rawText || '').trim();
+  const rawInputText = (rawInput && typeof rawInput === 'string') ? rawInput.trim() : lookupInput;
+
+  // ============================================================
+  // Phrase-aware normalize (reflexive / separable) — 在同一套 analyze 流程內補齊
+  // - 不覆寫 rawInputText（UI 查詢匡維持原樣）
+  // - lookupText 用於實際 lookupWord
+  // ============================================================
+  const phraseMeta = derivePhraseQueryMeta(rawInputText);
+  const __baseText = (queryMode === 'word') ? tokenizeWord(lookupInput) : lookupInput;
+
+  // lookupText：若是可分/反身片語，優先用 meta.lookupText（例如 mitnehmen / kümmern）
+  const text = (phraseMeta && phraseMeta.lookupText) ? phraseMeta.lookupText : __baseText;
+  const length = (text || '').length;
 
   INIT_STATUS.runtime.lastText = text;
 
@@ -761,11 +883,38 @@ async function analyzeWord(rawText, options = {}) {
     // 不影響主流程
   }
 
+  const query = (() => {
+    const raw0 = rawInputText;
+    const canonical0 = (phraseMeta && phraseMeta.canonical) ? phraseMeta.canonical : String(patchedDict && (patchedDict.baseForm || patchedDict.word) || text || '').trim();
+
+    // Display（呈現層）：Nomen → 盡量加冠詞；Separable/reflexive → 依 meta
+    let display0 = (phraseMeta && phraseMeta.display) ? phraseMeta.display : canonical0;
+    try {
+      if (patchedDict && patchedDict.partOfSpeech === 'Nomen') {
+        const g = String((patchedDict.gender || patchedDict.baseGender || '')).trim().toLowerCase();
+        const article = (g === 'm' || g === 'der') ? 'der' : (g === 'f' || g === 'die') ? 'die' : (g === 'n' || g === 'das') ? 'das' : '';
+        const base = String(patchedDict.baseForm || patchedDict.word || '').trim();
+        if (article && base) display0 = `${article} ${base}`;
+      }
+    } catch {}
+
+    const corrected0 = raw0 && canonical0 && raw0.trim() !== canonical0.trim();
+    return {
+      raw: raw0,
+      canonical: canonical0,
+      display: display0,
+      corrected: Boolean(corrected0),
+      hints: (phraseMeta && phraseMeta.hints) ? phraseMeta.hints : null,
+      cardTarget: (phraseMeta && phraseMeta.cardTarget) ? phraseMeta.cardTarget : null,
+    };
+  })();
+
   const out = {
     mode: finalMode,
     text,
     length,
     isLong: length > 7,
+    query,
     dictionary: patchedDict,
     meta: {
       queryMode: finalMode,
@@ -813,3 +962,5 @@ async function analyzeWord(rawText, options = {}) {
 module.exports = { analyzeWord };
 
 // backend/src/services/analyzeWord.js
+
+// END PATH: backend/src/services/analyzeWord.js

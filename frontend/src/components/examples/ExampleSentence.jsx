@@ -1,12 +1,14 @@
 // frontend/src/components/examples/ExampleSentence.jsx (file start)
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import usePronunciationRecorder from "./usePronunciationRecorder";
+import { supabase } from "../../utils/supabaseClient";
 
 // ✅ Phase B-1: Coverage-once (record once -> ASR -> colorize tokens -> LLM feedback)
 import CoverageOnceSentence from "./coverage/CoverageOnceSentence";
 import { buildCoverageColoredTokens } from "./coverage/coverageOnce";
 import SpeakAnalyzePanel from "../speech/SpeakAnalyzePanel";
 import SpeakButton from "../common/SpeakButton";
+import { EyeIconOpen, EyeIconClosed } from "../common/EyeIcons";
 
 // ----------------------------------------------------------------------------
 // NOTE
@@ -16,8 +18,24 @@ import SpeakButton from "../common/SpeakButton";
 
 const MOSAIC_LINE = "----------------------------";
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "";
+// ✅ 2026-01-26: Attach Authorization header for /api/speech/asr (fix 401)
+// - Token source of truth: supabase.auth.getSession()
+// - If no session, returns empty headers (backend may 401; expected)
+const __getAuthHeadersForApi = async () => {
+  try {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
 
-const EyeIconOpen = () => (
+    const token = session && session.access_token ? session.access_token : "";
+    if (!token) return {};
+    return { Authorization: `Bearer ${token}` };
+  } catch (e) {
+    return {};
+  }
+};
+
+const __LEGACY_EyeIconOpen = () => (
   <svg
     className="eye-icon"
     width="18"
@@ -37,7 +55,7 @@ const EyeIconOpen = () => (
   </svg>
 );
 
-const EyeIconClosed = () => (
+const __LEGACY_EyeIconClosed = () => (
   <svg
     className="eye-icon"
     width="18"
@@ -164,6 +182,7 @@ export default function ExampleSentence({
   onToggleConversation,
   conversationToggleTooltip,
   headword,
+  headwordOverride,
   multiRefEnabled,
   onToggleMultiRef,
   multiRefToggleLabel,
@@ -203,10 +222,14 @@ export default function ExampleSentence({
     []
   );
 
+  const effectiveHeadword = useMemo(() => {
+    const hw = (headwordOverride || headword || "").toString().trim();
+    return hw;
+  }, [headwordOverride, headword]);
+
   const safeHeadword = useMemo(() => {
-    const hw = (headword || "").toString().trim();
-    return hw ? hw : "not available";
-  }, [headword]);
+    return effectiveHeadword ? effectiveHeadword : "not available";
+  }, [effectiveHeadword]);
 
   const hasHeadword = safeHeadword !== "not available";
 
@@ -251,22 +274,41 @@ export default function ExampleSentence({
 
     return stored === "false" ? false : true;
   });
+// =========================
+// ✅ Controlled target/translation state (single source of truth)
+// - SpeakAnalyzePanel must be controlled by ExampleSentence.
+// =========================
+const showTarget = showGerman;
+const toggleShowTarget = () => setShowGerman((v) => !v);
+const toggleShowTranslation = () => setShowTranslation((v) => !v);
+
+const onPlayTarget =
+  onSpeak && typeof onSpeak === "function"
+    ? () => {
+        try {
+          onSpeak(mainSentence || "");
+        } catch (e) {}
+      }
+    : undefined;
+
+
 
   // ✅ 2026-01-22: Pronunciation / shadowing recorder (Phase 1 UI-only)
   // - We keep this local to each ExampleSentence instance
   // - Upstream can store the blob and later call /api/pronunciation/score in Phase 2+
   const __hasMediaRecorderSupport = useMemo(() => {
-    try {
-      if (typeof window === "undefined") return false;
-      return (
-        typeof navigator !== "undefined" &&
-        !!navigator.mediaDevices &&
-        typeof window.MediaRecorder !== "undefined"
-      );
-    } catch (e) {
-      return false;
-    }
-  }, []);
+  try {
+    if (typeof window === "undefined") return false;
+    return (
+      typeof navigator !== "undefined" &&
+      !!navigator.mediaDevices &&
+      typeof window.MediaRecorder !== "undefined"
+    );
+  } catch (e) {
+    return false;
+  }
+}, []);
+
 
   const __pronMediaRecorderRef = useRef(null);
   const __pronMediaStreamRef = useRef(null);
@@ -478,7 +520,13 @@ const __effectivePronReplayMeta = __USE_PRONUNCIATION_RECORDER_HOOK
           if (!c) return "";
           const color =
             (window.getComputedStyle && window.getComputedStyle(c).color) || "";
-          return (color || "").toString().trim();
+        
+// === Controlled aliases for SpeakAnalyzePanel (single source of truth) ===
+// const showTarget = showGerman;
+// const toggleShowTarget = () => setShowGerman(v => !v);
+// const toggleShowTranslation = () => setShowTranslation(v => !v);
+
+  return (color || "").toString().trim();
         } catch (e) {
           return "";
         }
@@ -551,7 +599,13 @@ const __effectivePronReplayMeta = __USE_PRONUNCIATION_RECORDER_HOOK
 
   // cleanup: revoke object URL and stop audio
   useEffect(() => {
-    return () => {
+  
+// === Controlled aliases for SpeakAnalyzePanel (single source of truth) ===
+// const showTarget = showGerman;
+// const toggleShowTarget = () => setShowGerman(v => !v);
+// const toggleShowTranslation = () => setShowTranslation(v => !v);
+
+  return () => {
       try {
         const au = __pronReplayAudioRef.current;
         if (au && typeof au.pause === "function") {
@@ -590,7 +644,13 @@ const __effectivePronReplayMeta = __USE_PRONUNCIATION_RECORDER_HOOK
         return { ...prev, seconds: (prev.seconds || 0) + 1 };
       });
     }, 1000);
-    return () => window.clearInterval(t);
+  
+// === Controlled aliases for SpeakAnalyzePanel (single source of truth) ===
+// const showTarget = showGerman;
+// const toggleShowTarget = () => setShowGerman(v => !v);
+// const toggleShowTranslation = () => setShowTranslation(v => !v);
+
+  return () => window.clearInterval(t);
   }, [pronStatus && pronStatus.state]);
 
 
@@ -987,7 +1047,13 @@ const __effectivePronReplayMeta = __USE_PRONUNCIATION_RECORDER_HOOK
     fd.append("lang", "de-DE");
     fd.append("mode", "coverage");
 
-    const resp = await fetch(`${API_BASE}/api/speech/asr`, { method: "POST", body: fd });
+    const __authHeaders = await __getAuthHeadersForApi();
+
+    const resp = await fetch(`${API_BASE}/api/speech/asr`, {
+      method: "POST",
+      headers: __authHeaders,
+      body: fd,
+    });
     const data = await resp.json().catch(() => null);
     if (!resp.ok || !data || data.ok !== true) {
       const err = (data && data.error) || "ASR_FAILED";
@@ -1211,7 +1277,13 @@ if (__USE_PRONUNCIATION_RECORDER_HOOK && __pronHook && typeof __pronHook.replay 
     const parts = mainSentence.split(/(\s+)/);
     return parts.map((part, idx) => {
       if (part.trim() === "") return part;
-      return (
+    
+// === Controlled aliases for SpeakAnalyzePanel (single source of truth) ===
+// const showTarget = showGerman;
+// const toggleShowTarget = () => setShowGerman(v => !v);
+// const toggleShowTranslation = () => setShowTranslation(v => !v);
+
+  return (
         <span
           key={idx}
           style={{
@@ -1264,6 +1336,12 @@ if (__USE_PRONUNCIATION_RECORDER_HOOK && __pronHook && typeof __pronHook.replay 
   // ✅ 2026-01-10：Confirm Inline（跟 toggle 同一列，放在 toggle 右側）
   const showRefConfirmInline = !!refConfirm;
 
+
+// === Controlled aliases for SpeakAnalyzePanel (single source of truth) ===
+// const showTarget = showGerman;
+// const toggleShowTarget = () => setShowGerman(v => !v);
+// const toggleShowTranslation = () => setShowTranslation(v => !v);
+
   return (
     <>
       {/* ✅ 2026-01-10：先拆 div（Confirm Row）
@@ -1273,7 +1351,13 @@ if (__USE_PRONUNCIATION_RECORDER_HOOK && __pronHook && typeof __pronHook.replay 
       {(() => {
         const __DEPRECATED_SHOW_CONFIRM_ROW = false;
         if (!__DEPRECATED_SHOW_CONFIRM_ROW) return null;
-        return (
+      
+// === Controlled aliases for SpeakAnalyzePanel (single source of truth) ===
+// const showTarget = showGerman;
+// const toggleShowTarget = () => setShowGerman(v => !v);
+// const toggleShowTranslation = () => setShowTranslation(v => !v);
+
+  return (
           showRefConfirmRow && (
             <div
               data-ref="exampleConfirmRow"
@@ -1427,7 +1511,13 @@ if (__USE_PRONUNCIATION_RECORDER_HOOK && __pronHook && typeof __pronHook.replay 
         {(() => {
           const __DEPRECATED_SHOW_REFCONTROLS_WHEN_EXIST = false;
           if (!__DEPRECATED_SHOW_REFCONTROLS_WHEN_EXIST) return null;
-          return (
+        
+// === Controlled aliases for SpeakAnalyzePanel (single source of truth) ===
+// const showTarget = showGerman;
+// const toggleShowTarget = () => setShowGerman(v => !v);
+// const toggleShowTranslation = () => setShowTranslation(v => !v);
+
+  return (
             __DEPRECATED_showRefControls_withoutToggleGate && (
               <div
                 data-ref="exampleRefControlsInline__deprecated"
@@ -1743,20 +1833,13 @@ if (__USE_PRONUNCIATION_RECORDER_HOOK && __pronHook && typeof __pronHook.replay 
       {/* ✅ 2026-01-24: SpeakAnalyzePanel (record/replay/analyze in one place) */}
       {__speakPanelOpen && (
         <SpeakAnalyzePanel
-          expectedText={mainSentence || ""}
-          // ✅ Play target sentence (TTS) - shown only when onSpeak exists upstream
-          // - SpeakAnalyzePanel will hide the button if onPlayTarget is not a function
-          onPlayTarget={
-            onSpeak && typeof onSpeak === "function"
-              ? () => {
-                  try {
-                    onSpeak(mainSentence || "");
-                  } catch (e) {
-                    // ignore
-                  }
-                }
-              : undefined
-          }
+          targetText={mainSentence || ""}
+          translationText={exampleTranslation || ""}
+          showTarget={showTarget}
+          showTranslation={showTranslation}
+          onToggleShowTarget={toggleShowTarget}
+          onToggleShowTranslation={toggleShowTranslation}
+          onPlayTarget={onPlayTarget}
           disabled={!!pronunciationDisabled || !!loading || !__effectiveHasMediaRecorderSupport}
           recordState={(__effectivePronStatus && __effectivePronStatus.state) || "idle"}
           seconds={(__effectivePronStatus && __effectivePronStatus.seconds) || 0}
@@ -1765,15 +1848,9 @@ if (__USE_PRONUNCIATION_RECORDER_HOOK && __pronHook && typeof __pronHook.replay 
           tokens={__speakPanelTokens || []}
           transcript={__speakPanelTranscript || ""}
           message={__speakPanelMessage || ""}
-          onClose={() => {
-            __setSpeakPanelOpen(false);
-          }}
-          onToggleRecord={() => {
-            try { handlePronunciationToggle(); } catch (e) {}
-          }}
-          onReplay={() => {
-            try { handlePronunciationReplay(); } catch (e) {}
-          }}
+          onClose={() => { __setSpeakPanelOpen(false); }}
+          onToggleRecord={() => { try { handlePronunciationToggle(); } catch (e) {} }}
+          onReplay={() => { try { handlePronunciationReplay(); } catch (e) {} }}
           onAnalyzeOnce={async () => {
             if (__speakPanelAnalyzeState === "processing") return;
             const blob = __speakPanelAudioBlobRef.current;
@@ -1784,7 +1861,13 @@ if (__USE_PRONUNCIATION_RECORDER_HOOK && __pronHook && typeof __pronHook.replay 
               const fd = new FormData();
               fd.append("audio", blob, "speak.webm");
               fd.append("lang", "de-DE");
-              const resp = await fetch(`${API_BASE}/api/speech/asr`, { method: "POST", body: fd });
+              const __authHeaders = await __getAuthHeadersForApi();
+
+    const resp = await fetch(`${API_BASE}/api/speech/asr`, {
+      method: "POST",
+      headers: __authHeaders,
+      body: fd,
+    });
               const data = await resp.json().catch(() => null);
               if (!resp.ok || !data) throw new Error((data && data.error) || "ASR_FAILED");
               const built = buildCoverageColoredTokens({

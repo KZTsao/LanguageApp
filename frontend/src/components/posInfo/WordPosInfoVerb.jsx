@@ -1,4 +1,4 @@
-// frontend/src/components/WordPosInfoVerb.jsx
+// frontend/src/components/posInfo/WordPosInfoVerb.jsx
 //
 // 動詞（Verb）資訊區塊
 // - 顯示：動詞類型 / 助動詞 / 常見搭配
@@ -26,6 +26,11 @@
 // - LLM 有時會在 conjugation raw 內已帶反身代名詞（例如 "wasche mich"）
 // - 前端原本又會再 inject 一次 → 造成 "mich mich"
 // - 修正：只有 raw 尚未包含該 pronoun 時才補上
+
+// ⭐ Step E-1（本輪變更：動詞格子點選同步例句 headword）
+// - 點選任一動詞格子（含自動定位 queryWord 命中後的手動點選）
+//   會播放 TTS + focus（既有行為）
+// - 另外呼叫 onHeadwordChange(form) 讓例句區 headword 跟著切換
 // -----------------------------------------------------
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
@@ -38,6 +43,7 @@ export default function WordPosInfoVerb({
   labels = {},
   extraInfo = {},
   onSelectForm,
+    onHeadwordChange, // ✅ 動詞格子點選時同步切換例句 headword
   onWordClick, // ✅ 外層若有傳，就用它重新查詢
   uiLang,
 }) {
@@ -571,12 +577,24 @@ export default function WordPosInfoVerb({
     };
     triggerPulseRerender();
 
+// ✅ Step E：同步例句 headword（讓 Example 區跟著動詞格子切換）
+try {
+  if (typeof onHeadwordChange === "function") {
+    onHeadwordChange(trimmed);
+  }
+} catch (e) {
+  // eslint-disable-next-line no-console
+  console.warn("[WordPosInfoVerb] onHeadwordChange failed:", e);
+}
+
+
     if (typeof onSelectForm === "function") {
       onSelectForm({
         pos: "Verb",
         baseForm,
         tense,
         personKey,
+          surface: trimmed,
         form: trimmed,
         verbSubtype: verbSubtype || "",
         separable: !!effectiveSeparable,
@@ -1293,4 +1311,4 @@ function ConjugationCell({
     </div>
   );
 }
-// frontend/src/components/WordPosInfoVerb.jsx
+// frontend/src/components/posInfo/WordPosInfoVerb.jsx

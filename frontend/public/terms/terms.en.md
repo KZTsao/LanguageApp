@@ -1,7 +1,6 @@
-<!-- frontend/public/terms/terms.en.md -->
 # Terms of Service
 
-Last updated: 2026-02-01
+Last updated: 2026-01-31
 
 Welcome to **soLang** (the “Service”). By accessing or using our website and services, you agree to be bound by these Terms of Service (the “Terms”). If you do not agree, do not use the Service.
 
@@ -66,5 +65,3 @@ To the maximum extent permitted by law, **soLang** and its directors, employees,
 ---
 
 Questions: contact us via the methods provided in the Service.
-
-<!-- frontend/public/terms/terms.en.md -->

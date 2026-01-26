@@ -2,6 +2,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import uiText from "../../uiText";
 import SpeakButton from "../common/SpeakButton";
+import { EyeIconOpen, EyeIconClosed, MOSAIC_LINE } from "../common/EyeIcons";
 
 // ============================================================
 // SpeakAnalyzePanel
@@ -67,7 +68,7 @@ function __tokenizeExpected(expectedText) {
  * This prevents: "one early mismatch => all subsequent positional comparisons fail".
  */
 function __realignTokens(expectedText, asrWords, confThreshold) {
-  const exp = __tokenizeExpected(expectedText || "");
+  const exp = __tokenizeExpected(__expected || "");
   const words = Array.isArray(asrWords) ? asrWords : [];
   const threshold = typeof confThreshold === "number" ? confThreshold : 0.85;
 
@@ -138,7 +139,20 @@ function __pick(obj, pathArr) {
 }
 
 export default function SpeakAnalyzePanel({
+  // ===== Legacy props (backward compatible) =====
   expectedText,
+
+  // ===== Controlled target / translation (from ExampleSentence) =====
+  // NOTE: Prefer these; fallback to expectedText for legacy callers.
+  targetText,
+  translationText,
+  showTarget,
+  showTranslation,
+  onToggleShowTarget,
+  onToggleShowTranslation,
+  onPlayTarget,
+
+  // ===== Panel core props =====
   disabled,
   recordState,
   seconds,
@@ -161,13 +175,26 @@ export default function SpeakAnalyzePanel({
   confidenceThreshold,
 }) {
   const __isRecording = recordState === "recording";
-  const __canToggle = !disabled && !!expectedText;
+
+  // ============================================================
+  // ✅ Controlled target/translation (single source of truth: parent)
+  // - Prefer targetText/showTarget/... from ExampleSentence
+  // - Fallback to legacy expectedText callers
+  // ============================================================
+  const __expected = String(targetText ?? expectedText ?? "");
+  const __translation = String(translationText ?? "");
+
+  const __canToggle = !disabled && !!__expected;
   const __canReplay = !disabled && !!hasAudio && !__isRecording;
   const __canAnalyze = !disabled && !!hasAudio && !__isRecording && analyzeState !== "processing";
 
-  // ✅ UI alias (avoid ReferenceError; keep data flow unchanged)
-  const targetText = expectedText || "";
-  const asrText = transcript || "";
+  const __asrText = transcript || "";
+
+  const __mask = (s) => {
+    const raw = String(s || "");
+    const n = Math.max(8, Math.min(raw.length || 0, 80));
+    return "█".repeat(n);
+  };
 
   // ============================================================
   // ✅ 2026-01-24: i18n (uiText)
@@ -297,14 +324,14 @@ export default function SpeakAnalyzePanel({
     if (hasCallerTokens) return tokens;
 
     const hasAsrWords = Array.isArray(asrWords) && asrWords.length > 0;
-    if (hasAsrWords && expectedText) {
-      return __realignTokens(expectedText, asrWords, confidenceThreshold);
+    if (hasAsrWords && __expected) {
+      return __realignTokens(__expected, asrWords, confidenceThreshold);
     }
 
     // fallback: show expected as neutral tokens (no analysis yet)
-    const exp = __tokenizeExpected(expectedText || "");
+    const exp = __tokenizeExpected(__expected || "");
     return exp.map((t) => ({ text: t.raw, state: "neutral", confidence: 0 }));
-  }, [tokens, asrWords, expectedText, confidenceThreshold]);
+  }, [tokens, asrWords, __expected, confidenceThreshold]);
 
   const __tokenNodes = useMemo(() => {
     return (__coloredTokens || []).map((t, idx) => {
@@ -731,17 +758,7 @@ export default function SpeakAnalyzePanel({
       >
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div style={{ fontSize: 14, fontWeight: 700, opacity: 0.92 }}>{__t("title")}</div>
-          {typeof onPlayTarget === "function" && (
-            <SpeakButton
-              onClick={() => {
-                try { onPlayTarget(); } catch (e) {}
-              }}
-              title={__t("playTarget") || "播放語音"}
-              ariaLabel="play-target"
-              style={{ width: 34, height: 34, borderRadius: 999, marginLeft: 8 }}
-            />
-          )}
-          <button
+                    <button
             type="button"
             onClick={() => {
               try {
@@ -764,23 +781,168 @@ export default function SpeakAnalyzePanel({
           </button>
         </div>
 
-        
-        <div style={{ marginTop: 10, padding: 10, borderRadius: 10, border: "1px solid rgba(127,127,127,0.18)", background: "rgb(255,255,255)" }}>
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            <div>
-              <div style={{ fontSize: 12, opacity: 0.72, marginBottom: 6 }}>{__t("targetLabel")}</div>
-              <div style={{ fontSize: 18, lineHeight: 1.6 }}>{targetText}</div>
+        <div
+          style={{
+            marginTop: 10,
+            padding: 10,
+            borderRadius: 10,
+            border: "1px solid rgba(127,127,127,0.18)",
+            background: "rgb(255,255,255)",
+          }}
+        >
+          {/* ===== Target / Translation (controlled by parent) ===== */}
+          {/* header row: label left, controls right (eye only) */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              marginBottom: 8,
+            }}
+          >
+            {/* ✅ UI tweak: enlarge label (目標) */}
+            <div style={{ fontSize: 14, fontWeight: 600, opacity: 0.78 }}>{__t("targetLabel")}</div>
+
+            <div style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
+              {typeof onToggleShowTarget === "function" ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    try { onToggleShowTarget(); } catch (e) {}
+                  }}
+                  title={showTarget ? (__t("hideTarget") || "隱藏") : (__t("showTarget") || "顯示")}
+                  aria-label="toggle-show-target"
+                  className="icon-button sound-button"
+                  style={{
+                    border: "none",
+                    background: "transparent",
+                    cursor: "pointer",
+                    padding: 0,
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    width: 34,
+                    height: 34,
+                    flexShrink: 0,
+                    opacity: disabled ? 0.55 : 1,
+                  }}
+                  disabled={disabled}
+                >
+                  {showTarget ? <EyeIconOpen size={20} /> : <EyeIconClosed size={20} />}
+                </button>
+              ) : null}
             </div>
-            {analyzeState === "done" ? (
-              <div>
-                <div style={{ fontSize: 12, opacity: 0.72, marginBottom: 6 }}>{__t("asrLabel")}</div>
-                <div style={{ fontSize: 18, lineHeight: 1.6 }}>{asrText}</div>
-              </div>
-            ) : null}
           </div>
-        </div>
+
+          
+          {/* target row (play icon on the left of sentence) */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "flex-start",
+              gap: 10,
+            }}
+          >
+            {typeof onPlayTarget === "function" ? (
+              <SpeakButton
+                onClick={() => {
+                  try { onPlayTarget(); } catch (e) {}
+                }}
+                title={__t("playTarget") || "播放語音"}
+                ariaLabel="play-target"
+                style={{ width: 16, height: 16, borderRadius: 9, marginTop: 2 }}
+              />
+            ) : null}
+
+            {/* target text */}
+            <div style={{ fontSize: 18, lineHeight: 1.35, wordBreak: "break-word", flex: 1 }}>
+              {showTarget === false ? <span style={{ whiteSpace: "nowrap" }}>{MOSAIC_LINE}</span> : __expected}
+            </div>
+          </div>
 
 
+
+
+          {/* translation */}
+          {__translation ? (
+            <>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 10,
+                  marginTop: 12,
+                  marginBottom: 6,
+                }}
+              >
+                <div style={{ fontSize: 14, fontWeight: 600, opacity: 0.78 }}>
+                  {__t("translationLabel")}
+                </div>
+                
+                {typeof onToggleShowTranslation === "function" ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      try { onToggleShowTranslation(); } catch (e) {}
+                    }}
+                    title={showTranslation ? (__t("hideTranslation") || "隱藏") : (__t("showTranslation") || "顯示")}
+                    aria-label="toggle-show-translation"
+                    className="icon-button sound-button"
+                    style={{
+                      border: "none",
+                      background: "transparent",
+                      cursor: "pointer",
+                      padding: 0,
+                      display: "inline-flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      width: 34,
+                      height: 34,
+                      flexShrink: 0,
+                      opacity: disabled ? 0.55 : 1,
+                    }}
+                    disabled={disabled}
+                  >
+                    {showTranslation ? <EyeIconOpen size={20} /> : <EyeIconClosed size={20} />}
+                  </button>
+                ) : null}
+                
+              </div>
+                
+              <div style={{ fontSize: 16, lineHeight: 1.35, wordBreak: "break-word", opacity: 0.92 ,gap:10}}>
+                  {/* target row (play icon on the left of sentence) */}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "flex-start",
+              gap: 10,
+            }}
+          >
+            {typeof onPlayTarget === "function" ? (
+                  <div
+                    
+                    ariaLabel="play-target"
+                    style={{ width: 16, height: 16, borderRadius: 9, marginTop: 2 }}
+                  />
+                ) : null}
+
+            {/* target text */}
+            <div style={{ fontSize: 16, lineHeight: 1.35, wordBreak: "break-word", flex: 1 }}>
+            {showTranslation === false ? <span style={{ whiteSpace: "nowrap" }}>{MOSAIC_LINE}</span> : __translation}
+            </div>
+          </div>
+          
+
+          
+                  
+                
+              </div>
+            </>
+          ) : null}
+          </div>
+          
+        
+          
         
         <div style={{ marginTop: 12, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
           <__IconButton
@@ -789,11 +951,37 @@ export default function SpeakAnalyzePanel({
             title={__isRecording ? __t("stopRecording") : __t("startRecording")}
             ariaLabel={__isRecording ? __t("stopRecording") : __t("startRecording")}
           >
-            {__isRecording ? (
-              <__Icon pathD="M6 6h12v12H6z" />
-            ) : (
-              <__Icon pathD="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0M12 19v2M8 21h8" />
-            )}
+            <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3z"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.6"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+              <path
+                d="M19 11a7 7 0 0 1-14 0"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.6"
+                strokeLinecap="round"
+              />
+              <path
+                d="M12 18v3"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.6"
+                strokeLinecap="round"
+              />
+              <path
+                d="M8 21h8"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.6"
+                strokeLinecap="round"
+              />
+            </svg>
           </__IconButton>
 
           <__IconButton

@@ -18,6 +18,52 @@ import React from "react";
 import { playTTS } from "../../utils/ttsClient";
 import uiText from "../../uiText";
 
+
+// ✅ 2026-01-26：統一「點選詞形」的 surface 與 meta，讓各詞卡不用各自對齊欄位命名
+function __pickDefined(obj, keys) {
+  const out = {};
+  (keys || []).forEach((k) => {
+    const v = obj?.[k];
+    if (v !== undefined && v !== null && v !== "") out[k] = v;
+  });
+  return out;
+}
+
+function __getSurfaceFromForm(form) {
+  if (form == null) return "";
+  if (typeof form === "string") return form.toString().trim();
+  // 支援不同詞卡回拋欄位命名：surface / form / text
+  const s = (form.surface ?? form.form ?? form.text ?? "").toString().trim();
+  return s;
+}
+
+function __mergeSurfaceMeta(meta, form) {
+  const base = meta && typeof meta === "object" ? { ...meta } : {};
+  if (form && typeof form === "object") {
+    // ✅ 把人稱/時態等一起帶上去（若存在）
+    Object.assign(
+      base,
+      __pickDefined(form, [
+        "personKey",
+        "tenseKey",
+        "moodKey",
+        "voiceKey",
+        "numberKey",
+        "genderKey",
+        "caseKey",
+        "degreeKey",
+        "formKey",
+        "cellKey",
+        "rowKey",
+        "colKey",
+        "variantKey",
+      ])
+    );
+  }
+  return base;
+}
+
+
 import WordPosInfoNoun from "./WordPosInfoNoun";
 import WordPosInfoVerb from "./WordPosInfoVerb";
 import WordPosInfoAdjektiv from "./WordPosInfoAdjektiv";
@@ -38,6 +84,8 @@ export default function WordPosInfo({
 
   // ✅ 既有：名詞表點選後的 form（供上層做自己想做的事，例如暫存/顯示）
   onSelectForm,
+  onHeadwordChange, // ✅ 由 POS 卡往外通知：例句 headword 切換
+
 
   // ✅ 2026-01-12 Task 1：例句 header 覆蓋用（只影響顯示）
   // - surface: string | null
@@ -223,6 +271,8 @@ export default function WordPosInfo({
 
       return (
         <WordPosInfoVerb
+            onHeadwordChange={onHeadwordChange} // ✅ 同步例句 headword（上游接線）
+            onSelectForm={onSelectForm} // ✅ verb 格子點選回拋（上游接線）
           baseForm={baseForm}
           queryWord={queryWord}
           labels={uiLabels.verb}

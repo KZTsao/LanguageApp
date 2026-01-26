@@ -1,3 +1,4 @@
+// frontend/src/components/examples/WordExampleBlock.jsx
 // FILE: frontend/src/components/examples/WordExampleBlock.jsx
 // frontend/src/components/examples/WordExampleBlock.jsx
 /**
@@ -152,15 +153,17 @@ export default function WordExampleBlock({
   // ✅ Task 1：Header 可被置換（Entry 狀態）
   // - 優先順序：
   //   1) entryHeaderOverride（上游顯式覆蓋）
-  //   2) selectedForm（本檔案已存在的名詞表 onSelectForm 接線：只在點 cell 時才會有值）
+  //   2) selectedForm（POS 卡 onSelectForm 接線：Verb 多為 string；Noun 表可能是 { surface }）
   //   3) 原本 headword（d.word / d.baseForm）
   // - 注意：只影響例句 header 顯示，不改 refs、不觸發 refreshExamples
   const override1 =
     typeof entryHeaderOverride === "string" ? entryHeaderOverride.trim() : "";
   const override2 =
-    selectedForm && typeof selectedForm === "object" && typeof selectedForm.surface === "string"
-      ? selectedForm.surface.trim()
-      : "";
+    typeof selectedForm === "string"
+      ? selectedForm.trim()
+      : selectedForm && typeof selectedForm === "object" && typeof selectedForm.surface === "string"
+        ? selectedForm.surface.trim()
+        : ""; // ✅ Verb: WordPosInfoVerb 會回拋 string；Noun 表等可能回拋 { surface }
 
   const hw = (d?.word || d?.baseForm || "").toString().trim();
   return override1 || override2 || hw || "not available";
@@ -2086,9 +2089,7 @@ setRefsByWordKey((prev) => {
             )}
           </>
         )}
-      </div>
-
-      <ExampleList
+      </div><ExampleList
         examples={Array.isArray(examples) ? examples : []}
         loading={loading}
         sectionExample={sectionExample}
@@ -2202,3 +2203,5 @@ setRefsByWordKey((prev) => {
 // END FILE: frontend/src/components/examples/WordExampleBlock.jsx
 // __pad_keep_linecount_posinfo
 // __pad_keep_linecount_posinfo
+
+// frontend/src/components/examples/WordExampleBlock.jsx

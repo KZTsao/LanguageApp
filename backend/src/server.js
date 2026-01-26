@@ -24,6 +24,10 @@
  * 異動說明：
  * 1) 新增並掛載 /api/support（即時客服服務 API）
  * 2) 掛載方式採 app.use("/api", supportRoute) 以避免路徑重複 /support/support
+ *
+ * 異動日期：2026-01-26
+ * 異動說明：
+ * 1) /api/speech 路由改為強制登入：app.use("/api/speech", authMiddleware, speechRoute)
 const supportAdminRoute = require("./routes/supportAdminRoute");
 app.use("/api", supportAdminRoute);
  */
@@ -58,6 +62,7 @@ const usageMeRoute = require("./routes/usageMeRoute");
 const libraryRoute = require("./routes/libraryRoute");
 const visitRoute = require("./routes/visitRoute");
 const speechRoute = require("./routes/speechRoute");
+const authMiddleware = require("./middleware/authMiddleware");
 const supportRoute = require("./routes/supportRoute");
 const queryNormalizeRoute = require("./routes/queryNormalizeRoute");
 
@@ -129,7 +134,7 @@ function mountRoutes(app) {
   app.use("/api/tts", ttsRoute);
   INIT_STATUS.routes.tts = true;
 
-  app.use("/api/speech", speechRoute);
+  app.use("/api/speech", authMiddleware, speechRoute);
   INIT_STATUS.routes.speech = true;
 
   // ✅ 2026-01-24：即時客服 Support API（/api/support/*）

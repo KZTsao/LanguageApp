@@ -49,8 +49,8 @@ const uiText = {
 
     // ★ Layout（新增）
     layout: {
-      
-      termsOfService: "服務條款",mutterspracheLabel: "母語：",
+      termsOfService: "服務條款",
+      mutterspracheLabel: "母語：",
     },
 
     // ★ Auth（新增）
@@ -385,6 +385,12 @@ const uiText = {
       perfect: "全對",
       closeAria: "關閉",
       waveformAria: "口說波形",
+      translationLabel: "翻譯",
+      playTarget: "播放語音",
+      showTarget: "顯示",
+      hideTarget: "隱藏",
+      showTranslation: "顯示",
+      hideTranslation: "隱藏",
     },
   },
 
@@ -409,8 +415,8 @@ const uiText = {
     ],
 
     layout: {
-      
-      termsOfService: "Terms of Service",mutterspracheLabel: "Native language:",
+      termsOfService: "Terms of Service",
+      mutterspracheLabel: "Native language:",
     },
 
     auth: {
@@ -728,6 +734,12 @@ const uiText = {
       perfect: "Perfect",
       closeAria: "Close",
       waveformAria: "Speech waveform",
+      translationLabel: "Translation",
+      playTarget: "Play audio",
+      showTarget: "Show",
+      hideTarget: "Hide",
+      showTranslation: "Show",
+      hideTranslation: "Hide",
     },
   },
 
@@ -752,8 +764,8 @@ const uiText = {
     ],
 
     layout: {
-      
-      termsOfService: "服务条款",mutterspracheLabel: "母语：",
+      termsOfService: "服务条款",
+      mutterspracheLabel: "母语：",
     },
 
     auth: {
@@ -1071,6 +1083,12 @@ const uiText = {
       perfect: "全对",
       closeAria: "关闭",
       waveformAria: "口说波形",
+      translationLabel: "翻译",
+      playTarget: "播放语音",
+      showTarget: "显示",
+      hideTarget: "隐藏",
+      showTranslation: "显示",
+      hideTranslation: "隐藏",
     },
   },
 
@@ -1095,8 +1113,8 @@ const uiText = {
     ],
 
     layout: {
-      
-      termsOfService: "Nutzungsbedingungen",mutterspracheLabel: "Muttersprache:",
+      termsOfService: "Nutzungsbedingungen",
+      mutterspracheLabel: "Muttersprache:",
     },
 
     auth: {
@@ -1415,6 +1433,12 @@ const uiText = {
       perfect: "Perfekt",
       closeAria: "Schließen",
       waveformAria: "Sprachwellenform",
+      translationLabel: "Übersetzung",
+      playTarget: "Audio abspielen",
+      showTarget: "Anzeigen",
+      hideTarget: "Verbergen",
+      showTranslation: "Anzeigen",
+      hideTranslation: "Verbergen",
     },
 },
 
@@ -1439,8 +1463,8 @@ const uiText = {
     ],
 
     layout: {
-      
-      termsOfService: "شروط الخدمة",mutterspracheLabel: "اللغة الأم:",
+      termsOfService: "شروط الخدمة",
+      mutterspracheLabel: "اللغة الأم:",
     },
 
     auth: {
@@ -1753,6 +1777,12 @@ testDisabledTitle: "الاختبار غير متاح بعد.",
       perfect: "مثالي",
       closeAria: "إغلاق",
       waveformAria: "مخطط موجة النطق",
+      translationLabel: "الترجمة",
+      playTarget: "تشغيل الصوت",
+      showTarget: "إظهار",
+      hideTarget: "إخفاء",
+      showTranslation: "إظهار",
+      hideTranslation: "إخفاء",
     },
   },
 };

@@ -1,3 +1,4 @@
+// PATH: backend/src/routes/analyzeRoute.js
 // backend/src/routes/analyzeRoute.js
 /**
  * 文件說明：
@@ -418,17 +419,22 @@ function extractLlmTokensFromResult(result) {
 router.post('/', async (req, res, next) => {
   try {
     // ✅ 2026-01-05：新增 targetPosKey（僅透傳）
-    const { text, explainLang, targetPosKey } = req.body;
+    const { text, rawText, explainLang, targetPosKey } = req.body;
+
+    // ✅ raw input 保留：前端可傳 rawText（使用者原始輸入），避免被 preflight normalize 覆寫
+    const rawInput = (rawText && typeof rawText === 'string') ? rawText.trim() : null;
 
     if (!text || typeof text !== 'string') {
       throw new AppError('請提供要分析的文字 text（字串）', 400);
     }
 
     const trimmed = text.trim();
+    const rawInputFinal = (rawInput && rawInput.trim()) ? rawInput.trim() : trimmed;
     if (!trimmed) return res.json({ error: 'empty_input' });
 
     INIT_STATUS.runtime.lastCalledAt = new Date().toISOString();
     INIT_STATUS.runtime.lastText = trimmed;
+    INIT_STATUS.runtime.lastRawInput = rawInputFinal;
     INIT_STATUS.runtime.lastExplainLang = explainLang || null;
     INIT_STATUS.runtime.lastTargetPosKey = (typeof targetPosKey === "string" ? targetPosKey.trim() : null) || null;
 
@@ -465,6 +471,8 @@ router.post('/', async (req, res, next) => {
 
     const options = {
       explainLang: explainLang || 'zh-TW',
+      // ✅ raw/canonical 分層：保留使用者原始輸入（前端 query box 顯示用）
+      rawInput: rawInputFinal,
     };
 
     // ✅ 2026-01-05：Step 2-3（用量歸戶打通）
@@ -609,3 +617,5 @@ router.post('/', async (req, res, next) => {
 module.exports = router;
 
 // backend/src/routes/analyzeRoute.js
+
+// END PATH: backend/src/routes/analyzeRoute.js

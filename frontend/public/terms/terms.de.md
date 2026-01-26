@@ -1,7 +1,6 @@
-<!-- frontend/public/terms/terms.de.md -->
-# Nutzungsbedingungen (Terms of Service)
+# Nutzungsbedingungen 
 
-Zuletzt aktualisiert: 2026-02-01
+Zuletzt aktualisiert: 2026-01-31
 
 Willkommen bei **soLang** (der „Service“). Durch den Zugriff auf oder die Nutzung unserer Website und Dienste erklärst du dich mit diesen Nutzungsbedingungen (den „Bedingungen“) einverstanden. Wenn du nicht einverstanden bist, nutze den Service bitte nicht.
 
@@ -66,5 +65,3 @@ Soweit gesetzlich zulässig haften **soLang** und verbundene Personen nicht für
 ---
 
 Fragen: kontaktiere uns über die im Service angegebenen Kontaktwege.
-
-<!-- frontend/public/terms/terms.de.md -->

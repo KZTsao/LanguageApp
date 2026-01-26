@@ -1108,41 +1108,6 @@ function ResultPanel({
             </section>
           )}
 
-          {/* ====== 2026/01/25：Terms of Service 入口（移自 LayoutShell，避免 loading 時浮出） ====== */}
-          <div
-            style={{
-              marginTop: 10,
-              marginBottom: -2,
-              paddingLeft: 12,
-              paddingRight: 12,
-              textAlign: "left",
-              fontSize: 12,
-              color: "var(--text-muted)",
-              userSelect: "none",
-            }}
-          >
-            <button
-              type="button"
-              onClick={() => {
-                try {
-                  window.dispatchEvent(new CustomEvent("open-terms"));
-                } catch {}
-              }}
-              style={{
-                background: "transparent",
-                border: "none",
-                padding: 0,
-                color: "var(--text-muted)",
-                cursor: "pointer",
-                textDecoration: "underline",
-                textUnderlineOffset: 2,
-                fontWeight: 700,
-              }}
-            >
-              {(t?.layout?.termsOfService && String(t.layout.termsOfService)) ||
-                (uiLang === "zh-TW" ? "服務條款" : "Terms of Service")}
-            </button>
-          </div>
           {/* ✅ 2026-01-05：免責聲明容器化（水平對齊 JSON 區塊感） */}
           <div
             style={{

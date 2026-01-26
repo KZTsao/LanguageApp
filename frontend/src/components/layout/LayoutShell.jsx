@@ -29,6 +29,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import LoginButton from "../auth/LoginButton";
 import { useAuth } from "../../context/AuthProvider";
 import { apiFetch } from "../../utils/apiClient";
+import uiText from "../../uiText";
 
 /** 模組：將字串 seed 穩定映射到色相（供頭像底色使用） */
 function hashToHue(seed = "") {
@@ -248,22 +249,165 @@ function LayoutShell({
   children,
 }) {
   const { user, profile, signOut } = useAuth();
-  // ✅ 2026/01/26: uiText fallback guard (avoid ReferenceError if uiText is not wired yet)
-  // If your app later provides uiText via props/context, feel free to replace this stub.
-  const uiText = (typeof window !== "undefined" && window.uiText) ? window.uiText : {};
+  // ✅ 2026/01/26: uiText 以 import 方式導入（比照其他檔案）
+  // - 避免依賴 window.uiText（dev/prod/SSR 都可能是 undefined）
+  // - uiText 本身是「純資料」模組，直接 import 即可
+
   // ============================================================
   // ✅ 2026/01/25 Step 1 — Terms Modal（全域視窗 + scroll）
   // 觸發：window.dispatchEvent(new CustomEvent("open-terms"))
   // ============================================================
   const [__isTermsOpen, __setIsTermsOpen] = useState(false);
+  // ✅ 2026/01/26 Step 2 — Terms Modal (STATE-ONLY, no window/event)
+  // 規則：不刪除既有 Terms 相關 legacy state，但本 modal 開關只使用 __termsOpenStateOnly
+  const [__termsOpenStateOnly, __setTermsOpenStateOnly] = useState(false);
+
+  // ✅ 2026/01/26 Step 2 — Minimal MD-lite renderer (force title/heading styles)
+  // - 支援：# / ## / 一般段落（以換行切段）
+  // - 目的：標題樣式不受 pre-wrap/外層 fontSize 影響
+  
+    const __renderMdLite = (raw = "") => {
+    try {
+      const lines = String(raw || "").split(/\n/);
+      const out = [];
+
+      // headingLevel:
+      // 0 = before any heading
+      // 1 = inside H1 section (# ...)
+      // 2 = inside H2 section (## ...)
+      let headingLevel = 0;
+
+      // sectionOpen: after "1. 帳戶" (section title) we indent body differently
+      let sectionOpen = false;
+
+      const isBlank = (s) => !s || !String(s).trim();
+      const isH1 = (s) => String(s || "").startsWith("# ");
+      const isH2 = (s) => String(s || "").startsWith("## ");
+      const isBullet = (s) => /^\s*-\s+/.test(String(s || ""));
+      const isNumbered = (s) => /^\d+\.\s+/.test(String(s || ""));
+
+      // Heuristic: "section title" looks like "1. 帳戶" (short, no punctuation / no markdown bold)
+      const isSectionTitle = (s) => {
+        return true;
+      };
+
+      // Indent rules you asked:
+      // #  -> no indent
+      // ## -> indent 1
+      // body paragraphs -> indent 2 (under section)
+      // numbered clauses -> a bit more than paragraph
+      // bullets -> a bit more than numbered
+      const INDENT = {
+        h2: 16,          // "## ..."
+        sectionTitle: 16, // "1. 帳戶"
+        p: 24,           // normal paragraph inside section
+        num: 34,         // "1. ..." clause (more than p)
+        bullet: 44,      // "- ..." inside a numbered clause
+      };
+
+      for (let i = 0; i < lines.length; i++) {
+        const lineRaw = lines[i];
+        const line = String(lineRaw || "");
+
+        if (isBlank(line)) {
+          out.push(<div key={"sp-" + i} style={{ height: 8 }} />);
+          continue;
+        }
+
+        // H1
+        if (isH1(line)) {
+          headingLevel = 1;
+          sectionOpen = false;
+          out.push(
+            <div
+              key={"h1-" + i}
+              style={{
+                fontSize: 22,
+                fontWeight: 900,
+                
+              }}
+            >
+              {line.replace(/^#\s+/, "")}
+            </div>
+          );
+          continue;
+        }
+
+        // H2
+        if (isH2(line)) {
+          headingLevel = 2;
+          sectionOpen = false;
+          out.push(
+            <div
+              key={"h2-" + i}
+              style={{
+                fontSize: 18,
+                fontWeight: 800,
+                margin: "0px 0 6px 6px",
+              }}
+            >
+              {line.replace(/^##\s+/, "")}
+            </div>
+          );
+          continue;
+        }
+
+        // Section title like "1. 帳戶"
+        if (isSectionTitle(line)) {
+          sectionOpen = true;
+          out.push(
+            <div
+              key={"sec-" + i}
+              style={{
+                fontSize: 13,
+                lineHeight: 1.7,
+                margin: "0px 0 6px 21px",
+              }}
+            >
+              {line}
+            </div>
+          );
+          continue;
+        }
+
+        const numbered = isNumbered(line);
+        const bullet = isBullet(line);
+
+        // Under a section: indent body
+        // Outside section: keep left align (avoid sudden shifts for intro text)
+        const marginLeft = sectionOpen
+          ? bullet
+            ? INDENT.bullet
+            : numbered
+            ? INDENT.num
+            : INDENT.p
+          : 0;
+
+        out.push(
+          <div
+            key={"p-" + i}
+            style={{
+              fontSize: 13,
+              lineHeight: 1.7,
+              margin: "4px 0",
+              marginLeft,
+            }}
+          >
+            {line}
+          </div>
+        );
+      }
+
+      return out;
+    } catch {
+      return <div style={{ fontSize: 13, lineHeight: 1.7 }}>{String(raw || "")}</div>;
+    }
+  };
+
+
+
   const [__termsText, __setTermsText] = useState("");
   const [__termsLoadErr, __setTermsLoadErr] = useState("");
-
-  // ✅ 2026/01/26: keep latest uiLang for global event listeners (avoid stale closure)
-  const __uiLangRef = useRef(uiLang);
-  useEffect(() => {
-    __uiLangRef.current = uiLang;
-  }, [uiLang]);
 
   const __loadTermsMd = async (__lang) => {
     try {
@@ -291,7 +435,7 @@ function LayoutShell({
     const __onOpen = () => {
       __setIsTermsOpen(true);
       try {
-        __loadTermsMd(__uiLangRef.current || "en");
+        __loadTermsMd(uiLang || "en");
       } catch {}
     };
     window.addEventListener("open-terms", __onOpen);
@@ -301,34 +445,24 @@ function LayoutShell({
 
   useEffect(() => {
     const __onKeyDown = (e) => {
-      if (!__isTermsOpen) return;
+      if (!__termsOpenStateOnly) return;
       if (e && e.key === "Escape") {
-        __setIsTermsOpen(false);
+        __setTermsOpenStateOnly(false);
       }
     };
     window.addEventListener("keydown", __onKeyDown);
     return () => window.removeEventListener("keydown", __onKeyDown);
   }, [__isTermsOpen]);
 
-
-  // ✅ 2026/01/26: if user switches UI language while Terms modal is open, reload terms
-  useEffect(() => {
-    if (!__isTermsOpen) return;
-    try {
-      __loadTermsMd(uiLang || "en");
-    } catch {}
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [uiLang, __isTermsOpen]);
-
   const __renderTermsModal = () => {
-    if (!__isTermsOpen) return null;
+    if (!__termsOpenStateOnly) return null; // state-only
     return (
       <div
         role="dialog"
         aria-modal="true"
         onMouseDown={(e) => {
           if (e && e.target && e.target === e.currentTarget) {
-            __setIsTermsOpen(false);
+            __setTermsOpenStateOnly(false);
           }
         }}
         style={{
@@ -360,16 +494,16 @@ function LayoutShell({
               display: "flex",
               alignItems: "center",
               justifyContent: "space-between",
-              padding: "12px 14px",
+              padding: "2px 28px 2px",
               borderBottom: "1px solid var(--border-subtle)",
             }}
           >
-            <div style={{ fontWeight: 800, fontSize: 13 }}>
-              {uiText?.[uiLang]?.layout?.termsOfService || "Terms of Service"}
+            <div style={{ fontWeight: 900, fontSize: 22, lineHeight: 1.2 }}>
+              {(uiText?.[uiLang]?.layout?.termsOfService || uiText?.en?.layout?.termsOfService) || "Terms of Service"}
             </div>
             <button
               type="button"
-              onClick={() => __setIsTermsOpen(false)}
+              onClick={() => __setTermsOpenStateOnly(false)}
               style={{
                 background: "transparent",
                 border: "none",
@@ -380,8 +514,8 @@ function LayoutShell({
                 fontSize: 16,
                 fontWeight: 900,
               }}
-              aria-label="Close"
-              title="Close"
+              aria-label={(uiText?.[uiLang]?.common?.close || uiText?.en?.common?.close) || "Close"}
+              title={(uiText?.[uiLang]?.common?.close || uiText?.en?.common?.close) || "Close"}
             >
               ×
             </button>
@@ -389,7 +523,7 @@ function LayoutShell({
 
           <div
             style={{
-              padding: "12px 14px",
+              padding: "20px 28px 24px",
               maxHeight: "calc(85vh - 52px)",
               overflowY: "auto",
               whiteSpace: "pre-wrap",
@@ -400,9 +534,9 @@ function LayoutShell({
             {__termsLoadErr ? (
               <div style={{ color: "var(--text-muted)" }}>{__termsLoadErr}</div>
             ) : __termsText ? (
-              <div>{__termsText}</div>
+              <div>{__renderMdLite(__termsText)}</div>
             ) : (
-              <div style={{ color: "var(--text-muted)" }}>Loading…</div>
+              <div style={{ color: "var(--text-muted)" }}>{(uiText?.[uiLang]?.common?.loading || uiText?.en?.common?.loading) || "Loading…"} </div>
             )}
           </div>
         </div>
@@ -491,6 +625,50 @@ function LayoutShell({
     const p = (profile?.plan || "free").toString().trim();
     return `${p}plan`.toLowerCase();
   }, [profile?.plan]);
+
+  /** 模組：導向 Lemon Checkout（external_id 已由後端用 token 取得 profiles.id） */
+  const [__billingBusy, setBillingBusy] = useState(false);
+  const startCheckout = async (interval) => {
+    if (__billingBusy) return;
+    setBillingBusy(true);
+    try {
+      const token = getAccessTokenFromLocalStorage();
+      if (!token) {
+        alert("請先登入再升級");
+        return;
+      }
+
+      const r = await apiFetch("/api/billing/checkout-url", {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer " + token,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ interval }),
+      });
+
+      if (!r.ok) {
+        const t = await r.text().catch(() => "");
+        console.warn("[LayoutShell] billing checkout-url failed:", r.status, t);
+        alert("取得付款連結失敗，請稍後再試");
+        return;
+      }
+
+      const data = await r.json().catch(() => null);
+      const url = data?.url;
+      if (!url) {
+        alert("取得付款連結失敗（無 URL）");
+        return;
+      }
+
+      window.location.href = url;
+    } catch (e) {
+      console.warn("[LayoutShell] startCheckout failed:", e);
+      alert("取得付款連結失敗，請稍後再試");
+    } finally {
+      setBillingBusy(false);
+    }
+  };
 
   /** 模組：點外面關閉選單 */
   useEffect(() => {
@@ -851,6 +1029,37 @@ function LayoutShell({
               </select>
             </div>
 
+            <div style={{ display: "inline-flex", alignItems: "center", paddingLeft: 12 }}>
+              <button
+                type="button"
+                disabled={__interactionDisabled}
+                onClick={() => {
+                  // ✅ state-only open
+                  __setTermsOpenStateOnly(true);
+                  try {
+                    __loadTermsMd(uiLang || "en");
+                  } catch {}
+                }}
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  padding: "6px 10px 6px 8px",
+                  cursor: __interactionDisabled ? "not-allowed" : "pointer",
+                  color: "var(--text-muted)",
+                  fontSize: 12,
+                  fontWeight: 700,
+                  textDecoration: "underline",
+                  textUnderlineOffset: 2,
+                  opacity: __interactionDisabled ? 0.55 : 1,
+                }}
+                title={(uiText?.[uiLang]?.layout?.termsOfService || uiText?.en?.layout?.termsOfService) || "Terms of Service"}
+                aria-label={(uiText?.[uiLang]?.layout?.termsOfService || uiText?.en?.layout?.termsOfService) || "Terms of Service"}
+              >
+                {(uiText?.[uiLang]?.layout?.termsOfService || uiText?.en?.layout?.termsOfService) || "Terms of Service"}
+              </button>
+            </div>
+
+
             <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
               <LoginButton uiLang={uiLang} />
 
@@ -965,6 +1174,37 @@ function LayoutShell({
                 <option value="zh-CN">简体中文</option>
               </select>
             </div>
+
+            <div style={{ display: "inline-flex", alignItems: "center", paddingLeft: 12 }}>
+              <button
+                type="button"
+                disabled={__interactionDisabled}
+                onClick={() => {
+                  // ✅ state-only open
+                  __setTermsOpenStateOnly(true);
+                  try {
+                    __loadTermsMd(uiLang || "en");
+                  } catch {}
+                }}
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  padding: "6px 10px 6px 8px",
+                  cursor: __interactionDisabled ? "not-allowed" : "pointer",
+                  color: "var(--text-muted)",
+                  fontSize: 12,
+                  fontWeight: 700,
+                  textDecoration: "underline",
+                  textUnderlineOffset: 2,
+                  opacity: __interactionDisabled ? 0.55 : 1,
+                }}
+                title={(uiText?.[uiLang]?.layout?.termsOfService || uiText?.en?.layout?.termsOfService) || "Terms of Service"}
+                aria-label={(uiText?.[uiLang]?.layout?.termsOfService || uiText?.en?.layout?.termsOfService) || "Terms of Service"}
+              >
+                {(uiText?.[uiLang]?.layout?.termsOfService || uiText?.en?.layout?.termsOfService) || "Terms of Service"}
+              </button>
+            </div>
+
           </div>
 
           <div
@@ -1100,6 +1340,64 @@ function LayoutShell({
                       {usage.month.byKind.tts || 0}
                     </div>
                   )}
+                  {/* 模組：訂閱方案 */}
+                  <div style={{ marginTop: 8 }}>
+                    <div
+                      style={{
+                        fontSize: 11,
+                        color: "var(--text-muted)",
+                        marginBottom: 6,
+                      }}
+                    >
+                      方案：{planText}
+                    </div>
+
+                    {profile?.plan === "free" ? (
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <button
+                          type="button"
+                          disabled={__billingBusy}
+                          onClick={() => startCheckout("month")}
+                          style={{
+                            flex: 1,
+                            padding: "8px 10px",
+                            borderRadius: 10,
+                            border: "1px solid var(--border-subtle)",
+                            background: "var(--card-bg)",
+                            color: "var(--text-main)",
+                            fontSize: 12,
+                            cursor: "pointer",
+                            textAlign: "center",
+                            opacity: __billingBusy ? 0.6 : 1,
+                          }}
+                        >
+                          月繳升級
+                        </button>
+
+                        <button
+                          type="button"
+                          disabled={__billingBusy}
+                          onClick={() => startCheckout("year")}
+                          style={{
+                            flex: 1,
+                            padding: "8px 10px",
+                            borderRadius: 10,
+                            border: "1px solid var(--border-subtle)",
+                            background: "var(--card-bg)",
+                            color: "var(--text-main)",
+                            fontSize: 12,
+                            cursor: "pointer",
+                            textAlign: "center",
+                            opacity: __billingBusy ? 0.6 : 1,
+                          }}
+                        >
+                          年繳升級
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
+
+
 
                   <div
                     style={{
