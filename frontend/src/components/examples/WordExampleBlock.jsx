@@ -532,6 +532,12 @@ export default function WordExampleBlock({
     "有參考未被使用，請再重新產生"
   );
 
+  // ✅ 2026-01-27：例句 header 旁「ⓘ」提示（參考形式說明）
+  const tHeadwordRefHint = __t(
+    "exampleBlock.headwordRefHint",
+    "這個參考形式會提高例句出現機率，但不保證一定出現"
+  );
+
   // ============================================================
   // Task F2 — Favorites/Learning：auto-refresh 預設關閉（deprecated）
   // - 目標：Favorites 左右切換「不自動」打 /api/dictionary/examples
@@ -2089,7 +2095,9 @@ setRefsByWordKey((prev) => {
             )}
           </>
         )}
-      </div><ExampleList
+      </div>
+
+      <ExampleList
         examples={Array.isArray(examples) ? examples : []}
         loading={loading}
         sectionExample={sectionExample}
@@ -2110,6 +2118,9 @@ setRefsByWordKey((prev) => {
 
         // ✅ Phase 2-UX（Step A-6）：例句標題顯示 headword（銳角外方匡）
         headword={headwordForExampleTitle}
+
+        // ✅ 2026-01-27：參考形式提示（ⓘ hover）
+        headwordRefHint={tHeadwordRefHint}
 
         // ✅ Phase 2-UX（Step A-1）：轉傳到 ExampleSentence（例句標題列）用的 multiRef toggle props
         // - 這裡只提供資料/事件，不改現有 UI；ExampleSentence 若尚未接，這些 props 也不會影響任何行為
@@ -2205,3 +2216,12 @@ setRefsByWordKey((prev) => {
 // __pad_keep_linecount_posinfo
 
 // frontend/src/components/examples/WordExampleBlock.jsx
+
+
+
+
+
+
+
+
+

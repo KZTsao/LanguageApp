@@ -23,7 +23,7 @@
 export const UI_TEXT_INIT_STATE = {
   file: "frontend/src/uiText.js",
   module: "uiText",
-  ts: "2026-01-06",
+  ts: "2026-01-26",
   notes:
     "Added wordCard.exampleBlock keys for WordExampleBlock strict i18n (multi-ref / refs UI). Kept existing i18n data unchanged; appended only.",
 };
@@ -137,6 +137,8 @@ const uiText = {
       // ✅ WordExampleBlock（新增：refs/multi-ref 共用字串集中）
       exampleBlock: {
         multiRefLabel: "多重參考",
+        headwordRefLabel: "參考形式",
+        headwordRefHint: "這個參考形式會提高例句出現機率，但不保證一定出現",
         refPlaceholder: "新增參考（名詞/動詞/文法）...",
         addRefBtn: "加入",
         addRefValidating: "檢核中…",
@@ -494,6 +496,8 @@ const uiText = {
       // ✅ WordExampleBlock（NEW: shared strings for multi-ref/refs UI）
       exampleBlock: {
         multiRefLabel: "Multi-ref",
+        headwordRefLabel: "Reference form",
+        headwordRefHint: "This reference form increases the chance it appears in examples, but it\'s not guaranteed",
         refPlaceholder: "Add reference (noun/verb/grammar)...",
         addRefBtn: "Add",
         addRefValidating: "檢核中…",
@@ -1192,6 +1196,8 @@ const uiText = {
       // ✅ WordExampleBlock（NEU: gemeinsame Strings für Multi-ref/Refs UI）
       exampleBlock: {
         multiRefLabel: "Multi-ref",
+        headwordRefLabel: "Referenzform",
+        headwordRefHint: "Diese Referenzform erhöht die Chance, dass sie in Beispielsätzen erscheint, ist aber nicht garantiert",
         refPlaceholder: "Referenz hinzufügen (Nomen/Verb/Grammatik)...",
         addRefBtn: "Hinzufügen",
         addRefValidating: "檢核中…",
@@ -1540,6 +1546,8 @@ const uiText = {
       // ✅ WordExampleBlock（جديد: نصوص مشتركة لواجهة multi-ref/refs）
       exampleBlock: {
         multiRefLabel: "Multi-ref",
+        headwordRefLabel: "صيغة مرجعية",
+        headwordRefHint: "هذه الصيغة المرجعية تزيد احتمال ظهورها في أمثلة الجمل، لكنها ليست مضمونة",
         refPlaceholder: "أضف مرجعًا (اسم/فعل/قواعد)...",
         addRefBtn: "إضافة",
         addRefValidating: "檢核中…",

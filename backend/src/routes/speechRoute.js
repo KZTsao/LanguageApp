@@ -79,6 +79,16 @@ const upload = multer({
 
 const router = express.Router();
 
+// ============================================================
+// DEV bypass: allow /api/speech/asr without login
+// - This router never rejects requests due to missing Authorization.
+// - Usage accounting will treat unauthenticated callers as anonymous (userId empty).
+// ============================================================
+router.use((req, res, next) => {
+  return next();
+});
+
+
 // 共享 Speech client（ADC：GOOGLE_APPLICATION_CREDENTIALS）
 const speechClient = new SpeechClient();
 

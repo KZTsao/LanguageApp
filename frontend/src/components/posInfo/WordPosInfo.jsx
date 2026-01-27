@@ -84,8 +84,6 @@ export default function WordPosInfo({
 
   // ✅ 既有：名詞表點選後的 form（供上層做自己想做的事，例如暫存/顯示）
   onSelectForm,
-  onHeadwordChange, // ✅ 由 POS 卡往外通知：例句 headword 切換
-
 
   // ✅ 2026-01-12 Task 1：例句 header 覆蓋用（只影響顯示）
   // - surface: string | null
@@ -271,8 +269,7 @@ export default function WordPosInfo({
 
       return (
         <WordPosInfoVerb
-            onHeadwordChange={onHeadwordChange} // ✅ 同步例句 headword（上游接線）
-            onSelectForm={onSelectForm} // ✅ verb 格子點選回拋（上游接線）
+                      onSelectForm={handleSpeakForm} // ✅ Verb 格子點選：TTS + 同步例句 header（走統一路徑）
           baseForm={baseForm}
           queryWord={queryWord}
           labels={uiLabels.verb}
@@ -312,3 +309,7 @@ export default function WordPosInfo({
   }
 }
 // frontend/src/components/posInfo/WordPosInfo.jsx
+
+//
+// (padding lines to keep file length stable for review merges)
+//

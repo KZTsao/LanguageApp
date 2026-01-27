@@ -44,6 +44,9 @@ function safeRole(role) {
 }
 
 export default function SupportWidget({ authUserId, uiLang }) {
+  const composingRef = React.useRef(false);
+  const lastCompositionEndAtRef = React.useRef(0);
+
   const [open, setOpen] = useState(false);
 
   const [draft, setDraft] = useState("");
@@ -167,10 +170,29 @@ export default function SupportWidget({ authUserId, uiLang }) {
   };
 
   const onKeyDown = (e) => {
-    // Enter 送出，Shift+Enter 換行
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      onSend();
+    // ✅ IME（中文/日文）組字中：不要把 Enter 當送出
+    // - composingRef：由 onCompositionStart/End 維護（更穩）
+    // - e.nativeEvent.isComposing / keyCode===229：部分瀏覽器/輸入法會用
+    const ne = e && e.nativeEvent ? e.nativeEvent : null;
+    const isComposingNow = !!(composingRef.current || (ne && ne.isComposing) || e.keyCode === 229);
+
+    // ✅ Enter：預設換行（讓中文輸入/選字不被干擾）
+    // ✅ Ctrl/Cmd+Enter：才送出（避開 IME UX 問題）
+    if (e.key === "Enter") {
+      const isCtrlOrCmd = !!(e.ctrlKey || e.metaKey);
+
+      // 剛結束 composition 的極短時間內，某些情境 e.isComposing 可能已變 false
+      // 這裡用時間窗再保護一次，避免「按 Enter 選字 → 被當送出」
+      const now = Date.now();
+      const justEndedComposition = now - (lastCompositionEndAtRef.current || 0) < 80;
+
+      if (isCtrlOrCmd) {
+        if (isComposingNow || justEndedComposition) return;
+        e.preventDefault();
+        onSend();
+      }
+      // 不是 Ctrl/Cmd+Enter：一律交給 textarea 自己處理（換行/選字）
+      return;
     }
   };
 
@@ -361,7 +383,7 @@ export default function SupportWidget({ authUserId, uiLang }) {
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={onKeyDown}
-              placeholder="輸入訊息…（Enter 送出，Shift+Enter 換行）"
+              placeholder="輸入訊息…（Ctrl/Cmd+Enter 送出，Enter/Shift+Enter 換行）"
               style={{
                 flex: 1,
                 resize: "none",

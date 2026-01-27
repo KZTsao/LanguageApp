@@ -134,7 +134,9 @@ function mountRoutes(app) {
   app.use("/api/tts", ttsRoute);
   INIT_STATUS.routes.tts = true;
 
-  app.use("/api/speech", authMiddleware, speechRoute);
+  // DEV: speech API 不強制登入（避免前端 session 阻塞）
+// 若需恢復登入限制，改回：app.use("/api/speech", authMiddleware, speechRoute);
+app.use("/api/speech", speechRoute);
   INIT_STATUS.routes.speech = true;
 
   // ✅ 2026-01-24：即時客服 Support API（/api/support/*）

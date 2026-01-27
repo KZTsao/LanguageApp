@@ -28,6 +28,12 @@
 // - 修正：只有 raw 尚未包含該 pronoun 時才補上
 
 // ⭐ Step E-1（本輪變更：動詞格子點選同步例句 headword）
+//
+// ✅ 2026-01-26 Patch Note:
+// - Verb：格子點選時，surface 會包含「主詞 + 詞形」(例如：ich kümmere mich)
+// - 走 WordPosInfo.handleSpeakForm 統一路徑：TTS + onEntrySurfaceChange 同步例句 header
+// - 不會自動重新造句（造句仍由使用者手動點按鈕）
+//
 // - 點選任一動詞格子（含自動定位 queryWord 命中後的手動點選）
 //   會播放 TTS + focus（既有行為）
 // - 另外呼叫 onHeadwordChange(form) 讓例句區 headword 跟著切換
@@ -43,7 +49,6 @@ export default function WordPosInfoVerb({
   labels = {},
   extraInfo = {},
   onSelectForm,
-    onHeadwordChange, // ✅ 動詞格子點選時同步切換例句 headword
   onWordClick, // ✅ 外層若有傳，就用它重新查詢
   uiLang,
 }) {
@@ -577,16 +582,22 @@ export default function WordPosInfoVerb({
     };
     triggerPulseRerender();
 
-// ✅ Step E：同步例句 headword（讓 Example 區跟著動詞格子切換）
-try {
-  if (typeof onHeadwordChange === "function") {
-    onHeadwordChange(trimmed);
-  }
-} catch (e) {
-  // eslint-disable-next-line no-console
-  console.warn("[WordPosInfoVerb] onHeadwordChange failed:", e);
-}
-
+    // ✅ Step E（方案A）：把「主詞 + 動詞詞形」透過 onSelectForm 往上回拋
+    // - 上層 WordPosInfo.handleSpeakForm 會：
+    //   1) 播放 TTS（de-DE）
+    //   2) 透過 onEntrySurfaceChange 同步例句 header 的 headword override
+    //
+    // ⚠️ 注意：這裡只改 header/headword，不會自動重新造句（造句仍由使用者手動點按鈕觸發）
+    const subjectMap = {
+      ich: ichLabel,
+      du: duLabel,
+      er_sie_es: thirdPerson,
+      wir: wirLabel,
+      ihr: ihrLabel,
+      sie_Sie: siePerson,
+    };
+    const subjectText = (subjectMap[personKey] || "").trim();
+    const surfaceWithSubject = subjectText ? `${subjectText} ${trimmed}` : trimmed;
 
     if (typeof onSelectForm === "function") {
       onSelectForm({
@@ -594,29 +605,18 @@ try {
         baseForm,
         tense,
         personKey,
-          surface: trimmed,
-        form: trimmed,
+        surface: surfaceWithSubject, // ✅ 例句 header 要顯示這個（含主詞）
+        form: trimmed, // ✅ 保留純詞形（不含主詞），給上游如果要用
         verbSubtype: verbSubtype || "",
         separable: !!effectiveSeparable,
         reflexive: !!reflexive,
       });
+      return; // ✅ 交給上層 handleSpeakForm 播放 TTS + 同步 header
     }
 
-    // ✅ 點選後直接播放 TTS（德語）
-    // ✅ er/sie/es 與 sie/Sie：只念下拉選到的單一主詞
+    // ✅ fallback：若外層沒有傳 onSelectForm，就在這裡直接播放 TTS（避免點了沒反應）
     try {
-      const subjectMap = {
-        ich: ichLabel,
-        du: duLabel,
-        er_sie_es: thirdPerson,
-        wir: wirLabel,
-        ihr: ihrLabel,
-        sie_Sie: siePerson,
-      };
-
-      const subjectText = (subjectMap[personKey] || "").trim();
-      const spokenText = subjectText ? `${subjectText} ${trimmed}` : trimmed;
-
+      const spokenText = surfaceWithSubject;
       playTTS(spokenText, "de-DE");
     } catch (e) {
       // eslint-disable-next-line no-console

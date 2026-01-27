@@ -921,7 +921,7 @@ export default function SpeakAnalyzePanel({
             {typeof onPlayTarget === "function" ? (
                   <div
                     
-                    ariaLabel="play-target"
+                    aria-label="play-target"
                     style={{ width: 16, height: 16, borderRadius: 9, marginTop: 2 }}
                   />
                 ) : null}

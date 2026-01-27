@@ -16,3 +16,5 @@ node_modules
 *.json
 backend/src/usage-log.jsonl
 backend/src/usage-log.jsonl
+backend/src/usage-log.jsonl
+api/

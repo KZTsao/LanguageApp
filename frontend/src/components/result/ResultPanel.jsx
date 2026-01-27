@@ -1,4 +1,4 @@
-// frontend/src/components/result/ResultPanel.jsx
+// PATH: frontend/src/components/result/ResultPanel.jsx
 /**
  * 文件說明：
  * - 本元件負責顯示查詢結果（WordCard/GrammarCard）與結果導覽（history 前後頁）
@@ -687,14 +687,23 @@ function ResultPanel({
   // - 避免干擾輸入框：focus 在 input/textarea/select/contenteditable 時不觸發
   React.useEffect(() => {
     if (__interactionDisabled) return;
-    function shouldIgnoreKeydown() {
+    function shouldIgnoreKeydown(e) {
       try {
-        const el = document && document.activeElement;
-        if (!el) return false;
-        const tag = (el.tagName || "").toLowerCase();
-        if (tag === "input" || tag === "textarea" || tag === "select") return true;
-        if (typeof el.isContentEditable === "boolean" && el.isContentEditable) return true;
-        return false;
+        // 優先用事件 target（更準，避免 activeElement 在 portal/overlay 時不可靠）
+        const el0 = e && e.target ? e.target : null;
+        const el1 = typeof document !== "undefined" ? document.activeElement : null;
+
+        function __isEditable(el) {
+          if (!el) return false;
+          const tag = (el.tagName || "").toLowerCase();
+          if (tag === "input" || tag === "textarea" || tag === "select") return true;
+          if (typeof el.isContentEditable === "boolean" && el.isContentEditable) return true;
+          const role = typeof el.getAttribute === "function" ? el.getAttribute("role") : "";
+          if (role === "textbox") return true;
+          return false;
+        }
+
+        return __isEditable(el0) || __isEditable(el1);
       } catch (err) {
         return false;
       }
@@ -702,7 +711,17 @@ function ResultPanel({
 
     function onKeyDown(e) {
       if (!e) return;
-      if (shouldIgnoreKeydown()) return;
+
+      // ✅ IME（中文/日文）組字中：不要攔鍵、不做任何快捷
+      // - e.isComposing：標準欄位
+      // - keyCode===229：部分瀏覽器/輸入法會用 229 表示 composition
+      if (e.isComposing || e.keyCode === 229) return;
+
+      // ✅ 只處理左右鍵，其他鍵（含 Enter）一律不處理
+      if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+
+      // ✅ 避免干擾輸入框（textarea/input/contenteditable 等）
+      if (shouldIgnoreKeydown(e)) return;
 
       if (e.key === "ArrowLeft") {
         if (canPrevEffective && typeof effectiveOnPrev === "function") {

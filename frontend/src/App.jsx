@@ -125,6 +125,9 @@ import { getSnapshot, upsertSnapshot } from "./app/snapshotStore"; // Task 4C-fi
 // ✅ 新增：統一帶 Authorization
 import { apiFetch } from "./utils/apiClient";
 
+// ✅ Email/Password auth（Supabase）
+import { supabase } from "./utils/supabaseClient";
+
 // ============================================================
 // Snapshot helpers (Task 4C) — only upsert when next snapshot is "more complete"
 // - prevents less-complete data from overwriting better snapshots
@@ -176,10 +179,428 @@ import { useAppState } from "./app/useAppState";
 import { useLibraryController } from "./hooks/useLibraryController";
 import { findFavoritesSnapshot, upsertFavoritesSnapshot } from "./app/favoritesSnapshotStorage";
 
+// ============================================================
+// Email/Password Auth Pages (minimal, no extra files)
+// - /login            : Email 登入 / 註冊 / 忘記密碼
+// - /auth/callback     : Email 驗證 / OAuth / Recovery callback（解析 URL token）
+// - /reset-password    : 重設密碼（Recovery flow）
+// ============================================================
+const __authBoxStyle = {
+  maxWidth: 520,
+  margin: "32px auto",
+  padding: 20,
+  borderRadius: 16,
+  border: "1px solid var(--border-subtle)",
+  background: "var(--card-bg)",
+  color: "var(--text-main)",
+};
+
+const __inputStyle = {
+  width: "100%",
+  padding: "10px 12px",
+  borderRadius: 10,
+  border: "1px solid var(--border-subtle)",
+  background: "var(--bg)",
+  color: "var(--text-main)",
+  fontSize: 14,
+};
+
+const __btnStyle = {
+  padding: "10px 12px",
+  borderRadius: 10,
+  border: "1px solid var(--border-subtle)",
+  background: "var(--bg-soft)",
+  color: "var(--text-main)",
+  fontSize: 14,
+  cursor: "pointer",
+};
+
+function __safeReplace(url) {
+  try {
+    window.location.replace(url);
+  } catch {
+    window.location.href = url;
+  }
+}
+
+function AuthCallbackLite() {
+  const [status, setStatus] = useState("Signing you in…");
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const run = async () => {
+      try {
+        // 1) 讓 supabase-js 解析 URL token（query/hash）並落地 session
+        const {
+          data: { session },
+          error,
+        } = await supabase.auth.getSession();
+
+        if (cancelled) return;
+        if (error) {
+          setErr(error?.message || "Auth callback failed");
+          return;
+        }
+
+        // 2) Recovery flow：Supabase 會帶 type=recovery
+        const sp = new URLSearchParams(String(window.location.search || ""));
+        const type = sp.get("type");
+
+        if (type === "recovery") {
+          setStatus("Redirecting to reset password…");
+          __safeReplace("/reset-password");
+          return;
+        }
+
+        // 3) Email 驗證 / OAuth
+        // - session 可能為 null（例如 Email 驗證流程視設定而定），此處不強制判斷
+        setStatus(session ? "Done. Redirecting…" : "Almost done. Redirecting…");
+        __safeReplace("/");
+      } catch (e) {
+        if (cancelled) return;
+        setErr(e?.message || String(e));
+      }
+    };
+
+    run();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return (
+    <div style={{ padding: 24 }}>
+      <div style={__authBoxStyle}>
+        <h2 style={{ margin: "0 0 8px" }}>{status}</h2>
+        <p style={{ margin: 0, color: "var(--text-muted)" }}>請稍候，正在完成登入流程</p>
+        {err && (
+          <div style={{ marginTop: 12, color: "#ef4444", whiteSpace: "pre-wrap" }}>
+            Auth error: {err}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function EmailAuthPageLite() {
+  const { user, loading } = useAuth();
+  const [mode, setMode] = useState("signin"); // signin | signup | forgot
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [password2, setPassword2] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [err, setErr] = useState("");
+
+  // 已登入就導回首頁（避免重複登入）
+  useEffect(() => {
+    if (loading) return;
+    if (user) __safeReplace("/");
+  }, [user, loading]);
+
+  const doSignIn = async () => {
+    setBusy(true);
+    setErr("");
+    setMsg("");
+    try {
+      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) throw error;
+      setMsg("登入成功，正在導回首頁…");
+      __safeReplace("/");
+    } catch (e) {
+      setErr(e?.message || String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const doSignUp = async () => {
+    setBusy(true);
+    setErr("");
+    setMsg("");
+    try {
+      if (!email || !password) throw new Error("請輸入 Email 與密碼");
+      if (password.length < 6) throw new Error("密碼至少 6 碼（Supabase 預設）");
+      if (password !== password2) throw new Error("兩次密碼不一致");
+
+      const { error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          // Email 驗證信 / 註冊後導回的入口（由本檔的 /auth/callback 接）
+          emailRedirectTo: `${window.location.origin}/auth/callback`,
+        },
+      });
+      if (error) throw error;
+
+      // 若 Supabase 有開「Email confirmations」，此時多半不會立刻有 session
+      setMsg("已送出驗證信，請到信箱點擊連結完成驗證後再登入");
+    } catch (e) {
+      setErr(e?.message || String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const doForgot = async () => {
+    setBusy(true);
+    setErr("");
+    setMsg("");
+    try {
+      if (!email) throw new Error("請先輸入 Email");
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: `${window.location.origin}/auth/callback`,
+      });
+      if (error) throw error;
+      setMsg("已寄出重設密碼信，請到信箱點擊連結繼續");
+    } catch (e) {
+      setErr(e?.message || String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const title =
+    mode === "signin" ? "Email 登入" : mode === "signup" ? "Email 註冊" : "忘記密碼";
+
+  return (
+    <div style={{ padding: 24 }}>
+      <div style={__authBoxStyle}>
+        <h2 style={{ margin: "0 0 12px" }}>{title}</h2>
+
+        <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+          <button
+            style={{ ...__btnStyle, opacity: mode === "signin" ? 1 : 0.7 }}
+            onClick={() => {
+              setMode("signin");
+              setErr("");
+              setMsg("");
+            }}
+            disabled={busy}
+          >
+            登入
+          </button>
+          <button
+            style={{ ...__btnStyle, opacity: mode === "signup" ? 1 : 0.7 }}
+            onClick={() => {
+              setMode("signup");
+              setErr("");
+              setMsg("");
+            }}
+            disabled={busy}
+          >
+            註冊
+          </button>
+          <button
+            style={{ ...__btnStyle, opacity: mode === "forgot" ? 1 : 0.7 }}
+            onClick={() => {
+              setMode("forgot");
+              setErr("");
+              setMsg("");
+            }}
+            disabled={busy}
+          >
+            忘記密碼
+          </button>
+          <button style={{ ...__btnStyle, marginLeft: "auto" }} onClick={() => __safeReplace("/")}
+            disabled={busy}
+          >
+            回首頁
+          </button>
+        </div>
+
+        <div style={{ display: "grid", gap: 10 }}>
+          <div>
+            <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 6 }}>Email</div>
+            <input
+              style={__inputStyle}
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="name@example.com"
+              autoComplete="email"
+            />
+          </div>
+
+          {mode !== "forgot" && (
+            <div>
+              <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 6 }}>密碼</div>
+              <input
+                style={__inputStyle}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="至少 6 碼"
+                type="password"
+                autoComplete={mode === "signin" ? "current-password" : "new-password"}
+              />
+            </div>
+          )}
+
+          {mode === "signup" && (
+            <div>
+              <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 6 }}>再次輸入密碼</div>
+              <input
+                style={__inputStyle}
+                value={password2}
+                onChange={(e) => setPassword2(e.target.value)}
+                type="password"
+                autoComplete="new-password"
+              />
+            </div>
+          )}
+
+          <div style={{ display: "flex", gap: 10, marginTop: 4, flexWrap: "wrap" }}>
+            {mode === "signin" && (
+              <button style={__btnStyle} disabled={busy} onClick={doSignIn}>
+                {busy ? "登入中…" : "登入"}
+              </button>
+            )}
+            {mode === "signup" && (
+              <button style={__btnStyle} disabled={busy} onClick={doSignUp}>
+                {busy ? "送出中…" : "註冊並寄驗證信"}
+              </button>
+            )}
+            {mode === "forgot" && (
+              <button style={__btnStyle} disabled={busy} onClick={doForgot}>
+                {busy ? "送出中…" : "寄重設密碼信"}
+              </button>
+            )}
+          </div>
+
+          {msg && <div style={{ color: "var(--text-muted)", whiteSpace: "pre-wrap" }}>{msg}</div>}
+          {err && (
+            <div style={{ color: "#ef4444", whiteSpace: "pre-wrap" }}>
+              {err}
+            </div>
+          )}
+
+          <div style={{ marginTop: 8, fontSize: 12, color: "var(--text-muted)", lineHeight: 1.5 }}>
+            <div>• Email 驗證信與重設密碼信由 Supabase Auth 寄送</div>
+            <div>• 若你在 Supabase 後台有開啟 Email confirmations：註冊後必須先驗證才能登入</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ResetPasswordPageLite() {
+  const [p1, setP1] = useState("");
+  const [p2, setP2] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [err, setErr] = useState("");
+
+  const doReset = async () => {
+    setBusy(true);
+    setErr("");
+    setMsg("");
+    try {
+      if (!p1 || p1.length < 6) throw new Error("密碼至少 6 碼");
+      if (p1 !== p2) throw new Error("兩次密碼不一致");
+      const { error } = await supabase.auth.updateUser({ password: p1 });
+      if (error) throw error;
+      setMsg("密碼已更新，正在導回首頁…");
+      __safeReplace("/");
+    } catch (e) {
+      setErr(e?.message || String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={{ padding: 24 }}>
+      <div style={__authBoxStyle}>
+        <h2 style={{ margin: "0 0 12px" }}>重設密碼</h2>
+        <div style={{ display: "grid", gap: 10 }}>
+          <div>
+            <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 6 }}>新密碼</div>
+            <input
+              style={__inputStyle}
+              value={p1}
+              onChange={(e) => setP1(e.target.value)}
+              type="password"
+              autoComplete="new-password"
+            />
+          </div>
+          <div>
+            <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 6 }}>再次輸入新密碼</div>
+            <input
+              style={__inputStyle}
+              value={p2}
+              onChange={(e) => setP2(e.target.value)}
+              type="password"
+              autoComplete="new-password"
+            />
+          </div>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <button style={__btnStyle} disabled={busy} onClick={doReset}>
+              {busy ? "更新中…" : "更新密碼"}
+            </button>
+            <button style={__btnStyle} disabled={busy} onClick={() => __safeReplace("/")}>回首頁</button>
+          </div>
+          {msg && <div style={{ color: "var(--text-muted)", whiteSpace: "pre-wrap" }}>{msg}</div>}
+          {err && (
+            <div style={{ color: "#ef4444", whiteSpace: "pre-wrap" }}>
+              {err}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AppInner() {
   // ✅ 取得登入 userId（未登入 = guest bucket）
   const { user } = useAuth();
   const authUserId = user && user.id ? user.id : "";
+
+  // ✅ 2026-01-26：Support Admin routing（最小侵入、避免依賴 router / import.meta）
+  // - 只用 window.location（不使用 import.meta，避免「Cannot use import.meta outside a module」）
+  // - 同時支援：/support-admin、/support-admin/、以及 hash #/support-admin（保守）
+  const __isSupportAdminPath = (() => {
+    try {
+      const w = typeof window !== "undefined" ? window : null;
+      if (!w || !w.location) return false;
+
+      const path = String(w.location.pathname || "").replace(/\/+$/g, "");
+      const hash = String(w.location.hash || "");
+
+      if (path.endsWith("/support-admin")) return true;
+      if (hash === "#/support-admin" || hash === "#/support-admin/") return true;
+
+      return false;
+    } catch {
+      return false;
+    }
+  })();
+
+  if (__isSupportAdminPath) {
+    return <SupportAdminPage />;
+  }
+
+  // ✅ 2026-01-26：Email/Password Auth routing（最小侵入、避免依賴 Router）
+  // - /login：Email 登入/註冊/忘記密碼
+  // - /auth/callback：Supabase email verify / OAuth / recovery callback
+  // - /reset-password：重設密碼
+  const __authPath = (() => {
+    try {
+      const w = typeof window !== "undefined" ? window : null;
+      if (!w || !w.location) return "";
+      return String(w.location.pathname || "").replace(/\/+$/g, "");
+    } catch {
+      return "";
+    }
+  })();
+
+  if (__authPath.endsWith("/auth/callback")) return <AuthCallbackLite />;
+  if (__authPath.endsWith("/reset-password")) return <ResetPasswordPageLite />;
+  if (__authPath.endsWith("/login") || __authPath.endsWith("/auth")) return <EmailAuthPageLite />;
+
 
   // ✅ Step 1：集中 state（不含 effect）
   const { keys, helpers, state, actions } = useAppState({

@@ -444,14 +444,6 @@ function LayoutShell({
   }, []);
 
   useEffect(() => {
-    const __onKeyDown = (e) => {
-      if (!__termsOpenStateOnly) return;
-      if (e && e.key === "Escape") {
-        __setTermsOpenStateOnly(false);
-      }
-    };
-    window.addEventListener("keydown", __onKeyDown);
-    return () => window.removeEventListener("keydown", __onKeyDown);
   }, [__isTermsOpen]);
 
   const __renderTermsModal = () => {

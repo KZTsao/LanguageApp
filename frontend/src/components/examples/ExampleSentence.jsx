@@ -22,15 +22,58 @@ const API_BASE = import.meta.env.VITE_API_BASE_URL || "";
 // - Token source of truth: supabase.auth.getSession()
 // - If no session, returns empty headers (backend may 401; expected)
 const __getAuthHeadersForApi = async () => {
+  // NOTE:
+  // - supabase.auth.getSession() should be fast (local storage), but in some environments
+  //   it can hang due to browser/extension issues. We must never block the click handler.
+  // - If session cannot be obtained quickly, we return {} and let backend decide (may 401).
+  const __dbg =
+    (import.meta &&
+      import.meta.env &&
+      (import.meta.env.VITE_DEBUG_SPEECH_AUTH || import.meta.env.VITE_DEBUG_AUTH)) ||
+    "";
+
+  const __timeoutMs = 400;
+
+  const __withTimeout = (p, ms) =>
+    Promise.race([
+      p,
+      new Promise((resolve) => {
+        try {
+          if (typeof window !== "undefined" && typeof window.setTimeout === "function") {
+            window.setTimeout(() => resolve({ __timeout: true }), ms);
+          } else {
+            setTimeout(() => resolve({ __timeout: true }), ms);
+          }
+        } catch (e) {
+          setTimeout(() => resolve({ __timeout: true }), ms);
+        }
+      }),
+    ]);
+
   try {
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
+    if (!supabase || !supabase.auth || typeof supabase.auth.getSession !== "function") {
+      if (__dbg === "1") console.warn("[authHeaders] supabase client not ready");
+      return {};
+    }
+
+    const res = await __withTimeout(supabase.auth.getSession(), __timeoutMs);
+
+    // timeout guard
+    if (res && res.__timeout) {
+      if (__dbg === "1") console.warn("[authHeaders] getSession timeout -> no auth header");
+      return {};
+    }
+
+    const session = res && res.data ? res.data.session : null;
 
     const token = session && session.access_token ? session.access_token : "";
-    if (!token) return {};
+    if (!token) {
+      if (__dbg === "1") console.warn("[authHeaders] no access_token in session");
+      return {};
+    }
     return { Authorization: `Bearer ${token}` };
   } catch (e) {
+    if (__dbg === "1") console.warn("[authHeaders] getSession failed", e);
     return {};
   }
 };
@@ -183,6 +226,10 @@ export default function ExampleSentence({
   conversationToggleTooltip,
   headword,
   headwordOverride,
+
+  // ✅ 2026-01-27：參考形式提示（小 i / hover）
+  headwordRefHint,
+
   multiRefEnabled,
   onToggleMultiRef,
   multiRefToggleLabel,
@@ -232,6 +279,10 @@ export default function ExampleSentence({
   }, [effectiveHeadword]);
 
   const hasHeadword = safeHeadword !== "not available";
+
+  // ✅ 2026-01-27：參考形式提示（小 i / hover）
+  // - 若上游未提供（或字串為空），則不顯示 icon。
+  const __headwordRefHint = (headwordRefHint || "").toString();
 
   // ✅ headword click gate
   const canClickHeadword = useMemo(() => {
@@ -342,6 +393,7 @@ const onPlayTarget =
   // - Recording / replay / analyze are performed inside the panel.
   // - Analyze is single-run: once done, the analyze button disappears.
   const [__speakPanelOpen, __setSpeakPanelOpen] = useState(() => false);
+  const [__speakPanelHasAudio, __setSpeakPanelHasAudio] = useState(() => false);
   const [__speakPanelAnalyzeState, __setSpeakPanelAnalyzeState] = useState(() => "idle"); // idle | processing | done | error
   const [__speakPanelTokens, __setSpeakPanelTokens] = useState(() => null);
   const [__speakPanelTranscript, __setSpeakPanelTranscript] = useState(() => "");
@@ -387,6 +439,7 @@ const __pronHook = usePronunciationRecorder({
   loading: !!loading,
   onAudioReady: (sentence, blob, meta) => {
     try { __speakPanelAudioBlobRef.current = blob || null; } catch (e) {}
+    try { __setSpeakPanelHasAudio(!!blob); } catch (e) {}
     if (typeof onPronunciationAudioReady === "function") {
       try { onPronunciationAudioReady(sentence, blob, meta); } catch (e2) {}
     }
@@ -1473,20 +1526,66 @@ if (__USE_PRONUNCIATION_RECORDER_HOOK && __pronHook && typeof __pronHook.replay 
                 }}
               >
                 {safeHeadword}
-              </span>
+                </span>
+                {__headwordRefHint && hasHeadword ? (
+                  <span
+                    title={__headwordRefHint}
+                    onClick={(e) => e.stopPropagation()}
+                    style={{
+                      marginLeft: 6,
+                      cursor: "help",
+                      fontSize: 12,
+                      opacity: 0.72,
+                      lineHeight: "14px",
+                      alignSelf: "center",
+                    }}
+                    aria-label="info"
+                  >
+                    ⓘ
+                  </span>
+                ) : null}
+
             </button>
           ) : (
             <span
               style={{
-                ...getHeadwordBadgeStyle(hasHeadword),
-                ...getHeadwordClickableStyle(false, !!loading),
+                display: "inline-flex",
+                alignItems: "center",
               }}
-              title={hasHeadword ? safeHeadword : "not available"}
-              aria-label="example-headword"
-              data-ref="exampleHeadwordBadge"
+              aria-label="example-headword-wrap"
+              data-ref="exampleHeadwordWrap"
             >
-              {safeHeadword}
+              <span
+                style={{
+                  ...getHeadwordBadgeStyle(hasHeadword),
+                  ...getHeadwordClickableStyle(false, !!loading),
+                }}
+                title={hasHeadword ? safeHeadword : "not available"}
+                aria-label="example-headword"
+                data-ref="exampleHeadwordBadge"
+              >
+                {safeHeadword}
+              </span>
+              {__headwordRefHint && hasHeadword ? (
+                <span
+                  title={__headwordRefHint}
+                  onClick={(e) => e.stopPropagation()}
+                  style={{
+                    marginLeft: 6,
+                    cursor: "help",
+                    fontSize: 12,
+                    opacity: 0.72,
+                    lineHeight: "14px",
+                    alignSelf: "center",
+                  }}
+                  aria-label="info"
+                  data-ref="exampleHeadwordRefHint"
+                >
+                  ⓘ
+                </span>
+              ) : null}
             </span>
+
           )}
         </div>
 
@@ -1592,6 +1691,7 @@ if (__USE_PRONUNCIATION_RECORDER_HOOK && __pronHook && typeof __pronHook.replay 
               if (!!pronunciationDisabled || !!loading) return;
               if (!__effectiveHasMediaRecorderSupport) return;
               __speakPanelAudioBlobRef.current = null;
+              __setSpeakPanelHasAudio(false);
               __setSpeakPanelAnalyzeState("idle");
               __setSpeakPanelTokens(null);
               __setSpeakPanelTranscript("");
@@ -1843,7 +1943,7 @@ if (__USE_PRONUNCIATION_RECORDER_HOOK && __pronHook && typeof __pronHook.replay 
           disabled={!!pronunciationDisabled || !!loading || !__effectiveHasMediaRecorderSupport}
           recordState={(__effectivePronStatus && __effectivePronStatus.state) || "idle"}
           seconds={(__effectivePronStatus && __effectivePronStatus.seconds) || 0}
-          hasAudio={!!__speakPanelAudioBlobRef.current}
+          hasAudio={__speakPanelHasAudio}
           analyzeState={__speakPanelAnalyzeState}
           tokens={__speakPanelTokens || []}
           transcript={__speakPanelTranscript || ""}
@@ -1890,3 +1990,4 @@ if (__USE_PRONUNCIATION_RECORDER_HOOK && __pronHook && typeof __pronHook.replay 
   );
 }
 // frontend/src/components/examples/ExampleSentence.jsx (file end)
+// frontend/src/components/examples/ExampleSentence.jsx
