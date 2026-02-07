@@ -1,3 +1,5 @@
+console.log("[visitRoute] LOADED", __filename);
+// PATH: backend/src/routes/visitRoute.js
 // backend/src/routes/visitRoute.js
 
 /**
@@ -94,8 +96,12 @@ function getAdminSupabase() {
  */
 router.post("/visit", async (req, res) => {
   const authUser = requireAuthUser(req);
+
+  // ✅ 允許匿名：未登入/無 token 時，不阻塞前端啟動
+  // - 有登入：照常記錄 visit（profiles.visit_count / last_visit_at）
+  // - 匿名：直接回 OK（不寫 DB）
   if (!authUser || !authUser.id) {
-    return res.status(401).json({ error: "Unauthorized" });
+    return res.status(200).json({ ok: true, anonymous: true });
   }
 
   const supabase = getAdminSupabase();
@@ -218,3 +224,4 @@ router.post("/visit", async (req, res) => {
 module.exports = router;
 
 // backend/src/routes/visitRoute.js
+// END PATH: backend/src/routes/visitRoute.js

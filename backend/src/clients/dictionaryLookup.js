@@ -305,6 +305,8 @@ function mergeExtraPropsWhitelistIntoParsedLike(parsedLike, extraProps) {
       'valenz',
       'tenses',
       'comparison',
+      'comparability',
+      'declinable',
       'notes',
       'posOptions',
       'recommendations',
@@ -329,12 +331,150 @@ function mergeExtraPropsWhitelistIntoParsedLike(parsedLike, extraProps) {
   }
 }
 
+// ✅ 保底：確保 recommendations 結構存在（避免只有特定詞性有／前端判斷分歧）
+function ensureRecommendationsShape(obj) {
+  try {
+    if (!obj || typeof obj !== "object") return obj;
+    const r = (obj.recommendations && typeof obj.recommendations === "object") ? obj.recommendations : {};
+    const keys = ["sameWord", "synonyms", "antonyms", "related", "wordFamily", "roots", "collocations"];
+    for (const k of keys) {
+      const v = r[k];
+      if (Array.isArray(v)) {
+        r[k] = v.filter(Boolean);
+      } else if (typeof v === "string" && v.trim()) {
+        r[k] = [v.trim()];
+      } else if (v && typeof v === "object") {
+        r[k] = [v];
+      } else {
+        r[k] = [];
+      }
+    }
+    obj.recommendations = r;
+    return obj;
+  } catch (e) {
+    return obj;
+  }
+}
+
 /**
  * ✅ Phase 2-2（本次新增）
  * 中文功能說明：
  * - 從 normalized 組出 entryProps（dict_entry_props）
  * - 注意：不做詞性推測，只做「把已存在資料搬進 DB」
  */
+
+/**
+ * ✅ Adjektiv guards（本次新增）
+ * 中文功能說明：
+ * - 部分形容詞「通常不比較 / 不變化」（例如顏色詞 lila/rosa 等）
+ * - LLM 可能會硬套規則產生假的比較級（例如 liler / am lilasten）
+ * - 這裡做最小且可測的防呆：標記 comparability/declinable，並清理不該出現的比較級/最高級
+ *
+ * 設計原則：
+ * - 只在 Adjektiv 生效
+ * - 不做大規模推測：以白名單/黑名單為主，並保守處理
+ * - 不覆寫上游明確給的旗標（若 normalized 已提供 comparability/declinable 則尊重）
+ */
+const __ADJ_NON_DECLINABLE__ = new Set([
+  'lila',
+  'rosa',
+  'beige',
+  'orange',
+  'khaki',
+  'lavendel',
+  // 口語/外來語常見（依你資料再擴充）
+  'prima',
+  'super',
+]);
+
+const __ADJ_NON_COMPARABLE__ = new Set([
+  // 顏色詞：通常不可比較（教學規範語法）
+  'lila',
+  'rosa',
+  'beige',
+  'orange',
+  'khaki',
+  'lavendel',
+  // 絕對形容詞（常見）：通常不比較（可依需求擴充）
+  'perfekt',
+  'optimal',
+  'einzig',
+  'einzigartig',
+  'tot',
+]);
+
+function applyAdjektivGuards(normalized) {
+  try {
+    if (!normalized || typeof normalized !== 'object') return normalized;
+
+    const pos = String(normalized.partOfSpeech || normalized.canonicalPos || normalized.primaryPos || '').trim();
+    if (pos !== 'Adjektiv') return normalized;
+
+    const base = String(normalized.baseForm || normalized.word || '').trim().toLowerCase();
+    if (!base) return normalized;
+
+    // ---- declinable
+    if (normalized.declinable === undefined) {
+      if (__ADJ_NON_DECLINABLE__.has(base)) normalized.declinable = false;
+      else normalized.declinable = true;
+    }
+
+    // ---- comparability
+    if (normalized.comparability === undefined) {
+      if (__ADJ_NON_COMPARABLE__.has(base)) normalized.comparability = 'not_comparable';
+      else normalized.comparability = 'unknown';
+    }
+
+    // ---- sanitize comparison if not comparable
+    if (normalized.comparability === 'not_comparable') {
+      const cmp = normalized.comparison && typeof normalized.comparison === 'object' ? normalized.comparison : null;
+      if (cmp) {
+        // 保留 positive（若缺則用 base）
+        if (!cmp.positive) cmp.positive = normalized.baseForm || normalized.word || base;
+        // 清掉 comparative/superlative（避免 UI 顯示假的規則結果）
+        delete cmp.comparative;
+        delete cmp.superlative;
+        normalized.comparison = cmp;
+      } else {
+        normalized.comparison = { positive: normalized.baseForm || normalized.word || base };
+      }
+    }
+
+    return normalized;
+  } catch (e) {
+    return normalized;
+  }
+}
+function applyVerbReflexiveGuards(normalized, opts = {}) {
+  try {
+    if (!normalized || typeof normalized !== 'object') return normalized;
+
+    const pos = String(normalized.partOfSpeech || normalized.canonicalPos || normalized.primaryPos || '').trim();
+    if (pos !== 'Verb') return normalized;
+
+    const q = String(opts.queryWord || '').trim();
+    const hw = String(opts.headword || normalized.headword || normalized.word || '').trim();
+
+    // ✅ Hard rule (lexicographic convention):
+    // If dictionary headword/query starts with "sich ", it is a reflexive verb entry (sich + Verb).
+    const __looksLikeReflexiveLemma = (s) => {
+      const t = String(s || '').trim().toLowerCase();
+      return t.startsWith('sich ');
+    };
+
+    if (normalized.reflexive !== true) {
+      if (__looksLikeReflexiveLemma(hw) || __looksLikeReflexiveLemma(q)) {
+        normalized.reflexive = true;
+      }
+    }
+
+    return normalized;
+  } catch (e) {
+    return normalized;
+  }
+}
+
+
 function buildEntryPropsFromNormalized(normalized) {
   try {
     const pos = String(normalized?.partOfSpeech || normalized?.canonicalPos || '').trim();
@@ -369,6 +509,8 @@ function buildEntryPropsFromNormalized(normalized) {
       valenz: normalized?.valenz,
       tenses: normalized?.tenses,
       comparison: normalized?.comparison,
+      comparability: normalized?.comparability,
+      declinable: normalized?.declinable,
       notes: normalized?.notes,
       posOptions: normalized?.posOptions,
       recommendations: normalized?.recommendations,
@@ -698,6 +840,8 @@ async function tryLookupFromDB(word, explainLang) {
     }
 
     const normalized = normalizeDictionaryResult(parsedLike, word);
+    applyAdjektivGuards(normalized);
+    applyVerbReflexiveGuards(normalized, { queryWord: word, headword: parsedLike?.word || parsedLike?.baseForm });
 
     // ✅ Phase 2：把 DB entry 的狀態 meta 附加回去（不影響 UI，方便 trace）
     // - 注意：這不是覆核機制，只是讓上游可看到當前狀態
@@ -897,6 +1041,18 @@ function buildPosOptionsInstruction() {
   ].join('\n');
 }
 
+// ✅ Recommendations scaffold（不改 dictionaryPrompts.js）：要求 LLM 回傳 recommendations 結構（各詞性一致）
+function buildRecommendationsInstruction() {
+  return [
+    "",
+    "### RECOMMENDATIONS (must output in JSON)",
+    "- Always include `recommendations` object on the top-level result.",
+    "- Each key MUST exist even if empty: synonyms, antonyms, related, wordFamily, roots, collocations.",
+    "- Each value should be an array of strings OR objects with at least `{ text: string }`.",
+    "- Keep them relevant to the returned partOfSpeech/canonicalPos.",
+  ].join("\n");
+}
+
 /**
  * ✅ Step 3（本次新增）
  * 中文功能說明：
@@ -1038,6 +1194,10 @@ async function lookupWord(rawWord, explainLang = 'zh-TW', options = {}) {
                       synonyms: authorityHit?.recommendations?.synonyms?.length || 0,
                       antonyms: authorityHit?.recommendations?.antonyms?.length || 0,
                       roots: authorityHit?.recommendations?.roots?.length || 0,
+                      related: authorityHit?.recommendations?.related?.length || 0,
+                      collocations: authorityHit?.recommendations?.collocations?.length || 0,
+                      wordFamily: authorityHit?.recommendations?.wordFamily?.length || 0,
+                      sameWord: authorityHit?.recommendations?.sameWord?.length || 0,
                     },
                   });
                 }
@@ -1074,6 +1234,30 @@ async function lookupWord(rawWord, explainLang = 'zh-TW', options = {}) {
                         dbHit.recommendations.roots.length > 0)
                         ? dbHit.recommendations.roots
                         : (authorityHit.recommendations && authorityHit.recommendations.roots) || [],
+                    related:
+                      (dbHit.recommendations &&
+                        Array.isArray(dbHit.recommendations.related) &&
+                        dbHit.recommendations.related.length > 0)
+                        ? dbHit.recommendations.related
+                        : (authorityHit.recommendations && authorityHit.recommendations.related) || [],
+                    wordFamily:
+                      (dbHit.recommendations &&
+                        Array.isArray(dbHit.recommendations.wordFamily) &&
+                        dbHit.recommendations.wordFamily.length > 0)
+                        ? dbHit.recommendations.wordFamily
+                        : (authorityHit.recommendations && authorityHit.recommendations.wordFamily) || [],
+                    collocations:
+                      (dbHit.recommendations &&
+                        Array.isArray(dbHit.recommendations.collocations) &&
+                        dbHit.recommendations.collocations.length > 0)
+                        ? dbHit.recommendations.collocations
+                        : (authorityHit.recommendations && authorityHit.recommendations.collocations) || [],
+                    sameWord:
+                      (dbHit.recommendations &&
+                        Array.isArray(dbHit.recommendations.sameWord) &&
+                        dbHit.recommendations.sameWord.length > 0)
+                        ? dbHit.recommendations.sameWord
+                        : (authorityHit.recommendations && authorityHit.recommendations.sameWord) || [],
                   },
                   _authority: dbHit._authority || authorityHit._authority || authorityHit._source || 'wiktionary',
                 };
@@ -1128,6 +1312,7 @@ async function lookupWord(rawWord, explainLang = 'zh-TW', options = {}) {
     const authorityHit = await authorityLookup(word, explainLang, { targetPosKey });
     if (authorityHit) {
       console.log('[dictionary][authority] hit (wiktionary):', { word, explainLang, targetPosKey });
+      ensureRecommendationsShape(authorityHit);
       return authorityHit;
     }
     console.log('[dictionary][authority] miss (wiktionary):', { word, explainLang, targetPosKey });
@@ -1149,7 +1334,8 @@ async function lookupWord(rawWord, explainLang = 'zh-TW', options = {}) {
     // 中文功能說明：
     // - 目的：第一次查字就拿到 posOptions，供前端決定是否顯示「可切換詞性」
     const posOptionsInstr = DICT_LLM_POS_OPTIONS_ENABLED ? buildPosOptionsInstruction() : '';
-    const userPromptFinal = `${userPrompt}${posOptionsInstr}`;
+    const recsInstr = buildRecommendationsInstruction();
+    const userPromptFinal = `${userPrompt}${posOptionsInstr}${recsInstr}`;
 
     if (DEBUG_LLM_DICT_POS_OPTIONS && DICT_LLM_POS_OPTIONS_ENABLED) {
       // eslint-disable-next-line no-console
@@ -1215,7 +1401,7 @@ async function lookupWord(rawWord, explainLang = 'zh-TW', options = {}) {
     // 紀錄長度幫助除錯（避免印出過長內容）
     if (!content) {
       console.error('[dictionary] Empty content from LLM in lookup for word:', word);
-      return fallback(word);
+      return fallback(word, 'LLM_EMPTY_CONTENT');
     }
 
     if (process.env.DEBUG_LLM_DICT === "1") {
@@ -1232,18 +1418,155 @@ async function lookupWord(rawWord, explainLang = 'zh-TW', options = {}) {
       }
     }
 
+    // ✅ Robust JSON extraction: tolerate code fences / leading text
+    function __extractJsonPayload(text) {
+      if (!text || typeof text !== 'string') return '';
+      let t = text.trim();
+
+      // ```json ... ``` fences
+      const fence = t.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+      if (fence && fence[1]) {
+        t = fence[1].trim();
+      }
+
+      // If it's already pure JSON, keep it
+      if (t.startsWith('{') || t.startsWith('[')) return t;
+
+      // Otherwise, try to grab the largest {...} block
+      const first = t.indexOf('{');
+      const last = t.lastIndexOf('}');
+      if (first !== -1 && last !== -1 && last > first) {
+        return t.slice(first, last + 1).trim();
+      }
+
+      return t;
+    }
+
     let parsed;
+    const __jsonPayload = __extractJsonPayload(content);
     try {
-      parsed = JSON.parse(content);
+      parsed = JSON.parse(__jsonPayload);
     } catch (e) {
       console.error('[dictionary] JSON parse error in lookup:', e);
       console.error('[dictionary] raw content that failed to parse in lookup:', content);
-      return fallback(word);
+      return fallback(word, 'LLM_JSON_PARSE_ERROR');
     }
 
-    // 正規化結果（內含欄位整理，例如確保 definition/definition_de 皆為陣列等）
+// 正規化結果（內含欄位整理，例如確保 definition/definition_de 皆為陣列等）
     const normalized = normalizeDictionaryResult(parsed, word);
+    applyVerbReflexiveGuards(normalized, { queryWord: word, headword: normalized?.headword || normalized?.word || '' });
+    // ============================================================
+    // ✅ Phase A2：Two-pass separable verb verification (safety)
+    // - Default to separable=false (conservative).
+    // - Only flip to true when LLM provides a valid proof sentence:
+    //   "Ich <finite ...> <prefix>." (prefix sentence-final), and prefix matches the lemma start.
+    // - NOTE: We DO NOT provide prefix candidates to the model (reduces priming / false positives like "anti-").
+    // ============================================================
+    try {
+      const __enableSeparableVerify = String(process.env.DICT_LLM_SEPARABLE_VERIFY || '1') !== '0';
+      const __pos = String(normalized?.partOfSpeech || normalized?.canonicalPos || normalized?.primaryPos || '').trim();
+      if (__enableSeparableVerify && __pos === 'Verb') {
+        const __lemmaRaw = String(normalized?.baseForm || normalized?.headword || normalized?.word || word || '').trim();
+        const __lemma = __lemmaRaw.toLowerCase();
 
+        // "疑似可分"：LLM 第一輪判定為 true，或 lemma 以常見可分前綴開頭（僅用來決定是否做 second pass，不會提供給 LLM）
+        const __COMMON_SEPARABLE_PREFIXES = [
+          'ab','an','auf','aus','bei','dar','ein','fest','fort','her','hin','los','mit','nach','vor','weg','weiter','wieder','zu','zurück','zusammen'
+        ];
+        const __startsWithKnownPrefix = __COMMON_SEPARABLE_PREFIXES.some((p) => __lemma.startsWith(p));
+        const __suspect = normalized?.separable === true || __startsWithKnownPrefix;
+
+        if (__suspect) {
+          // Conservative default: false unless verified.
+          normalized.separable = false;
+
+          const __verifySystem = `
+You are a German grammar verifier. Decide ONLY whether the given German verb is a separable-prefix verb (Trennbares Verb).
+Return STRICT JSON only.
+
+Rules (MANDATORY):
+- Answer separable=true ONLY if you can produce a natural, native-acceptable proof sentence in the pattern:
+  "Ich <finite ...> <prefix>."
+  - present tense, first person singular
+  - ends with the separated prefix as the final word (before the period)
+- If you cannot produce such a proof sentence confidently, return separable=false and proofExample="".
+
+Important:
+- Do NOT confuse fixed prepositions/valency with separable prefixes. (e.g., "auf etw. antworten", "an jdn. denken" are NOT separable.)
+- Do NOT guess based on spelling. If unsure: separable=false.
+`;
+
+          const __verifyUser = `Verb lemma: ${__lemmaRaw}
+
+Return JSON:
+{
+  "separable": boolean,
+  "proofExample": string
+}
+`;
+
+          const clientV = getGroqClient();
+          const respV = await clientV.chat.completions.create({
+            model: process.env.DICT_LLM_MODEL || 'llama-3.3-70b-versatile',
+            temperature: 0.0,
+            response_format: { type: 'json_object' },
+            messages: [
+              { role: 'system', content: __verifySystem },
+              { role: 'user', content: __verifyUser },
+            ],
+          });
+
+          const contentV = respV?.choices?.[0]?.message?.content || '';
+          let jsonV = null;
+          try { jsonV = JSON.parse(contentV); } catch (e) { jsonV = null; }
+
+          const __isValidProof = (proof, lemmaLower) => {
+            const s = String(proof || '').trim();
+            if (!s) return { ok: false };
+            // Must start with "Ich " and end with "."
+            if (!/^ich\s+/i.test(s)) return { ok: false };
+            if (!s.endsWith('.')) return { ok: false };
+
+            const sNoDot = s.slice(0, -1).trim();
+            const parts = sNoDot.split(/\s+/).filter(Boolean);
+            if (parts.length < 3) return { ok: false }; // Ich + finite + prefix (at least)
+
+            const prefix = String(parts[parts.length - 1] || '').toLowerCase();
+            if (!prefix) return { ok: false };
+
+            // Prefix must match lemma start.
+            if (!lemmaLower.startsWith(prefix)) return { ok: false };
+
+            // Finite verb token (2nd token) should NOT start with prefix (reduces false positives like "Ich antworte an.").
+            const finite = String(parts[1] || '').toLowerCase();
+            if (finite.startsWith(prefix)) return { ok: false };
+
+            return { ok: true, prefix };
+          };
+
+          const wantTrue = jsonV && jsonV.separable === true;
+          const proof = jsonV ? String(jsonV.proofExample || '').trim() : '';
+          const proofCheck = __isValidProof(proof, __lemma);
+
+          if (wantTrue && proofCheck.ok) {
+            normalized.separable = true;
+            // Overwrite example with verified proof sentence (keeps UI consistent with STRICT RULE)
+            normalized.example = proof;
+          } else {
+            normalized.separable = false;
+          }
+        }
+      }
+    } catch (e) {
+      // Never fail the main lookup due to separable verification.
+      try {
+        logger.warn('[dictionary][llm][separableVerify] failed (ignore)', {
+          word,
+          explainLang,
+          err: e && e.message ? e.message : String(e),
+        });
+      } catch (_) {}
+    }
 
     // ============================================================
     // ✅ Phase B/C：提高 definition（母語短釋義）品質
@@ -1256,6 +1579,9 @@ async function lookupWord(rawWord, explainLang = 'zh-TW', options = {}) {
 
     // ✅ language 欄位代表「學習者母語 / UI language」，永遠用 explainLang 覆蓋（不可寫死 de）
     normalized.language = explainLang;
+
+    // ✅ Adjektiv guards：清理「不可比較/不可變化」特例（例如 lila）
+    applyAdjektivGuards(normalized);
 
     const __looksLikeAsciiGloss = (s) => {
       const t = String(s || '').trim();
@@ -1623,7 +1949,7 @@ async function __repairGlossOnly({ word, targetLangLabel, definition_de, definit
       err && typeof err.message === 'string' ? err.message : String(err || '');
     console.error('[dictionary] Groq lookup error:', message, 'for word:', word);
 
-    const base = fallback(word);
+    const base = fallback(word, `⚠️ LLM error: ${String(message).slice(0, 160)}`);
 
     // ★ 若是 Groq 的每日額度用完（rate_limit_exceeded）
     if (message.includes('rate_limit_exceeded')) {
@@ -2037,7 +2363,7 @@ async function authorityLookup(word, explainLang, options = {}) {
   }
 
   // Recommendations
-  if (!base.recommendations || typeof base.recommendations !== 'object') base.recommendations = { synonyms: [], antonyms: [], roots: [] };
+  if (!base.recommendations || typeof base.recommendations !== 'object') base.recommendations = { sameWord: [], synonyms: [], antonyms: [], related: [], wordFamily: [], roots: [], collocations: [] };
   if (synonyms.length > 0) base.recommendations.synonyms = synonyms;
   if (antonyms.length > 0) base.recommendations.antonyms = antonyms;
 

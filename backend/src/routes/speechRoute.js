@@ -2,9 +2,9 @@
 
 
 // ============================================================
-// Auth helper (NO dependency: no jsonwebtoken)
-// - Purpose: usage accounting needs userId for DB accumulation
-// - Strategy: decode JWT payload only (no signature verify)
+// Auth helper (DEPRECATED)
+// - 規格：ASR 強制登入，user 來源一律 req.authUser（由 authMiddleware 注入）
+// - 禁止在 route 內自行 decode JWT；以下 helper 保留但不再使用（不刪減行數）
 // ============================================================
 function decodeJwtPayload(token) {
   try {
@@ -79,16 +79,6 @@ const upload = multer({
 
 const router = express.Router();
 
-// ============================================================
-// DEV bypass: allow /api/speech/asr without login
-// - This router never rejects requests due to missing Authorization.
-// - Usage accounting will treat unauthenticated callers as anonymous (userId empty).
-// ============================================================
-router.use((req, res, next) => {
-  return next();
-});
-
-
 // 共享 Speech client（ADC：GOOGLE_APPLICATION_CREDENTIALS）
 const speechClient = new SpeechClient();
 
@@ -118,7 +108,18 @@ function normalizeWords(words) {
 }
 
 router.post("/asr", upload.single("audio"), async (req, res) => {
-    const authUser = tryGetAuthUser(req);
+  const authUser = req && req.authUser ? {
+    id: req.authUser.id || "",
+    email: req.authUser.email || "",
+    source: "authMiddleware",
+  } : null;
+
+  // 強制登入：理論上不會進到這裡；保險起見仍擋掉
+  if (!authUser || !authUser.id) {
+    console.warn("[speechRoute][asr][usage] req.authUser.id missing -> reject");
+    return res.status(401).json({ ok: false, error: "UNAUTHORIZED" });
+  }
+
   const startedAt = Date.now();
 
   try {
@@ -144,7 +145,7 @@ router.post("/asr", upload.single("audio"), async (req, res) => {
       languageCode: lang,
       enableAutomaticPunctuation: true,
       // word-level（可選）：有就回傳 words，沒有就只回 transcript
-      enableWordTimeOffsets: false,
+      enableWordTimeOffsets: true,
       enableWordConfidence: true,
     };
 
@@ -201,8 +202,8 @@ router.post("/asr", upload.single("audio"), async (req, res) => {
       },
       // userId/email/ip：若你之後有 auth middleware，可補上
       ip: req.ip || "",
-      userId: authUser?.id || (req.authUser && req.authUser.id) || "",
-      email: authUser?.email || (req.authUser && req.authUser.email) || "",
+      userId: authUser.id,
+      email: authUser.email,
     });
 
     
@@ -210,8 +211,8 @@ router.post("/asr", upload.single("audio"), async (req, res) => {
     // ✅ 2026-01-25：ASR 秒數入帳（daily/monthly 主帳本）
     // - 不影響主流程：任何錯誤只 warn
     await commitAsrSecondsSafe({
-      userId: authUser?.id || (req.authUser && req.authUser.id) || "",
-      email: authUser?.email || (req.authUser && req.authUser.email) || "",
+      userId: authUser.id,
+      email: authUser.email,
       ip: req.ip || "",
       endpoint: "/api/speech/asr",
       path: req.originalUrl || req.path || "/api/speech/asr",
@@ -219,7 +220,7 @@ router.post("/asr", upload.single("audio"), async (req, res) => {
       provider: "google",
       model: "",
       requestId: "",
-      source: authUser?.source || "",
+      source: authUser.source || "",
     });
 
     return res.json({
@@ -230,7 +231,7 @@ router.post("/asr", upload.single("audio"), async (req, res) => {
     });
   } catch (err) {
     console.error("[ASR] failed:", err && err.message ? err.message : err);
-    return res.status(500).json({ ok: false, error: "ASR_FAILED" });
+    return res.status(500).json({ ok: false, error: "ASR_FAILED", message: err && err.message ? err.message : String(err || "") });
   }
 });
 

@@ -120,6 +120,20 @@ const uiText = {
       // 例句區 Grammar Options
       grammarOptionsLabel: "句型結構",
       grammarToggleLabel: "調整句型",
+      // Sentence Type (used by __t("grammar.sentenceType.*.label"))
+      grammar: {
+        sentenceType: {
+          default: { label: "一般句（陳述）" },
+          question_yesno: { label: "問句（是／否）" },
+          question_w: { label: "問句（疑問詞）" },
+          imperative: { label: "祈使句" },
+          request_polite: { label: "禮貌請求" },
+          prohibition: { label: "禁止句" },
+          suggestion: { label: "建議句" },
+          exclamation: { label: "感嘆句" },
+        },
+      },
+
       grammarCaseLabel: "格位",
 
       grammarCaseNomLabel: "主格 (Nominativ)",
@@ -151,6 +165,17 @@ const uiText = {
         refStatusUsed: "已使用",
         refStatusMissing: "缺少",
         missingRefsHint: "有參考未被使用，請再重新產生",
+        // ✅ 建議字（recommendations）
+        recsTitle: "建議字",
+        recs: {
+          sameWord: "同字",
+          synonyms: "同義",
+          antonyms: "反義",
+          related: "相關",
+          wordFamily: "同詞根家族",
+          roots: "同詞根",
+          collocations: "常用搭配",
+        },
       },
 
       // 連續對話（Conversation）
@@ -210,13 +235,30 @@ const uiText = {
       comparativeLabel: "比較級",
       superlativeLabel: "最高級",
 
-      declTitle: "詞尾變化（示例）",
+      declTitle: "詞尾變化",
       declWeakLabel: "定冠詞（弱變化）",
       declMixedLabel: "不定冠詞（混合變化）",
       declStrongLabel: "無冠詞（強變化）",
 
-      nounPlaceholder: "名詞",
+      nounPlaceholder: "___",
+
+      declCaseTitle: "格位",
+      declCases: { nom: "主格", acc: "受格", dat: "與格", gen: "屬格" },
+      genderM: "M",
+      genderF: "F",
+      genderN: "N",
       hintText: "形容詞詞尾會跟著「冠詞 / 性別 / 格位」變化",
+      degreeNotComparableHint: "此形容詞通常不使用比較級",
+      declNotDeclinableHint: "此形容詞在名詞前通常不做詞尾變化",
+
+      recTitle: "推薦",
+      recSynLabel: "同義詞",
+      recAntLabel: "反義詞",
+      recRootLabel: "字根",
+      recCollocationLabel: "搭配詞",
+      recIdiomsLabel: "慣用語",
+      recRelatedLabel: "相關詞",
+      recEmptyText: "—",
     },
 
     verbCard: {
@@ -393,6 +435,15 @@ const uiText = {
       hideTarget: "隱藏",
       showTranslation: "顯示",
       hideTranslation: "隱藏",
+
+      // ✅ Pronunciation tips (Phase 1: token-level heuristic)
+      pronTipsTitle: "發音建議",
+      pronTipsPrefix: "發音建議：",
+      pronTipsLoading: "建議產生中…",
+      pronTipsMissing: "可能有漏念：請對照紅色標記的字再試一次。",
+      pronTipsExtra: "可能有多念/插入：請放慢速度，避免多加字。",
+      pronTipsLow: "部分字不夠清楚：可加強子音收尾與重音。",
+      pronTipsOk: "整體不錯：再注意節奏與連音即可。",
     },
   },
 
@@ -479,6 +530,20 @@ const uiText = {
 
       grammarOptionsLabel: "Sentence pattern",
       grammarToggleLabel: "Adjust sentence pattern",
+      // Sentence Type (used by __t("grammar.sentenceType.*.label"))
+      grammar: {
+        sentenceType: {
+          default: { label: "Statement" },
+          question_yesno: { label: "Yes/No question" },
+          question_w: { label: "Wh-question" },
+          imperative: { label: "Imperative" },
+          request_polite: { label: "Polite request" },
+          prohibition: { label: "Prohibition" },
+          suggestion: { label: "Suggestion" },
+          exclamation: { label: "Exclamation" },
+        },
+      },
+
       grammarCaseLabel: "Case",
 
       grammarCaseNomLabel: "Nominative",
@@ -510,6 +575,17 @@ const uiText = {
         refStatusUsed: "used",
         refStatusMissing: "missing",
         missingRefsHint: "Some references were not used. Please regenerate.",
+        // ✅ 建議字（recommendations）
+        recsTitle: "建議字",
+        recs: {
+          sameWord: "同字",
+          synonyms: "同義",
+          antonyms: "反義",
+          related: "相關",
+          wordFamily: "同詞根家族",
+          roots: "同詞根",
+          collocations: "常用搭配",
+        },
       },
 
       conversationTitle: "Conversation",
@@ -560,13 +636,15 @@ const uiText = {
       comparativeLabel: "Comparative",
       superlativeLabel: "Superlative",
 
-      declTitle: "Endings (examples)",
+      declTitle: "Endings",
       declWeakLabel: "Definite article (weak)",
       declMixedLabel: "Indefinite article (mixed)",
       declStrongLabel: "No article (strong)",
 
       nounPlaceholder: "noun",
       hintText: "Adjective endings depend on article / gender / case.",
+      degreeNotComparableHint: "This adjective is usually not used in comparative forms.",
+      declNotDeclinableHint: "This adjective is usually not inflected before nouns.",
     },
 
     verbCard: {
@@ -744,6 +822,15 @@ const uiText = {
       hideTarget: "Hide",
       showTranslation: "Show",
       hideTranslation: "Hide",
+
+      // ✅ Pronunciation tips (Phase 1: token-level heuristic)
+      pronTipsTitle: "Pronunciation tips",
+      pronTipsPrefix: "Pronunciation tips: ",
+      pronTipsLoading: "Generating tips…",
+      pronTipsMissing: "You may have missed a word—check the red tokens and try again.",
+      pronTipsExtra: "You may have inserted extra words—slow down and avoid adding words.",
+      pronTipsLow: "Some words are unclear—focus on final consonants and stress.",
+      pronTipsOk: "Nice overall—pay attention to rhythm and linking.",
     },
   },
 
@@ -828,6 +915,20 @@ const uiText = {
 
       grammarOptionsLabel: "句型结构",
       grammarToggleLabel: "调整句型",
+      // Sentence Type (used by __t("grammar.sentenceType.*.label"))
+      grammar: {
+        sentenceType: {
+          default: { label: "一般句（陈述）" },
+          question_yesno: { label: "问句（是/否）" },
+          question_w: { label: "问句（疑问词）" },
+          imperative: { label: "祈使句" },
+          request_polite: { label: "礼貌请求" },
+          prohibition: { label: "禁止句" },
+          suggestion: { label: "建议句" },
+          exclamation: { label: "感叹句" },
+        },
+      },
+
       grammarCaseLabel: "格位",
 
       grammarCaseNomLabel: "主格 (Nominativ)",
@@ -857,6 +958,17 @@ const uiText = {
         refStatusUsed: "已使用",
         refStatusMissing: "缺少",
         missingRefsHint: "有参考未被使用，请再重新生成",
+        // ✅ 建議字（recommendations）
+        recsTitle: "建議字",
+        recs: {
+          sameWord: "同字",
+          synonyms: "同義",
+          antonyms: "反義",
+          related: "相關",
+          wordFamily: "同詞根家族",
+          roots: "同詞根",
+          collocations: "常用搭配",
+        },
       },
 
       conversationTitle: "对话",
@@ -912,13 +1024,23 @@ const uiText = {
       comparativeLabel: "比较级",
       superlativeLabel: "最高级",
 
-      declTitle: "词尾变化（示例）",
+      declTitle: "词尾变化",
       declWeakLabel: "定冠词（弱变化）",
       declMixedLabel: "不定冠词（混合变化）",
       declStrongLabel: "无冠词（强变化）",
 
       nounPlaceholder: "名词",
       hintText: "形容词词尾会随「冠词 / 性别 / 格位」变化",
+      degreeNotComparableHint: "该形容词通常不使用比较级",
+      declNotDeclinableHint: "该形容词在名词前通常不做词尾变化",
+
+      recTitle: "推荐",
+      recSynLabel: "同义词",
+      recAntLabel: "反义词",
+      recRootLabel: "相关词",
+      recCollocationLabel: "搭配词",
+      recRelatedLabel: "相关词",
+      recEmptyText: "—",
     },
 
     verbCard: {
@@ -1093,6 +1215,15 @@ const uiText = {
       hideTarget: "隐藏",
       showTranslation: "显示",
       hideTranslation: "隐藏",
+
+      // ✅ 发音建议（Phase 1：token-level 判定）
+      pronTipsTitle: "发音建议",
+      pronTipsPrefix: "发音建议：",
+      pronTipsLoading: "建议生成中…",
+      pronTipsMissing: "可能有漏念：请对照红色标记的字再试一次。",
+      pronTipsExtra: "可能有多念/插入：请放慢速度，避免多加字。",
+      pronTipsLow: "部分字不够清楚：可加强子音收尾与重音。",
+      pronTipsOk: "整体不错：再注意节奏与连音即可。",
     },
   },
 
@@ -1179,6 +1310,20 @@ const uiText = {
 
       grammarOptionsLabel: "Satzmuster",
       grammarToggleLabel: "Satzmuster anpassen",
+      // Sentence Type (used by __t("grammar.sentenceType.*.label"))
+      grammar: {
+        sentenceType: {
+          default: { label: "Aussagesatz" },
+          question_yesno: { label: "Ja/Nein‑Frage" },
+          question_w: { label: "W‑Frage" },
+          imperative: { label: "Imperativ" },
+          request_polite: { label: "Höfliche Bitte" },
+          prohibition: { label: "Verbot" },
+          suggestion: { label: "Vorschlag" },
+          exclamation: { label: "Ausruf" },
+        },
+      },
+
       grammarCaseLabel: "Kasus",
 
       grammarCaseNomLabel: "Nominativ",
@@ -1211,6 +1356,17 @@ const uiText = {
         refStatusMissing: "fehlt",
         missingRefsHint:
           "Einige Referenzen wurden nicht verwendet. Bitte neu erzeugen.",
+        // ✅ 建議字（recommendations）
+        recsTitle: "建議字",
+        recs: {
+          sameWord: "同字",
+          synonyms: "同義",
+          antonyms: "反義",
+          related: "相關",
+          wordFamily: "同詞根家族",
+          roots: "同詞根",
+          collocations: "常用搭配",
+        },
       },
 
       conversationTitle: "Konversation",
@@ -1261,13 +1417,23 @@ const uiText = {
       comparativeLabel: "Komparativ",
       superlativeLabel: "Superlativ",
 
-      declTitle: "Endungen (Beispiele)",
+      declTitle: "Endungen",
       declWeakLabel: "Bestimmter Artikel (schwach)",
       declMixedLabel: "Unbestimmter Artikel (gemischt)",
       declStrongLabel: "Kein Artikel (stark)",
 
       nounPlaceholder: "Nomen",
       hintText: "Endungen hängen von Artikel / Genus / Kasus ab.",
+      degreeNotComparableHint: "Dieses Adjektiv wird normalerweise nicht gesteigert.",
+      declNotDeclinableHint: "Dieses Adjektiv wird vor Nomen normalerweise nicht flektiert.",
+
+      recTitle: "Empfehlungen",
+      recSynLabel: "Synonyme",
+      recAntLabel: "Antonyme",
+      recRootLabel: "Verwandte Wörter",
+      recCollocationLabel: "Kollokationen",
+      recRelatedLabel: "Verwandte Wörter",
+      recEmptyText: "—",
     },
 
     verbCard: {
@@ -1445,6 +1611,15 @@ const uiText = {
       hideTarget: "Verbergen",
       showTranslation: "Anzeigen",
       hideTranslation: "Verbergen",
+
+      // ✅ Aussprache-Tipps (Phase 1: token-level Heuristik)
+      pronTipsTitle: "Aussprache-Tipps",
+      pronTipsPrefix: "Aussprache-Tipps: ",
+      pronTipsLoading: "Tipps werden erstellt…",
+      pronTipsMissing: "Möglicherweise fehlt ein Wort – prüfe die roten Tokens und versuche es erneut.",
+      pronTipsExtra: "Möglicherweise wurden zusätzliche Wörter eingefügt – langsamer sprechen und nichts hinzufügen.",
+      pronTipsLow: "Einige Wörter sind unklar – achte auf Endkonsonanten und Betonung.",
+      pronTipsOk: "Insgesamt gut – achte noch auf Rhythmus und Verbindung.",
     },
 },
 
@@ -1529,6 +1704,20 @@ const uiText = {
 
       grammarOptionsLabel: "نمط الجملة",
       grammarToggleLabel: "ضبط نمط الجملة",
+      // Sentence Type (used by __t("grammar.sentenceType.*.label"))
+      grammar: {
+        sentenceType: {
+          default: { label: "جملة خبرية" },
+          question_yesno: { label: "سؤال نعم/لا" },
+          question_w: { label: "سؤال بأداة استفهام" },
+          imperative: { label: "صيغة الأمر" },
+          request_polite: { label: "طلب مهذب" },
+          prohibition: { label: "نهي/منع" },
+          suggestion: { label: "اقتراح" },
+          exclamation: { label: "تعجب" },
+        },
+      },
+
       grammarCaseLabel: "الحالة",
 
       grammarCaseNomLabel: "مرفوع",
@@ -1560,6 +1749,17 @@ const uiText = {
         refStatusUsed: "مستخدم",
         refStatusMissing: "ناقص",
         missingRefsHint: "لم تُستخدم بعض المراجع. الرجاء إعادة التوليد.",
+        // ✅ 建議字（recommendations）
+        recsTitle: "建議字",
+        recs: {
+          sameWord: "同字",
+          synonyms: "同義",
+          antonyms: "反義",
+          related: "相關",
+          wordFamily: "同詞根家族",
+          roots: "同詞根",
+          collocations: "常用搭配",
+        },
       },
 
       conversationTitle: "محادثة",
@@ -1610,7 +1810,7 @@ const uiText = {
       comparativeLabel: "تفضيل",
       superlativeLabel: "أعلى",
 
-      declTitle: "النهايات (أمثلة)",
+      declTitle: "النهايات ",
       declWeakLabel: "مع أداة تعريف (ضعيف)",
       declMixedLabel: "مع نكرة (مختلط)",
       declStrongLabel: "بدون أداة (قوي)",
@@ -1791,8 +1991,81 @@ testDisabledTitle: "الاختبار غير متاح بعد.",
       hideTarget: "إخفاء",
       showTranslation: "إظهار",
       hideTranslation: "إخفاء",
+
+      // ✅ نصائح النطق (المرحلة 1: اعتماد token-level)
+      pronTipsTitle: "نصائح النطق",
+      pronTipsPrefix: "نصائح النطق: ",
+      pronTipsLoading: "جارٍ إنشاء النصائح…",
+      pronTipsMissing: "قد تكون فاتتك كلمة—تحقق من الكلمات المعلَّمة بالأحمر وحاول مجددًا.",
+      pronTipsExtra: "قد تكون أضفت كلمات إضافية—تكلّم ببطء وتجنب إضافة كلمات.",
+      pronTipsLow: "بعض الكلمات غير واضحة—ركّز على نهايات الحروف الساكنة والنبرة.",
+      pronTipsOk: "جيد عمومًا—انتبه للإيقاع والربط بين الكلمات.",
     },
   },
+
+  // ----------------------------
+  // English en
+  // ----------------------------
+  "en": {
+    wordCard: {
+      exampleBlock: {
+        // ✅ Recommendations (suggested words)
+        recsTitle: "Suggestions",
+        recs: {
+          sameWord: "Same word",
+          synonyms: "Synonyms",
+          antonyms: "Antonyms",
+          related: "Related",
+          wordFamily: "Word family",
+          roots: "Roots",
+          collocations: "Collocations",
+        },
+      },
+    },
+  },
+
+  // ----------------------------
+  // Deutsch de
+  // ----------------------------
+  "de": {
+    wordCard: {
+      exampleBlock: {
+        // ✅ Empfehlungen (Vorschläge)
+        recsTitle: "Vorschläge",
+        recs: {
+          sameWord: "Gleiche Schreibweise",
+          synonyms: "Synonyme",
+          antonyms: "Antonyme",
+          related: "Verwandte Wörter",
+          wordFamily: "Wortfamilie",
+          roots: "Wortstamm",
+          collocations: "Kollokationen",
+        },
+      },
+    },
+  },
+
+  // ----------------------------
+  // العربية ar
+  // ----------------------------
+  "ar": {
+    wordCard: {
+      exampleBlock: {
+        // ✅ اقتراحات (كلمات مقترحة)
+        recsTitle: "اقتراحات",
+        recs: {
+          sameWord: "نفس الكلمة",
+          synonyms: "مرادفات",
+          antonyms: "أضداد",
+          related: "كلمات ذات صلة",
+          wordFamily: "عائلة الكلمات",
+          roots: "الجذر",
+          collocations: "تراكيب شائعة",
+        },
+      },
+    },
+  },
+
 };
 
 export default uiText;

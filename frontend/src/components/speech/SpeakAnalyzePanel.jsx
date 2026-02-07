@@ -1,5 +1,6 @@
 // frontend/src/components/speech/SpeakAnalyzePanel.jsx (file start)
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { apiFetch } from "../../utils/apiClient";
 import uiText from "../../uiText";
 import SpeakButton from "../common/SpeakButton";
 import { EyeIconOpen, EyeIconClosed, MOSAIC_LINE } from "../common/EyeIcons";
@@ -68,7 +69,7 @@ function __tokenizeExpected(expectedText) {
  * This prevents: "one early mismatch => all subsequent positional comparisons fail".
  */
 function __realignTokens(expectedText, asrWords, confThreshold) {
-  const exp = __tokenizeExpected(__expected || "");
+  const exp = __tokenizeExpected(expectedText || "");
   const words = Array.isArray(asrWords) ? asrWords : [];
   const threshold = typeof confThreshold === "number" ? confThreshold : 0.85;
 
@@ -173,6 +174,15 @@ export default function SpeakAnalyzePanel({
   // If parent can pass ASR response words, panel can self-color with realign.
   asrWords,
   confidenceThreshold,
+
+  // ✅ 2026-02-01: Conversation paging (dialog practice)
+  conversationActive,
+  conversationIndex,
+  conversationTotal,
+  conversationCanPrev,
+  conversationCanNext,
+  onConversationPrev,
+  onConversationNext,
 }) {
   const __isRecording = recordState === "recording";
 
@@ -187,8 +197,119 @@ export default function SpeakAnalyzePanel({
   const __canToggle = !disabled && !!__expected;
   const __canReplay = !disabled && !!hasAudio && !__isRecording;
   const __canAnalyze = !disabled && !!hasAudio && !__isRecording && analyzeState !== "processing";
+  const __navDisabled = !!disabled || __isRecording || analyzeState === "processing";
 
   const __asrText = transcript || "";
+
+  // ============================================================
+  // ✅ Global guard: while panel is open, history left/right shortcuts MUST be disabled
+  // ============================================================
+  useEffect(() => {
+    try {
+      if (typeof window === "undefined") return;
+      window.__SPEAK_PANEL_OPEN = true;
+    } catch (e) {
+      // ignore
+    }
+    return () => {
+      try {
+        if (typeof window === "undefined") return;
+        window.__SPEAK_PANEL_OPEN = false;
+      } catch (e) {
+        // ignore
+      }
+    };
+  }, []);
+
+  // ============================================================
+  // ✅ ArrowLeft/ArrowRight (capture):
+  // - Always eat arrows while panel is open (prevent falling back to history)
+  // - If conversation paging is enabled, trigger prev/next
+  // ============================================================
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    function __isEditable(el) {
+      try {
+        if (!el) return false;
+        const tag = (el.tagName || "").toLowerCase();
+        if (tag === "input" || tag === "textarea" || tag === "select") return true;
+        if (typeof el.isContentEditable === "boolean" && el.isContentEditable) return true;
+        const role = typeof el.getAttribute === "function" ? el.getAttribute("role") : "";
+        if (role === "textbox") return true;
+        return false;
+      } catch (e) {
+        return false;
+      }
+    }
+
+    function onKeyDownCapture(e) {
+      if (!e) return;
+      if (e.isComposing || e.keyCode === 229) return;
+      if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+      console.log("[20260203 record][SpeakAnalyzePanel][keydown]", { ts: Date.now(), key: e?.key });
+      console.log("[20260202 record][SpeakAnalyzePanel][keydown]", { key: e?.key, ts: Date.now() });
+      console.log("[20260202 record][SpeakAnalyzePanel][keydown]", { key: e?.key, ts: Date.now() });
+
+      const el0 = e.target || null;
+      const el1 = typeof document !== "undefined" ? document.activeElement : null;
+      if (__isEditable(el0) || __isEditable(el1)) return;
+
+      // ✅ Always block history
+      e.preventDefault();
+      e.stopPropagation();
+
+      // ✅ If conversation paging is active, navigate
+      if (!!conversationActive) {
+        if (e.key === "ArrowLeft") {
+          if (conversationCanPrev && typeof onConversationPrev === "function") {
+            try { onConversationPrev(); } catch (err) {}
+          }
+          return;
+        }
+        if (e.key === "ArrowRight") {
+          if (conversationCanNext && typeof onConversationNext === "function") {
+            try { onConversationNext(); } catch (err) {}
+          }
+        }
+      }
+    }
+
+    window.addEventListener("keydown", onKeyDownCapture, { capture: true });
+    return () => window.removeEventListener("keydown", onKeyDownCapture, { capture: true });
+  }, [conversationActive, conversationCanPrev, conversationCanNext, onConversationPrev, onConversationNext]);
+
+  // ============================================================
+  // ✅ Close / stop via ESC
+  // - ESC / click-outside: if recording -> stop (do NOT close)
+  // - Otherwise -> close
+  // ============================================================
+  useEffect(() => {
+    const onEscCapture = (ev) => {
+      try {
+        if (!ev) return;
+        const key = ev.key || ev.code;
+        if (key !== "Escape") return;
+
+        // If user is typing in an input/textarea, still allow ESC to stop recording/close
+        ev.preventDefault?.();
+        ev.stopPropagation?.();
+
+        if (__isRecording && typeof onToggleRecord === "function") {
+          try { onToggleRecord(); } catch (e) {}
+          return;
+        }
+        if (typeof onClose === "function") onClose();
+      } catch (e) {}
+    };
+
+    try { window.addEventListener("keydown", onEscCapture, { capture: true }); } catch (e) {}
+    return () => {
+      try { window.removeEventListener("keydown", onEscCapture, { capture: true }); } catch (e) {}
+    };
+  }, [__isRecording, onToggleRecord, onClose]);
+
+
 
   const __mask = (s) => {
     const raw = String(s || "");
@@ -268,6 +389,97 @@ export default function SpeakAnalyzePanel({
     // strict-ish i18n: fallback to key itself so missing strings are easy to spot
     return String(key || "");
   };
+
+
+
+  // ============================================================
+  // ✅ Pronunciation tips (LLM-first, fallback heuristic)
+  // - Source: target sentence + ASR transcript + token states
+  // - Keep it short (1~3 lines)
+  // ============================================================
+  const [__llmPronTips, __setLlmPronTips] = useState(null); // null=not fetched, []=fetched but empty
+  const [__llmPronTipsLoading, __setLlmPronTipsLoading] = useState(false);
+
+  useEffect(() => {
+    // reset when inputs change
+    __setLlmPronTips(null);
+
+    const tks = Array.isArray(tokens) ? tokens : [];
+    if (!__expected || !__asrText || tks.length === 0) return;
+
+    let aborted = false;
+    const ac = typeof AbortController !== "undefined" ? new AbortController() : null;
+
+    async function run() {
+      try {
+        __setLlmPronTipsLoading(true);
+
+        const resp = await apiFetch("/api/analyze/pronunciation-tips", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            uiLang: uiLang || "",
+            targetText: __expected,
+            transcript: __asrText,
+            tokens: tks,
+          }),
+          signal: ac ? ac.signal : undefined,
+        });
+
+        const data = await resp.json().catch(() => null);
+        if (aborted) return;
+
+        if (resp.ok && data && Array.isArray(data.tips)) {
+          __setLlmPronTips(data.tips.filter(Boolean).slice(0, 3));
+        } else {
+          // backend not ready / missing key / auth / error => fall back to heuristic
+          __setLlmPronTips([]);
+        }
+      } catch (e) {
+        if (aborted) return;
+        __setLlmPronTips([]);
+      } finally {
+        if (aborted) return;
+        __setLlmPronTipsLoading(false);
+      }
+    }
+
+    run();
+
+    return () => {
+      aborted = true;
+      try {
+        ac && ac.abort();
+      } catch (e) {}
+    };
+  }, [__expected, __asrText, uiLang, tokens]);
+
+  const __pronTips = useMemo(() => {
+    // prefer real LLM tips if present
+    if (Array.isArray(__llmPronTips) && __llmPronTips.length) return __llmPronTips;
+
+    const tks = Array.isArray(tokens) ? tokens : [];
+    if (!tks.length || !__expected) return [];
+
+    let missing = 0;
+    let extra = 0;
+    let low = 0;
+
+    for (let i = 0; i < tks.length; i += 1) {
+      const st = String((tks[i] && tks[i].state) || "").toLowerCase();
+      if (st.includes("miss")) missing += 1;
+      else if (st.includes("extra") || st.includes("insert")) extra += 1;
+      else if (st.includes("hit_low") || (st.includes("hit") && st.includes("low"))) low += 1;
+    }
+
+    const out = [];
+    if (missing > 0) out.push(__t("pronTipsMissing") || "可能有漏念：請對照紅色標記的字再試一次。");
+    if (extra > 0) out.push(__t("pronTipsExtra") || "可能有多念/插入：請放慢速度，避免多加字。");
+    if (low > 0) out.push(__t("pronTipsLow") || "部分字不夠清楚：可加強子音收尾與重音。");
+    if (!out.length && __asrText) out.push(__t("pronTipsOk") || "整體不錯：再注意節奏與連音即可。");
+
+    return out.slice(0, 3);
+  }, [__llmPronTips, tokens, __expected, __asrText]);
 
 
   // ============================================================
@@ -410,6 +622,14 @@ export default function SpeakAnalyzePanel({
   // - Hover: show tooltip; Touch: toggle + auto-hide
   // ============================================================
   const [__showConfidenceHint, __setShowConfidenceHint] = useState(false);
+
+  // [20260202 record] mount/unmount
+  useEffect(() => {
+    console.log("[20260202 record][SpeakAnalyzePanel][mount]", { ts: Date.now() });
+    return () => console.log("[20260202 record][SpeakAnalyzePanel][unmount]", { ts: Date.now() });
+  }, []);
+
+  console.log("[20260202 record][SpeakAnalyzePanel][flags]", { ts: Date.now(), speakOpen: typeof window!=="undefined"?window.__SPEAK_PANEL_OPEN:undefined, convNav: typeof window!=="undefined"?window.__CONV_NAV_ACTIVE:undefined });
   const __confidenceHintTimerRef = useRef(null);
 
   const __openConfidenceHint = () => {
@@ -733,9 +953,11 @@ export default function SpeakAnalyzePanel({
       }}
       onClick={(e) => {
         if (e && e.target === e.currentTarget) {
-          try {
-            if (__isRecording && typeof onToggleRecord === "function") onToggleRecord();
-          } catch (e2) {}
+          // click-outside: stop recording first; do NOT close in the same action
+          if (__isRecording && typeof onToggleRecord === "function") {
+            try { onToggleRecord(); } catch (e2) {}
+            return;
+          }
           if (typeof onClose === "function") onClose();
         }
       }}
@@ -757,8 +979,78 @@ export default function SpeakAnalyzePanel({
         }}
       >
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <div style={{ fontSize: 14, fontWeight: 700, opacity: 0.92 }}>{__t("title")}</div>
-                    <button
+          <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+            <div style={{ fontSize: 14, fontWeight: 700, opacity: 0.92, whiteSpace: "nowrap" }}>{__t("title")}</div>
+
+            {/* ✅ Conversation paging (matches dialog arrows behavior) */}
+            {!!conversationActive && (Number(conversationTotal) || 0) > 0 ? (
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                  padding: "4px 8px",
+                  borderRadius: 999,
+                  border: "1px solid rgba(255,122,0,0.22)",
+                  background: "rgba(255,122,0,0.06)",
+                }}
+              >
+                <button
+                  type="button"
+                  disabled={__navDisabled}
+                  onClick={() => {
+                    // Always block history regardless of boundary; if cannot prev, do nothing.
+                    if (conversationCanPrev && typeof onConversationPrev === "function") {
+                      try { onConversationPrev(); } catch (e) {}
+                    }
+                  }}
+                  title={__t("prev") || "上一句"}
+                  aria-label={__t("prev") || "上一句"}
+                  style={{
+                    border: "none",
+                    background: "transparent",
+                    cursor: __navDisabled ? "not-allowed" : "pointer",
+                    opacity: __navDisabled ? 0.38 : 0.92,
+                    padding: "2px 4px",
+                    fontSize: 16,
+                    lineHeight: 1,
+                  }}
+                >
+                  ‹
+                </button>
+
+                <div style={{ fontSize: 12, opacity: 0.86, whiteSpace: "nowrap" }}>
+                  {String((Number(conversationIndex) || 0) + 1)}/{String(Number(conversationTotal) || 0)}
+                </div>
+
+                <button
+                  type="button"
+                  disabled={__navDisabled}
+                  onClick={() => {
+                    // Always block history regardless of boundary; if cannot next, do nothing.
+                    if (conversationCanNext && typeof onConversationNext === "function") {
+                      try { onConversationNext(); } catch (e) {}
+                    }
+                  }}
+                  title={__t("next") || "下一句"}
+                  aria-label={__t("next") || "下一句"}
+                  style={{
+                    border: "none",
+                    background: "transparent",
+                    cursor: __navDisabled ? "not-allowed" : "pointer",
+                    opacity: __navDisabled ? 0.38 : 0.92,
+                    padding: "2px 4px",
+                    fontSize: 16,
+                    lineHeight: 1,
+                  }}
+                >
+                  ›
+                </button>
+              </div>
+            ) : null}
+          </div>
+
+          <button
             type="button"
             onClick={() => {
               try {
@@ -1071,8 +1363,10 @@ export default function SpeakAnalyzePanel({
               </>
             ) : null}
 
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", marginBottom: 6 }}>
-              <div style={{ position: "relative", display: "inline-flex", alignItems: "center" }}>
+
+            <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }}>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, flex: "1 1 auto", minWidth: 0 }}>{__tokenNodes}</div>
+              <div style={{ position: "relative", display: "inline-flex", alignItems: "center", flex: "0 0 auto", marginTop: 2 }}>
                 <button
                   type="button"
                   aria-label={__t("confidenceHintAria")}
@@ -1132,7 +1426,22 @@ export default function SpeakAnalyzePanel({
               </div>
             </div>
 
-            <div style={{ display: "flex", flexWrap: "wrap" }}>{__tokenNodes}</div>
+            {/* ✅ ASR 判定結果（顯示於分析結果下方，跟隨對話切換） */}
+            {__asrText ? (
+              <div
+                style={{
+                  marginTop: 10,
+                  fontSize: 12,
+                  opacity: 0.7,
+                  lineHeight: 1.35,
+                  wordBreak: "break-word",
+                }}
+              >
+                <span style={{ fontWeight: 600, opacity: 0.85 }}>{__t("asrPrefix") || "ASR："}</span>
+                <span>{__asrText}</span>
+              </div>
+            ) : null}
+
           </div>
         ) : null}
       </div>
@@ -1141,3 +1450,5 @@ export default function SpeakAnalyzePanel({
 }
 
 // frontend/src/components/speech/SpeakAnalyzePanel.jsx (file end)
+
+// PATCH: guard pronunciation tips by uiLang consistency

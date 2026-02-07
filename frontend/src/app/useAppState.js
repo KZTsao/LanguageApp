@@ -1,5 +1,24 @@
+// ===== FILE: frontend/src/app/useAppState.js =====
+// ===== FILE: frontend/src/app/useAppState.js =====
 // frontend/src/app/useAppState.js
 import { useCallback, useMemo, useRef, useState } from "react";
+
+// =========================
+// [normal] trace helper (dev)
+// - Enable: VITE_DEBUG_NORMALIZE_TRACE=1
+// =========================
+const __NTRACE_ON =
+  (typeof import.meta !== "undefined" &&
+    import.meta?.env?.VITE_DEBUG_NORMALIZE_TRACE === "1") ||
+  (typeof window !== "undefined" &&
+    window?.localStorage?.getItem("DEBUG_NORMALIZE_TRACE") === "1");
+
+function __nlog(event, payload) {
+  if (!__NTRACE_ON) return;
+  try {
+    console.info("[normal]", "useAppState", event, payload || {});
+  } catch (e) {}
+}
 
 /**
  * ✅ 目的：把 App.jsx 裡面「純 state / keys / helpers / actions」集中到 hook
@@ -231,7 +250,30 @@ export function useAppState({ authUserId, defaultUiLang = "zh-TW" } = {}) {
   // ============================================================
   // UI state（從 App.jsx 搬出）
   // ============================================================
-  const [text, setText] = useState("");
+
+  // ============================================================
+  // Task 5｜SearchBox 顯示字與實際查詢字分離（前端）
+  // - displayText：給 UI（raw input，永遠保留）
+  // - queryText：給 API（乾淨字串；永遠不含括號；trim 後）
+  // - lastNormalizedQuery：僅用於 UI 顯示提示（不可污染 input / history / snapshot）
+  // ============================================================
+  const [displayText, setDisplayText] = useState("");
+  const [queryText, setQueryText] = useState("");
+  const [lastNormalizedQuery, setLastNormalizedQuery] = useState("");
+
+  // ⚠️ Backward compatible: App.jsx 仍使用 state.text/actions.setText
+  // text = displayText（raw, 可編輯）
+  const text = displayText;
+
+  // 1) 使用者輸入時（typing）
+  // - displayText 永遠保留原樣
+  // - queryText 清空（避免沿用舊 normalized）
+  // - 清除 lastNormalizedQuery
+  const setText = useCallback((nextText) => {
+    setDisplayText(nextText ?? "");
+    setQueryText("");
+    setLastNormalizedQuery("");
+  }, []);
   const [result, setResult] = useState(null);
 
   const [uiLang, setUiLang] = useState(() => {
@@ -306,6 +348,9 @@ export function useAppState({ authUserId, defaultUiLang = "zh-TW" } = {}) {
   const state = {
     posInfoCollapseState,
     text,
+    displayText,
+    queryText,
+    lastNormalizedQuery,
     result,
     uiLang,
     loading,
@@ -333,6 +378,63 @@ export function useAppState({ authUserId, defaultUiLang = "zh-TW" } = {}) {
   // ============================================================
   // debug flags & search normalize（從 App.jsx 拆出來，避免 App.jsx 過大）
   // ============================================================
+// ============================================================
+  // Task 5 helpers
+  // - stripParen：只當 fallback（不可成為主要流程）
+  // ============================================================
+  const stripParen = useCallback((input = "") => {
+    try {
+      return String(input).replace(/\s*\([^)]*\)\s*$/, "").trim();
+    } catch {
+      return String(input || "").trim();
+    }
+  }, []);
+
+  // 2) 送出查詢時：取 queryText；若空才 fallback stripParen(displayText)
+  const buildQueryForSubmit = useCallback(() => {
+    const q = (queryText || stripParen(displayText)).trim();
+    const rawText = stripParen(displayText); // 顯示用（禁止括號污染）
+    __nlog("buildQueryForSubmit", {
+  q,
+  rawText:
+    import.meta?.env?.VITE_DEBUG_NORMALIZE_TRACE_TEXT === "1"
+      ? rawText
+      : undefined,
+  hasQueryText: Boolean(queryText && queryText.trim()),
+  hasDisplayText: Boolean(displayText),
+});
+      return { q, rawText };
+  }, [displayText, queryText, stripParen]);
+
+  // 3) 收到 analyze 回傳後：只更新 displayText/queryText/lastNormalizedQuery（不從 displayText 解析括號）
+  const applyAnalyzeResult = useCallback(
+    (data, rawTextSent = "", qSent = "") => {
+      const raw = String((data?.rawInput || rawTextSent || "")).trim();
+      const norm = String((data?.normalizedQuery || qSent || "")).trim();
+
+      // 非德文：不加括號（目前僅支援德文正規化）
+      const lang = String(data?.lang || "").toLowerCase();
+      if (lang && lang !== "de") {
+        setDisplayText(raw || stripParen(displayText));
+        setQueryText(stripParen(raw || displayText).trim());
+        setLastNormalizedQuery("");
+        return;
+      }
+
+      if (norm && raw && norm !== raw) {
+        // input 保持 raw；normalized 只放 hint
+        setDisplayText(raw);
+        setQueryText(norm);
+        setLastNormalizedQuery(norm);
+      } else {
+        setDisplayText(raw);
+        setQueryText(raw);
+        setLastNormalizedQuery("");
+      }
+    },
+    [displayText, stripParen]
+  );
+
   const isLibraryDebugEnabled = useCallback(() => {
     try {
       const v = window.localStorage.getItem("DEBUG") || "";
@@ -374,6 +476,7 @@ export function useAppState({ authUserId, defaultUiLang = "zh-TW" } = {}) {
       const rawStr = (raw ?? "").toString();
       let s = rawStr.trim();
 
+
       // ✅ 去除頭尾標點（僅動頭尾，不動中間）
       s = s.replace(
         /^[\s\u00A0"'“”‘’\(\)\[\]\{\}<>.,!?;:。！？；：…，．、]+|[\s\u00A0"'“”‘’\(\)\[\]\{\}<>.,!?;:。！？；：…，．、]+$/g,
@@ -404,6 +507,10 @@ export function useAppState({ authUserId, defaultUiLang = "zh-TW" } = {}) {
 
   const actions = {
     setText,
+    // Task 5
+    setDisplayText,
+    setQueryText,
+    setLastNormalizedQuery,
     setResult,
     setUiLang,
     setLoading,
@@ -444,6 +551,11 @@ export function useAppState({ authUserId, defaultUiLang = "zh-TW" } = {}) {
     safeWriteLocalStorageText,
     safeWriteLocalStorageJson,
 
+    // Task 5
+    stripParen,
+    buildQueryForSubmit,
+    applyAnalyzeResult,
+
     // ✅ moved from App.jsx
     isLibraryDebugEnabled,
     isSearchDebugEnabled,
@@ -455,3 +567,5 @@ export function useAppState({ authUserId, defaultUiLang = "zh-TW" } = {}) {
   return { keys, helpers, state, actions };
 }
 // frontend/src/app/useAppState.js
+// ===== END FILE: frontend/src/app/useAppState.js =====
+// ===== END FILE =====

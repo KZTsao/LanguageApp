@@ -11,8 +11,6 @@
 // - 改用 effectiveSeparable = separable || detectedPrefix 來拆前綴判斷
 //
 // ⭐ Step B-1（本次修正）
-// - 在動詞下方顯示 recommendations：同義 / 反義 / 同字根
-// - 點擊推薦字：優先走 onWordClick（若外層有傳入）；否則 dispatch window event "wordSearch"
 //
 // ⭐ Step B-2（本輪變更：只改「同字根」規則）
 // - 同字根只在「可分離動詞」時顯示
@@ -169,6 +167,73 @@ export default function WordPosInfoVerb({
     irregular,
   } = extraInfo || {};
 
+  // ✅ Reflexive flag:
+  // - Trust dictionary if present
+  // - Otherwise allow upstream query hints / headword-based hard rule (sich + Verb)
+  const __queryHintsReflexive =
+
+    extraInfo?.query?.hints?.reflexive === true ||
+    extraInfo?.hints?.reflexive === true ||
+    extraInfo?.queryHints?.reflexive === true;
+const __headwordLike =
+  (typeof extraInfo?.headword === "string" && extraInfo.headword.trim()) ||
+  (typeof extraInfo?.rawInput === "string" && extraInfo.rawInput.trim()) ||
+  (typeof extraInfo?.normalizedQuery === "string" && extraInfo.normalizedQuery.trim()) ||
+  "";
+
+const __looksLikeReflexiveLemma = (s) => String(s || "").trim().toLowerCase().startsWith("sich ");
+
+const effectiveReflexive =
+  reflexive === true ||
+  __queryHintsReflexive === true ||
+  __looksLikeReflexiveLemma(__headwordLike) ||
+  __looksLikeReflexiveLemma(queryWord);
+
+  console.debug("[reflexive] WordPosInfoVerb flags", {
+    queryWord,
+    baseForm,
+    dictReflexive: reflexive === true,
+    queryHintsReflexive: __queryHintsReflexive === true,
+  });
+
+  // 🔎 deeper debug: scan multiple possible hint paths on extraInfo (no logic change)
+  const __reflexiveCandidates = (() => {
+    const root = extraInfo && typeof extraInfo === "object" ? extraInfo : {};
+    const paths = [
+      "query.hints.reflexive",
+      "queryHints.reflexive",
+      "hints.reflexive",
+      "meta.hints.reflexive",
+      "analysis.query.hints.reflexive",
+      "analyze.query.hints.reflexive",
+      "payload.query.hints.reflexive",
+      "raw.query.hints.reflexive",
+      "result.query.hints.reflexive",
+    ];
+    const out = {};
+    for (const p of paths) {
+      try {
+        const parts = p.split(".");
+        let cur = root;
+        for (const k of parts) cur = cur && typeof cur === "object" ? cur[k] : undefined;
+        out[p] = cur;
+      } catch {
+        out[p] = undefined;
+      }
+    }
+    return out;
+  })();
+
+  console.debug("[reflexive] WordPosInfoVerb extraInfo candidates", {
+    queryWord,
+    baseForm,
+    candidates: __reflexiveCandidates,
+    extraInfoKeys: extraInfo && typeof extraInfo === "object" ? Object.keys(extraInfo) : null,
+    extraInfoQueryKeys:
+      extraInfo?.query && typeof extraInfo.query === "object" ? Object.keys(extraInfo.query) : null,
+  });
+
+
   // ✅ 不規則解析（只做 badge 顯示，不影響其他行為）
   const irregularResolvedType = (() => {
     // 1) irregularType: "strong" | "mixed" | "suppletive"
@@ -226,6 +291,10 @@ export default function WordPosInfoVerb({
   // ✅ cell refs：用 key 記住每格 DOM，方便 scrollIntoView
   const cellRefs = useRef({}); // { [key: string]: HTMLDivElement | null }
 
+  // ✅ Disable auto-scroll on cell selection (keep selection highlight only)
+  // - User request: switching verb cells should NOT trigger scrolling animation
+  const DISABLE_CELL_AUTO_SCROLL = true;
+
   // ✅ 被選取單字特效持續時間
   const PULSE_DURATION_MS = 1000; // 想要多久就改這裡
 
@@ -233,10 +302,12 @@ export default function WordPosInfoVerb({
     return `${t}:${personKey}`;
   }
 
-  // ✅ 當選取格子變更時，自動滑到該格並置中
+  // ✅ When selected cell changes: keep highlight (auto-scroll disabled)
   useEffect(() => {
     if (!selectedCell) return;
     if (!isOpen) return;
+    if (DISABLE_CELL_AUTO_SCROLL) return;
+
 
     const key = getCellKey(selectedCell.tense, selectedCell.personKey);
     const el = cellRefs.current ? cellRefs.current[key] : null;
@@ -386,6 +457,14 @@ export default function WordPosInfoVerb({
     sie_Sie: "sich",
   };
 
+  console.debug("[reflexive] reflexivePronounMap", {
+    effectiveReflexive,
+    dictReflexive: reflexive === true,
+    queryHintsReflexive: __queryHintsReflexive === true,
+    reflexivePronounMap,
+  });
+
+
   // ✅ Step D：反身動詞去重 helper（避免 "mich mich"）
   function normalizeTokenForMatch(s) {
     // 只做最小化：去頭尾標點，保留德文字母
@@ -455,7 +534,7 @@ export default function WordPosInfoVerb({
   ]);
 
   // ✅ 改：有效可分判斷（後端誤標時也能補救）
-  const effectiveSeparable = separable === true || !!detectedPrefix;
+  const effectiveSeparable = separable === true && !!detectedPrefix;
 
   const valenzText =
     Array.isArray(valenz) && valenz.length > 0
@@ -525,7 +604,10 @@ export default function WordPosInfoVerb({
     const raw = (rawValue || "").trim();
     if (!raw) return "";
 
-    const needsReflexive = reflexive === true;
+    const needsReflexive =
+      effectiveReflexive === true ||
+      /^\s*sich\s+/i.test(String(queryWord || "")) ||
+      /^\s*sich\s+/i.test(String(baseForm || ""));
 
     const needsSeparable =
       effectiveSeparable === true &&
@@ -609,7 +691,7 @@ export default function WordPosInfoVerb({
         form: trimmed, // ✅ 保留純詞形（不含主詞），給上游如果要用
         verbSubtype: verbSubtype || "",
         separable: !!effectiveSeparable,
-        reflexive: !!reflexive,
+        reflexive: !!effectiveReflexive,
       });
       return; // ✅ 交給上層 handleSpeakForm 播放 TTS + 同步 header
     }
@@ -640,119 +722,7 @@ export default function WordPosInfoVerb({
   const ihrDisplay = buildDisplayForm("ihr", ihrRaw);
   const sieSieDisplay = buildDisplayForm("sie_Sie", sieSieRaw);
 
-  // -----------------------------
-  // Step B：同義 / 反義 / 同字根（UI + click）
-  // -----------------------------
-  const recSynonyms = Array.isArray(recommendations?.synonyms)
-    ? recommendations.synonyms
-    : [];
-  const recAntonyms = Array.isArray(recommendations?.antonyms)
-    ? recommendations.antonyms
-    : [];
-  const recRootsRaw = Array.isArray(recommendations?.roots)
-    ? recommendations.roots
-    : [];
-
-  const looksLikeVerbLemma = (s) => {
-    const w = String(s || "").trim();
-    if (!w) return false;
-
-    if (/^sich\s+/i.test(w)) {
-      const rest = w.replace(/^sich\s+/i, "").trim();
-      return /^[A-Za-zÄÖÜäöüß]+(en|n)$/.test(rest);
-    }
-
-    if (!/^[A-Za-zÄÖÜäöüß]+$/.test(w)) return false;
-    return /[A-Za-zÄÖÜäöüß]+(en|n)$/.test(w);
-  };
-
-  const allowShowRoots = useMemo(() => {
-    if (effectiveSeparable) return true;
-
-    const base = String(baseForm || "").trim().toLowerCase();
-    if (!base) return false;
-
-    return recRootsRaw.some((w) => {
-      const t = String(w || "").trim().toLowerCase();
-      return t && t !== base;
-    });
-  }, [effectiveSeparable, recRootsRaw, baseForm]);
-
-  const recRoots = useMemo(() => {
-    if (!allowShowRoots) return [];
-    const uniq = [];
-    const seen = new Set();
-
-    for (const x of recRootsRaw) {
-      const w = String(x || "").trim();
-      if (!w) continue;
-      if (!looksLikeVerbLemma(w)) continue;
-
-      const key = w.toLowerCase();
-      if (seen.has(key)) continue;
-      seen.add(key);
-      uniq.push(w);
-    }
-    return uniq;
-  }, [recRootsRaw, allowShowRoots]);
-
-  const hasRecs =
-    recSynonyms.length > 0 || recAntonyms.length > 0 || recRoots.length > 0;
-
-  function handleRecClick(w) {
-    const word = String(w || "").trim();
-    if (!word) return;
-
-    if (typeof onWordClick === "function") {
-      onWordClick(word);
-      return;
-    }
-
-    if (
-      typeof window !== "undefined" &&
-      typeof window.dispatchEvent === "function"
-    ) {
-      window.dispatchEvent(
-        new CustomEvent("wordSearch", { detail: { text: word } })
-      );
-    }
-  }
-
-  if (typeof window !== "undefined") {
-    window.__verbDebug = {
-      ts: Date.now(),
-      baseForm,
-      tense,
-      extraInfoKeys: extraInfo ? Object.keys(extraInfo) : [],
-      recommendations,
-      recSynonyms,
-      recAntonyms,
-      recRootsRaw,
-      recRoots,
-      effectiveSeparable,
-      detectedPrefix,
-      hasRecs,
-
-      irregularType,
-      irregular,
-      irregularResolvedType,
-      irregularBadgeText,
-
-      // ✅ pulse debug
-      isPulseActive,
-      pulseTick,
-      pulseKey: pulseRef.current?.key,
-    };
-  }
-
-  // eslint-disable-next-line no-console
-  console.log("[WordPosInfoVerb] baseForm =", baseForm);
-  // eslint-disable-next-line no-console
-  console.log(
-    "[WordPosInfoVerb] extraInfoKeys =",
-    extraInfo ? Object.keys(extraInfo) : []
-  );
-
+  // ✅ DEPRECATED: recommendations UI moved to WordPosInfo.jsx
   const headerText = `${posLabel}｜${title}`;
 
   const ARROW_SIZE = 30;
@@ -1138,49 +1108,7 @@ export default function WordPosInfoVerb({
           />
         </div>
 
-        {!hasRecs && (
-          <div
-            style={{
-              marginTop: 10,
-              fontSize: 12,
-              color: "var(--text-muted)",
-              opacity: 0.85,
-            }}
-          >
-            {debugMissingRecs}
-          </div>
-        )}
-
-        {hasRecs && (
-          <div style={{ marginTop: 10 }}>
-            <div
-              style={{
-                fontSize: 12,
-                color: "var(--text-muted)",
-                marginBottom: 6,
-                fontWeight: 600,
-              }}
-            >
-              {recTitle}
-            </div>
-
-            <RecRow
-              label={recSynLabel}
-              items={recSynonyms}
-              onClick={handleRecClick}
-            />
-            <RecRow
-              label={recAntLabel}
-              items={recAntonyms}
-              onClick={handleRecClick}
-            />
-            <RecRow
-              label={recRootLabel}
-              items={recRoots}
-              onClick={handleRecClick}
-            />
-          </div>
-        )}
+        {/* ✅ DEPRECATED: recommendations UI moved to WordPosInfo.jsx */}
       </div>
     </div>
   );

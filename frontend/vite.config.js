@@ -9,8 +9,8 @@ export default defineConfig({
       "/api": {
         target: "http://localhost:4000",
         changeOrigin: true,
-        secure: false,
       },
+    },
       "/admin": {
         target: "http://localhost:4000",
         changeOrigin: true,
@@ -18,4 +18,4 @@ export default defineConfig({
       },
     },
   },
-});
+);

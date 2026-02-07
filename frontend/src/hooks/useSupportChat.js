@@ -1,5 +1,6 @@
-// frontend/src/hooks/useSupportChat.js
+// PATH: frontend/src/hooks/useSupportChat.js
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { apiFetch } from "../utils/apiClient";
 
 /**
  * useSupportChat
@@ -33,16 +34,10 @@ function getOrCreateAnonId() {
   }
 }
 
-async function apiJson(url, opts = {}) {
-  const res = await fetch(url, {
-    headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
-    ...opts,
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`Support API error ${res.status}: ${text || url}`);
-  }
-  return res.json();
+async function apiJson(path, opts = {}) {
+  const res = await apiFetch(path, opts);
+  const json = await res.json();
+  return json;
 }
 
 export default function useSupportChat({
@@ -51,6 +46,10 @@ export default function useSupportChat({
   enabled = true, // 支援日後做 feature flag
 } = {}) {
   const [sessionId, setSessionId] = useState(null);
+  const sessionIdRef = useRef(null);
+  useEffect(() => {
+    sessionIdRef.current = sessionId;
+  }, [sessionId]);
   const [messages, setMessages] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -72,6 +71,8 @@ export default function useSupportChat({
 
   const initSession = useCallback(async () => {
     if (!enabled) return null;
+    // [support] login-required: do not create session until authUserId is ready
+    if (!identity.authUserId) return null;
     try {
       setError(null);
       const data = await apiJson("/api/support/session", {
@@ -100,7 +101,9 @@ export default function useSupportChat({
   const fetchMessages = useCallback(
     async ({ limit = 50 } = {}) => {
       if (!enabled) return;
-      if (!sessionId) return;
+
+      const sid = sessionIdRef.current || sessionId;
+      if (!sid) return;
 
       // 簡單節流，避免 UI 連點
       const now = Date.now();
@@ -110,7 +113,7 @@ export default function useSupportChat({
       try {
         setLoading(true);
         setError(null);
-        const data = await apiJson(`/api/support/messages?sessionId=${encodeURIComponent(sessionId)}&limit=${limit}`);
+        const data = await apiJson(`/api/support/messages?sessionId=${encodeURIComponent(sid)}&limit=${limit}`);
         const next = Array.isArray(data?.messages) ? data.messages : [];
         setMessages(next);
       } catch (e) {
@@ -124,9 +127,10 @@ export default function useSupportChat({
 
   const refreshUnread = useCallback(async () => {
     if (!enabled) return;
-    if (!sessionId) return;
     try {
-      const data = await apiJson(`/api/support/unread_count?sessionId=${encodeURIComponent(sessionId)}`);
+      const sid = sessionIdRef.current || sessionId;
+      if (!sid) return;
+      const data = await apiJson(`/api/support/unread_count?sessionId=${encodeURIComponent(sid)}`);
       if (typeof data?.unreadCount === "number") setUnreadCount(data.unreadCount);
     } catch (e) {
       // unread 失敗不應該打斷 UI
@@ -136,11 +140,12 @@ export default function useSupportChat({
 
   const markRead = useCallback(async () => {
     if (!enabled) return;
-    if (!sessionId) return;
     try {
+      const sid = sessionIdRef.current || sessionId;
+      if (!sid) return;
       await apiJson("/api/support/read", {
         method: "POST",
-        body: JSON.stringify({ sessionId }),
+        body: JSON.stringify({ sessionId: sid }),
       });
       setUnreadCount(0);
     } catch (e) {
@@ -151,9 +156,15 @@ export default function useSupportChat({
   const sendMessage = useCallback(
     async ({ content, meta } = {}) => {
       if (!enabled) return;
-      if (!sessionId) return;
       const text = (content || "").trim();
       if (!text) return;
+
+      // 確保 session 已建立（React state setSessionId 非同步，需用回傳值）
+      let sid = sessionIdRef.current || sessionId;
+      if (!sid) {
+        sid = await initSession();
+      }
+      if (!sid) return;
 
       // optimistic message
       const optimisticId = `local_${Date.now()}_${Math.random().toString(16).slice(2)}`;
@@ -174,7 +185,7 @@ export default function useSupportChat({
         const data = await apiJson("/api/support/messages", {
           method: "POST",
           body: JSON.stringify({
-            sessionId,
+            sessionId: sid,
             content: text,
             meta: {
               ...(meta || {}),
@@ -210,13 +221,15 @@ export default function useSupportChat({
         setSending(false);
       }
     },
-    [enabled, sessionId, identity.uiLang]
+    [enabled, sessionId, identity.uiLang, initSession]
   );
 
   // init: enabled 時建立 session
   useEffect(() => {
     if (!enabled) return;
     if (sessionId) return;
+    // [support] login-required: wait for authUserId
+    if (!identity.authUserId) return;
     initSession();
   }, [enabled, sessionId, initSession]);
 
@@ -250,5 +263,5 @@ export default function useSupportChat({
     markRead,
   };
 }
-//
-// frontend/src/hooks/useSupportChat.js
+
+// END PATH: frontend/src/hooks/useSupportChat.js

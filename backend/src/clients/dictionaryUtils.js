@@ -1,7 +1,7 @@
 /**
  * Groq 出錯或無法解析時的安全預設值
  */
-function fallback(word) {
+function fallback(word, reason) {
   const w = String(word || '').trim();
   return {
     word: w,
@@ -58,7 +58,7 @@ function fallback(word) {
       comparative: '',
       superlative: '',
     },
-    notes: '',
+    notes: reason ? `⚠️ ${String(reason).trim()}` : '',
   };
 }
 
@@ -191,10 +191,12 @@ function normalizeDictionaryResult(parsed, word) {
 
   const verbSubtype = parsed.verbSubtype || '';
 
-  let separable =
-    typeof parsed.separable === 'boolean' ? parsed.separable : false;
+  const __hasExplicitSeparable = typeof parsed.separable === 'boolean';
+  let separable = __hasExplicitSeparable ? parsed.separable : false;
 
-  if (!separable && inferSeparableFromBaseForm(parsed.baseForm || safeWord)) {
+  // Only infer separability when the model did NOT explicitly provide a boolean.
+  // This prevents false positives like "antworten" (starts with "an" but is NOT separable).
+  if (!__hasExplicitSeparable && inferSeparableFromBaseForm(parsed.baseForm || safeWord)) {
     separable = true;
   }
 
@@ -283,16 +285,20 @@ function normalizeDictionaryResult(parsed, word) {
   result.gender = g;
 
   if (result.notes && typeof result.notes === 'string') {
-    let notes = result.notes;
-    const unsurePattern =
-      /(可能|大概|也許|也许|probabl|maybe|vielleicht|ربما)/i;
-    if (unsurePattern.test(notes)) {
-      notes = '';
+    let notes = String(result.notes).trim();
+
+    // ✅ Coverage-first: preserve uncertainty / warning notes instead of wiping them.
+    // If the note contains uncertainty markers, prefix a visible warning badge (unless already present).
+    const unsurePattern = /(可能|大概|也許|也许|probabl|maybe|vielleicht|ربما)/i;
+    const hasWarn = notes.includes('⚠️') || notes.includes('⚠');
+    if (notes && unsurePattern.test(notes) && !hasWarn) {
+      notes = `⚠️ ${notes}`;
     }
+
     result.notes = notes || '';
   }
 
-  return result;
+return result;
 }
 
 module.exports = {

@@ -1,3 +1,5 @@
+
+
 // frontend/src/components/posInfo/WordPosInfo.jsx
 //
 // 詞性資訊總管（WordPosInfo）
@@ -18,8 +20,10 @@ import React from "react";
 import { playTTS } from "../../utils/ttsClient";
 import uiText from "../../uiText";
 
-
-// ✅ 2026-01-26：統一「點選詞形」的 surface 與 meta，讓各詞卡不用各自對齊欄位命名
+// =========================
+// [共用] 推薦字區塊（WordPosInfo 統一渲染）
+// - 子卡不再各自渲染 recommendations UI
+// =========================
 function __pickDefined(obj, keys) {
   const out = {};
   (keys || []).forEach((k) => {
@@ -62,7 +66,6 @@ function __mergeSurfaceMeta(meta, form) {
   }
   return base;
 }
-
 
 import WordPosInfoNoun from "./WordPosInfoNoun";
 import WordPosInfoVerb from "./WordPosInfoVerb";
@@ -114,7 +117,20 @@ export default function WordPosInfo({
 
   const posLocalName = wordUi?.posLocalNameMap?.[pos] || pos;
 
+  // ✅ 共用：推薦字點擊（優先走上層 onWordClick；否則 dispatch wordSearch）
   function handleSpeakForm(form) {
+    // [形容詞優化] trace
+    try {
+      if (form && (form.pos === "Adjektiv" || form.source)) {
+        console.info("[形容詞優化][WordPosInfo][handleSpeakForm]", {
+          pos: form.pos,
+          source: form.source,
+          surface: form.surface,
+          form: form.form,
+          baseForm: form.baseForm,
+        });
+      }
+    } catch (e) {}
     // ✅ 2026-01-12 Task 1：保持原本點選格表會唸出 TTS
     // 同時把選取結果往上回傳（供例句 header 覆蓋）
     // - form=null：代表 clear selection（上層可用來清掉 override）
@@ -250,59 +266,167 @@ export default function WordPosInfo({
       };
 
       return (
-        <WordPosInfoNoun
-          gender={gender}
-          baseForm={baseForm}
-          labels={nounLabels}
-          onSelectForm={handleSpeakForm}
-        />
+        <>
+          <WordPosInfoNoun
+            gender={gender}
+            baseForm={baseForm}
+            labels={nounLabels}
+            onSelectForm={handleSpeakForm}
+          />
+        </>
       );
     }
 
-    case "Verb": {
-      const verbExtraInfo =
-        extraInfo &&
-        extraInfo.dictionary &&
-        typeof extraInfo.dictionary === "object"
+case "Verb": {
+  const dictObj =
+    extraInfo &&
+    extraInfo.dictionary &&
+    typeof extraInfo.dictionary === "object"
+      ? extraInfo.dictionary
+      : (extraInfo && typeof extraInfo === "object" ? extraInfo : {});
+
+  // ✅ Keep dictionary fields, but also preserve upstream query/hints for downstream Verb UI.
+  // - WordExampleBlock passes: { dictionary: d, query, queryHints, hints }
+  // - We must NOT drop query/hints when handing off to WordPosInfoVerb.
+  const verbExtraInfo = {
+    ...dictObj,
+    query: extraInfo?.query,
+    queryHints: extraInfo?.queryHints,
+    hints: extraInfo?.hints,
+    // best-effort: keep headword/rawInput if upstream provides
+    headword: extraInfo?.headword || dictObj?.headword,
+    rawInput: extraInfo?.rawInput || extraInfo?.query?.raw || extraInfo?.query?.text,
+    normalizedQuery: extraInfo?.normalizedQuery || extraInfo?.query?.normalizedQuery,
+  };
+
+  // 🔎 debug only (no logic change): compare dictionary vs query hints
+ 
+  const __dictReflexive = verbExtraInfo?.reflexive === true;
+  const __queryHintsReflexive =
+    extraInfo?.query?.hints?.reflexive === true ||
+    extraInfo?.hints?.reflexive === true ||
+    extraInfo?.queryHints?.reflexive === true;
+
+  console.debug("[reflexive] WordPosInfo Verb handoff", {
+    queryWord,
+    baseForm,
+    dictReflexive: __dictReflexive,
+    queryHintsReflexive: __queryHintsReflexive === true,
+    extraInfoTopKeys: extraInfo && typeof extraInfo === "object" ? Object.keys(extraInfo) : null,
+    verbExtraInfoKeys: verbExtraInfo && typeof verbExtraInfo === "object" ? Object.keys(verbExtraInfo) : null,
+  });
+
+  // 🔎 deeper debug: try multiple hint paths (no logic change)
+  const __reflexiveCandidates = (() => {
+    const root = extraInfo && typeof extraInfo === "object" ? extraInfo : {};
+    const paths = [
+      "query.hints.reflexive",
+      "queryHints.reflexive",
+      "hints.reflexive",
+      "meta.hints.reflexive",
+      "analysis.query.hints.reflexive",
+      "analyze.query.hints.reflexive",
+      "payload.query.hints.reflexive",
+      "raw.query.hints.reflexive",
+      "result.query.hints.reflexive",
+    ];
+    const out = {};
+    for (const p of paths) {
+      try {
+        const parts = p.split(".");
+        let cur = root;
+        for (const k of parts) cur = cur && typeof cur === "object" ? cur[k] : undefined;
+        out[p] = cur;
+      } catch {
+        out[p] = undefined;
+      }
+    }
+    return out;
+  })();
+
+  console.debug("[reflexive] WordPosInfo extraInfo candidates", {
+    queryWord,
+    baseForm,
+    candidates: __reflexiveCandidates,
+    extraInfoType: typeof extraInfo,
+    extraInfoKeys: extraInfo && typeof extraInfo === "object" ? Object.keys(extraInfo) : null,
+    extraInfoQueryKeys:
+      extraInfo?.query && typeof extraInfo.query === "object" ? Object.keys(extraInfo.query) : null,
+  });
+
+  return (
+    <>
+      <WordPosInfoVerb
+        onSelectForm={handleSpeakForm} // ✅ Verb 格子點選：TTS + 同步例句 header（走統一路徑）
+        baseForm={baseForm}
+        queryWord={queryWord}
+        labels={uiLabels.verb}
+        extraInfo={verbExtraInfo}
+        uiLang={uiLang}
+        onWordClick={onWordClick}
+      />
+    </>
+  );
+}
+
+case "Adjektiv":
+      return (
+        <>
+          <WordPosInfoAdjektiv
+            baseForm={baseForm}
+            labels={uiLabels.adj}
+            uiLang={uiLang}
+            extraInfo={extraInfo?.dictionary || extraInfo}
+            onSelectForm={handleSpeakForm}
+          />
+        </>
+      );
+
+    case "Pronomen": {
+      return (
+        <>
+          <WordPosInfoPronomen baseForm={baseForm} labels={uiLabels.pron} />
+        </>
+      );
+    }
+
+    case "Artikel": {
+      return (
+        <>
+          <WordPosInfoArtikel labels={uiLabels.art} />
+        </>
+      );
+    }
+
+    case "Adverb": {
+      const dictObj =
+        extraInfo && extraInfo.dictionary && typeof extraInfo.dictionary === "object"
           ? extraInfo.dictionary
-          : extraInfo;
+          : extraInfo && typeof extraInfo === "object"
+            ? extraInfo
+            : {};
 
       return (
-        <WordPosInfoVerb
-                      onSelectForm={handleSpeakForm} // ✅ Verb 格子點選：TTS + 同步例句 header（走統一路徑）
-          baseForm={baseForm}
-          queryWord={queryWord}
-          labels={uiLabels.verb}
-          extraInfo={verbExtraInfo || {}}
-          uiLang={uiLang}
-          onWordClick={onWordClick}
-        />
+        <>
+          <WordPosInfoAdverb
+            baseForm={baseForm}
+            labels={uiLabels.adv}
+            uiLang={uiLang}
+            extraInfo={dictObj}
+            onSelectForm={handleSpeakForm}
+          />
+        </>
       );
     }
-
-    case "Adjektiv":
-      return (
-        <WordPosInfoAdjektiv
-          baseForm={baseForm}
-          labels={uiLabels.adj}
-          uiLang={uiLang}
-        />
-      );
-
-    case "Pronomen":
-      return <WordPosInfoPronomen baseForm={baseForm} labels={uiLabels.pron} />;
-
-    case "Artikel":
-      return <WordPosInfoArtikel labels={uiLabels.art} />;
-
-    case "Adverb":
-      return <WordPosInfoAdverb baseForm={baseForm} labels={uiLabels.adv} />;
 
     case "Präposition":
-    case "Praeposition":
+    case "Praeposition": {
       return (
-        <WordPosInfoPraeposition baseForm={baseForm} labels={uiLabels.prep} />
+        <>
+          <WordPosInfoPraeposition baseForm={baseForm} labels={uiLabels.prep} />
+        </>
       );
+    }
 
     default:
       return renderPlaceholder("其他詞性");

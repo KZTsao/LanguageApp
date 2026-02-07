@@ -1,3 +1,4 @@
+// ===== FILE: backend/src/services/analyzeWord.js =====
 // PATH: backend/src/services/analyzeWord.js
 // backend/src/services/analyzeWord.js
 
@@ -885,7 +886,7 @@ async function analyzeWord(rawText, options = {}) {
 
   const query = (() => {
     const raw0 = rawInputText;
-    const canonical0 = (phraseMeta && phraseMeta.canonical) ? phraseMeta.canonical : String(patchedDict && (patchedDict.baseForm || patchedDict.word) || text || '').trim();
+    const canonical0 = (phraseMeta && phraseMeta.canonical) ? phraseMeta.canonical : String(patchedDict && (patchedDict.baseForm || patchedDict.lemma || patchedDict.word) || text || '').trim();
 
     // Display（呈現層）：Nomen → 盡量加冠詞；Separable/reflexive → 依 meta
     let display0 = (phraseMeta && phraseMeta.display) ? phraseMeta.display : canonical0;
@@ -915,6 +916,9 @@ async function analyzeWord(rawText, options = {}) {
     length,
     isLong: length > 7,
     query,
+    // ✅ Task5: 讓前端可用 canonical 做再次查詢（括號內容不污染查詢）
+    rawInput: query && query.raw ? query.raw : text,
+    normalizedQuery: query && query.canonical ? String(query.canonical).trim() : String(text || '').trim(),
     dictionary: patchedDict,
     meta: {
       queryMode: finalMode,
@@ -964,3 +968,4 @@ module.exports = { analyzeWord };
 // backend/src/services/analyzeWord.js
 
 // END PATH: backend/src/services/analyzeWord.js
+// ===== END FILE =====

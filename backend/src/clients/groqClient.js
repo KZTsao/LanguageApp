@@ -1,3 +1,6 @@
+// PATH: backend/src/clients/groqClient.js
+// backend/src/clients/groqClient.js
+// PATH: backend/src/clients/groqClient.js
 // backend/src/clients/groqClient.js
 /**
  * 📘 文件說明
@@ -93,16 +96,26 @@ function isOrgRestrictedError(err) {
 }
 
 // ✅ NEW: 判斷 Groq API Key 無效（401 invalid_api_key）
+// - 注意：不同 SDK / 包裝層可能不會提供 err.status，但會把 401 / invalid_api_key 放進 message
 function isInvalidApiKeyError(err) {
   const status = err?.status ?? err?.response?.status;
-  if (status !== 401) return false;
 
   const code = String(err?.code || "").toLowerCase();
-  if (code === "invalid_api_key") return true;
-
   const msg = String(err?.message || "").toLowerCase();
-  return msg.includes("invalid api key") || msg.includes("invalid_api_key");
+
+  // 1) 明確 401
+  if (status === 401) return true;
+
+  // 2) 沒 status 也要能判斷（避免 rotation 永遠不觸發）
+  if (code === "invalid_api_key") return true;
+  if (msg.includes("invalid api key") || msg.includes("invalid_api_key")) return true;
+
+  // 3) 某些包裝會把 "401 {...}" 放進 message
+  if (msg.includes("401") && (msg.includes("invalid") || msg.includes("api key"))) return true;
+
+  return false;
 }
+
 
 function createRotatingGroqClient() {
   const keys = parseKeysFromEnv();
@@ -143,26 +156,28 @@ function createRotatingGroqClient() {
   let index = 0;
 
   // ✅ DB cursor 起始 index（只影響起點）
-  if (keys.length > 1) {
-    getNextGroqKeyIndex(keys.length)
-      .then((dbIndex) => {
-        const safeIndex =
-          Number.isInteger(dbIndex) && dbIndex >= 0 ? dbIndex % keys.length : 0;
-        index = safeIndex;
-
-        console.log(
-          `[groqClient] ▶ start from DB cursor: ${index + 1}/${keys.length} ${maskKey(
-            keys[index]
-          )}`
-        );
-      })
-      .catch((err) => {
-        console.warn("[groqClient] ⚠️ Failed to load DB cursor, fallback to 1/..", {
-          message: String(err?.message || err),
-        });
-      });
-  }
-
+  // 2026-01-27：啟動階段不觸碰 DB cursor（避免啟動慢/卡）
+  // - index 一律從 0 開始
+  // - 真正需要同步 DB cursor 時，僅在 rotateWithDb() 內呼叫 getNextGroqKeyIndex
+  // if (keys.length > 1) {
+  //   getNextGroqKeyIndex(keys.length)
+  //     .then((dbIndex) => {
+  //       const safeIndex =
+  //         Number.isInteger(dbIndex) && dbIndex >= 0 ? dbIndex % keys.length : 0;
+  //       index = safeIndex;
+  // 
+  //       console.log(
+  //         `[groqClient] ▶ start from DB cursor: ${index + 1}/${keys.length} ${maskKey(
+  //           keys[index]
+  //         )}`
+  //       );
+  //     })
+  //     .catch((err) => {
+  //       console.warn("[groqClient] ⚠️ Failed to load DB cursor, fallback to 1/..", {
+  //         message: String(err?.message || err),
+  //       });
+  //     });
+  // }
   function currentKey() {
     return keys[index] || "";
   }
@@ -362,12 +377,19 @@ __groqClient.groqChatCompletion = async (opts = {}) => {
 
   const resp = await __groqClient.chat.completions.create(params);
 
+  // [統計] normalize token usage (if provided by Groq SDK)
+  const usage = resp && resp.usage ? {
+    prompt_tokens: Number(resp.usage.prompt_tokens || resp.usage.promptTokens || 0) || 0,
+    completion_tokens: Number(resp.usage.completion_tokens || resp.usage.completionTokens || 0) || 0,
+    total_tokens: Number(resp.usage.total_tokens || resp.usage.totalTokens || 0) || 0,
+  } : null;
+
   const content =
     resp && resp.choices && resp.choices[0] && resp.choices[0].message
       ? String(resp.choices[0].message.content || "")
       : "";
 
-  return { content, raw: resp };
+  return { content, raw: resp, usage };
 };
 
 module.exports = __groqClient;
@@ -379,3 +401,4 @@ module.exports.groqChatCompletion = __groqClient.groqChatCompletion;
 module.exports.default = __groqClient;
 
 // backend/src/clients/groqClient.js
+// END PATH: backend/src/clients/groqClient.js

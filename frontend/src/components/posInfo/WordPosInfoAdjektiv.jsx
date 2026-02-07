@@ -28,11 +28,126 @@
 import React, { useMemo, useState } from "react";
 import uiText from "../../uiText";
 
-export default function WordPosInfoAdjektiv({ baseForm, labels = {}, uiLang }) {
+export default function WordPosInfoAdjektiv({ baseForm, labels = {}, uiLang, extraInfo, onSelectForm }) {
   if (!baseForm) return null;
 
   // ✅ 折疊（比照 WordPosInfoVerb / WordPosInfoNoun）
   const [isOpen, setIsOpen] = useState(true);
+
+  // =========================
+  // [形容詞優化] Declension UI state
+  // - mode: mixed | strong | weak
+  // - kase: nom | acc | dat | gen
+  // =========================
+  const [declMode, setDeclMode] = useState("weak");
+  const [declCase, setDeclCase] = useState("nom");
+  const [declGender, setDeclGender] = useState("m");
+  const [selectedDeclKey, setSelectedDeclKey] = useState("");
+  const [selectedDegreeKey, setSelectedDegreeKey] = useState("");
+
+  // ✅ declinable: whether adjective is typically inflected (used to gate declension endings)
+  const __declinable = extraInfo?.declinable !== false;
+
+  const __DECL_ENDINGS__ = useMemo(() => {
+  // M/F/N/P endings (P = Plural)
+  // Note: This is a compact reference for UI purposes, not a full grammar engine.
+  const strong = {
+    nom: { m: "er", f: "e", n: "es", p: "e" },
+    acc: { m: "en", f: "e", n: "es", p: "e" },
+    dat: { m: "em", f: "er", n: "em", p: "en" },
+    gen: { m: "en", f: "er", n: "en", p: "er" },
+  };
+
+  const mixed = {
+    nom: { m: "er", f: "e", n: "es", p: "en" },
+    acc: { m: "en", f: "e", n: "es", p: "en" },
+    dat: { m: "en", f: "en", n: "en", p: "en" },
+    gen: { m: "en", f: "en", n: "en", p: "en" },
+  };
+
+  const weak = {
+    nom: { m: "e", f: "e", n: "e", p: "en" },
+    acc: { m: "en", f: "e", n: "e", p: "en" },
+    dat: { m: "en", f: "en", n: "en", p: "en" },
+    gen: { m: "en", f: "en", n: "en", p: "en" },
+  };
+
+  return { strong, mixed, weak };
+}, []);
+
+
+  const __declEnding = (mode, kase, gender) => {
+    if (!__declinable) return "";
+    const tbl = __DECL_ENDINGS__?.[mode] || __DECL_ENDINGS__.mixed;
+    return tbl?.[kase]?.[gender] || "";
+  };
+
+  const __declArticle = (mode, gender) => {
+    if (mode === "weak") {
+      return { m: "der", f: "die", n: "das", p: "die" }[gender] || "der";
+    }
+    if (mode === "mixed") {
+      return { m: "ein", f: "eine", n: "ein", p: "keine" }[gender] || "ein";
+    }
+    // strong
+    return "";
+  };
+
+  const __declClick = (gender) => {
+  const ending = __declEnding(declMode, declCase, gender);
+  const adjectiveSurface = `${baseForm}${ending}`;
+  const article = __declArticle(declMode, gender);
+  const examplePhrase = article ? `${article} ${adjectiveSurface}` : adjectiveSurface;
+
+  const key = `${declMode}:${declCase}:${gender}:${adjectiveSurface}`;
+  setSelectedDeclKey(key);
+  // ✅ 互斥：詞尾變化與程度同時間只能有一個被框選
+  setSelectedDegreeKey("");
+
+  console.info("[形容詞優化][declension][click]", {
+    declMode,
+    declCase,
+    gender,
+    adjectiveSurface,
+    examplePhrase,
+  });
+
+  // 若上層有接 onSelectForm（走 WordPosInfo.handleSpeakForm），可同時發音 + 更新 headword badge
+  // ※保持行為：送出的是「形容詞本體」(不含冠詞)，避免影響既有邏輯
+  onSelectForm?.({
+    pos: "Adjektiv",
+    baseForm,
+    surface: adjectiveSurface,
+    form: adjectiveSurface,
+    source: `declension:${declMode}:${declCase}:${gender}`,
+  });
+};
+
+  const __declCaseLabel = (kase) => {
+    const m = adjUi?.declCases || {};
+    if (kase === "nom") return m.nom || "Nominativ";
+    if (kase === "acc") return m.acc || "Akkusativ";
+    if (kase === "dat") return m.dat || "Dativ";
+    if (kase === "gen") return m.gen || "Genitiv";
+    return kase;
+  };
+
+  const __degreeClick = (kind, surface) => {
+    if (!surface || surface === "-") return;
+    setSelectedDegreeKey(kind);
+    // ✅ 互斥：詞尾變化與程度同時間只能有一個被框選
+    setSelectedDeclKey("");
+    console.info("[形容詞優化][degree][click]", { kind, surface });
+
+    onSelectForm?.({
+      pos: "Adjektiv",
+      baseForm,
+      surface,
+      form: surface,
+      source: `degree:${kind}`,
+    });
+  };
+
 
   // =====================================================
   // ✅ 功能初始化狀態（Production 排查）
@@ -249,14 +364,12 @@ export default function WordPosInfoAdjektiv({ baseForm, labels = {}, uiLang }) {
 
   // ✅ 預設 forms（保持你原本邏輯，但用 useMemo 避免每次 render 重新拼字）
   const forms = useMemo(() => {
+    const cmp = extraInfo?.comparison || null;
     return {
-      positive: baseForm,
-      comparative: baseForm + "er",
-      superlative: "am " + baseForm + "sten",
+      positive: cmp?.positive || baseForm,
+      comparative: cmp?.comparative || (baseForm + "er"),
+      superlative: cmp?.superlative || ("am " + baseForm + "sten"),
 
-      // -------------------------
-      // ❌ deprecated：舊示例（保留，禁止刪除）
-      // -------------------------
       // declWeak: `der ${baseForm}e Mann`,
       // declMixed: `ein ${baseForm}er Mann`,
       // declStrong: `${baseForm}er Mann`,
@@ -269,6 +382,13 @@ export default function WordPosInfoAdjektiv({ baseForm, labels = {}, uiLang }) {
       declStrong: `${baseForm}er ${nounPlaceholder}`,
     };
   }, [baseForm, nounPlaceholder]);
+
+  // ✅ Degree visibility: if not comparable, do NOT render comparative/superlative rows
+  // - Prefer backend flags/values (extraInfo.comparability / extraInfo.comparison)
+  const __cmp = extraInfo?.comparison || null;
+  const __notComparable = extraInfo?.comparability === "not_comparable";
+  const __showComparative = !__notComparable && !!__cmp?.comparative;
+  const __showSuperlative = !__notComparable && !!__cmp?.superlative;
 
   // ✅ Header 文字：嚴格模式（缺字串一律 "-"）
   const headerText = `${posLabel}｜${title}`;
@@ -397,7 +517,7 @@ export default function WordPosInfoAdjektiv({ baseForm, labels = {}, uiLang }) {
 
   return (
     <div style={OuterBoxStyle}>
-      {HeaderRow}
+     
 
       <div
         style={{
@@ -407,22 +527,10 @@ export default function WordPosInfoAdjektiv({ baseForm, labels = {}, uiLang }) {
           border: "none",
         }}
       >
-        {/* ✅ 可選提示（有文字才顯示） */}
-        {hintText ? (
-          <div
-            style={{
-              fontSize: 12,
-              color: "var(--text-muted)",
-              marginBottom: 8,
-              opacity: 0.9,
-            }}
-          >
-            {hintText}
-          </div>
-        ) : null}
+        
 
         {/* ✅ 區塊標題（比照 Verb 的 RecTitle / 小標） */}
-        <SectionTitle text={degreeTitle} />
+        <SectionTitle text={degreeTitle} className="posinfo-subtle-title posinfo-subtle-title--low" />
 
         <div
           style={{
@@ -437,56 +545,153 @@ export default function WordPosInfoAdjektiv({ baseForm, labels = {}, uiLang }) {
             rowGap: 6,
           }}
         >
-          <KeyValueRow
+          <DegreeRow
             k={positiveLabel}
             colon={colon}
             v={forms.positive || "-"}
+            selected={selectedDegreeKey === "positive"}
+            onClick={() => __degreeClick("positive", forms.positive || "-")}
           />
-          <KeyValueRow
-            k={comparativeLabel}
-            colon={colon}
-            v={forms.comparative || "-"}
-          />
-          <KeyValueRow
-            k={superlativeLabel}
-            colon={colon}
-            v={forms.superlative || "-"}
-          />
+          {__showComparative && (
+                      <DegreeRow
+                        k={comparativeLabel}
+                        colon={colon}
+                        v={forms.comparative || "-"}
+                        selected={selectedDegreeKey === "comparative"}
+                        onClick={() => __degreeClick("comparative", forms.comparative || "-")}
+                      />
+          )}
+          {__showSuperlative && (
+                      <DegreeRow
+                        k={superlativeLabel}
+                        colon={colon}
+                        v={forms.superlative || "-"}
+                        selected={selectedDegreeKey === "superlative"}
+                        onClick={() => __degreeClick("superlative", forms.superlative || "-")}
+                      />
+          )}
         </div>
 
+        {__notComparable && (
+          <div
+            style={{
+              marginTop: 6,
+              fontSize: 12,
+              opacity: 0.55,
+              color: "var(--text-muted)",
+            }}
+          >
+            {adjUi?.degreeNotComparableHint || "-"}
+          </div>
+        )}
         <div style={{ height: 10 }} />
-
         <SectionTitle text={declTitle} />
+        {!__declinable && (
+          <div
+            style={{
+              marginTop: 4,
+              marginBottom: 6,
+              fontSize: 12,
+              opacity: 0.55,
+              color: "var(--text-muted)",
+            }}
+          >
+            {adjUi?.declNotDeclinableHint || "-"}
+          </div>
+        )}
 
-        <div
-          style={{
-            padding: 8,
-            borderRadius: 0,
-            backgroundColor: "var(--bg-soft)",
-            border: "1px solid var(--border-subtle)",
-            fontSize: 13,
-            fontFamily: "var(--font-sans)",
-            display: "grid",
-            gridTemplateColumns: "1fr",
-            rowGap: 6,
-          }}
-        >
-          <KeyValueRow
-            k={declWeakLabel}
-            colon={colon}
-            v={forms.declWeak || "-"}
-          />
-          <KeyValueRow
-            k={declMixedLabel}
-            colon={colon}
-            v={forms.declMixed || "-"}
-          />
-          <KeyValueRow
-            k={declStrongLabel}
-            colon={colon}
-            v={forms.declStrong || "-"}
-          />
-        </div>
+        {/* [形容詞優化] 模式/格位：同一個 div，皆用選單 */}
+<div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
+  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+    <div style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 600 }}>
+      {adjUi?.declCaseTitle || "格位"}
+    </div>
+    <select
+      value={declCase}
+      onChange={(e) => {
+        const to = e.target.value;
+        console.info("[形容詞優化][declension][case]", { from: declCase, to });
+        setDeclCase(to);
+      }}
+      style={{
+        fontSize: 12,
+        padding: "4px 8px",
+        border: "1px solid var(--border-subtle)",
+        background: "transparent",
+      }}
+    >
+      <option value="nom">{__declCaseLabel("nom")}</option>
+      <option value="acc">{__declCaseLabel("acc")}</option>
+      <option value="dat">{__declCaseLabel("dat")}</option>
+      <option value="gen">{__declCaseLabel("gen")}</option>
+    </select>
+  </div>
+
+  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+    <div style={{ fontSize: 12, color: "var(--text-muted)", fontWeight: 600 }}>
+      {adjUi?.declModeTitle || adjUi?.declTitle || "變化"}
+    </div>
+    <select
+      value={declMode}
+      onChange={(e) => {
+        const to = e.target.value;
+        console.info("[形容詞優化][declension][mode]", { from: declMode, to });
+        setDeclMode(to);
+      }}
+      style={{
+        fontSize: 12,
+        padding: "4px 8px",
+        border: "1px solid var(--border-subtle)",
+        background: "transparent",
+      }}
+    >
+      <option value="weak">{declWeakLabel}</option>
+      <option value="mixed">{declMixedLabel}</option>
+      <option value="strong">{declStrongLabel}</option>
+    </select>
+  </div>
+</div>
+
+{/* [形容詞優化] 性別：三個同時出現（可點選） */}
+{/* [形容詞優化] 詞尾變化：僅圈選「冠詞＋形容詞」 */}
+<div
+  style={{
+    padding: 8,
+    borderRadius: 0,
+    backgroundColor: "var(--bg-soft)",
+    border: "1px solid var(--border-subtle)",
+    fontSize: 13,
+    fontFamily: "var(--font-sans)",
+    display: "grid",
+    gridTemplateColumns: "1fr",
+    rowGap: 8,
+  }}
+>
+    {[
+    { g: "m", label: adjUi?.genderM || "M" },
+    { g: "f", label: adjUi?.genderF || "F" },
+    { g: "n", label: adjUi?.genderN || "N" },
+    { g: "p", label: adjUi?.genderP || "P" },
+  ]
+    .filter((x) => !!x.g)
+    .map(({ g, label }) => (
+      <DeclRow
+        key={g}
+        gender={g}
+        genderLabel={label}
+        article={__declArticle(declMode, g)}
+        baseForm={baseForm}
+        ending={__declEnding(declMode, declCase, g)}
+        nounPlaceholder={nounPlaceholder}
+        selectedKey={selectedDeclKey}
+        buildKey={(adjectiveSurface) => `${declMode}:${declCase}:${g}:${adjectiveSurface}`}
+        onClick={() => {
+          setDeclGender(g);
+          __declClick(g);
+        }}
+      />
+    ))}
+</div>
 
         {/* =====================================================
            ✅ Debug 區塊（Production 排查）
@@ -497,7 +702,7 @@ export default function WordPosInfoAdjektiv({ baseForm, labels = {}, uiLang }) {
   );
 }
 
-function SectionTitle({ text }) {
+function SectionTitle({ text, className }) {
   // 中文功能說明：區塊小標題；嚴格模式下 "-" 代表無字串，直接不顯示
   if (!text || text === "-") return null;
 
@@ -542,6 +747,109 @@ function KeyValueRow({ k, colon, v }) {
         {v}
       </div>
     </div>
+  );
+}
+
+
+
+function DegreeRow({ k, colon, v, selected, onClick }) {
+  // [形容詞優化] 程度可選取：僅圈選「值」本體（比照詞尾圈選樣式）
+  const isDisabled = !v || v === "-";
+
+  return (
+    <button
+      type="button"
+      disabled={isDisabled}
+      onClick={onClick}
+      style={{
+        display: "flex",
+        gap: 6,
+        alignItems: "baseline",
+        padding: 0,
+        border: "none",
+        background: "transparent",
+        cursor: isDisabled ? "default" : "pointer",
+        width: "100%",
+        textAlign: "left",
+        opacity: isDisabled ? 0.6 : 1,
+      }}
+    >
+      <div
+        style={{
+          fontSize: 12,
+          color: "var(--text-muted)",
+          whiteSpace: "nowrap",
+          minWidth: 66,
+        }}
+      >
+        {k}
+        {colon}
+      </div>
+
+      <div
+        style={{
+          fontSize: 14,
+          color: "var(--text-main)",
+          fontWeight: 700,
+          wordBreak: "break-word",
+        }}
+      >
+        <span className={`posinfo-de-outline ${selected ? "posinfo-de-outline--selected" : ""}`}>{v}</span>
+      </div>
+    </button>
+  );
+}
+function DeclRow({
+  gender,
+  genderLabel,
+  article,
+  baseForm,
+  ending,
+  nounPlaceholder,
+  selectedKey,
+  buildKey,
+  onClick,
+}) {
+  // [形容詞優化] 單列：gender badge +（冠詞＋形容詞）圈選 + 名詞 placeholder
+  const adjectiveSurface = `${baseForm}${ending || ""}`;
+  const key = buildKey ? buildKey(adjectiveSurface) : "";
+  const isSelected = !!(key && selectedKey && key === selectedKey);
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        display: "flex",
+        alignItems: "baseline",
+        gap: 10,
+        width: "100%",
+        textAlign: "left",
+        padding: 0,
+        border: "none",
+        background: "transparent",
+        cursor: "pointer",
+      }}
+    >
+      <span className={`posinfo-gender-badge posinfo-gender-${gender}`} title={genderLabel}>
+        {genderLabel}
+      </span>
+
+      {/* 文字顯示比照 DegreeRow：fontSize 14 / fontWeight 700 */}
+      <div style={{ fontSize: 14, fontWeight: 700, color: "var(--text-main)" }}>
+        <span className={`posinfo-de-outline ${isSelected ? "posinfo-de-outline--selected" : ""}`}>
+          {article ? <span style={{ marginRight: 6 }}>{article}</span> : null}
+          <span>
+            {baseForm}
+            <span style={{ fontWeight: 900 }}>{ending}</span>
+          </span>
+        </span>
+
+        <span style={{ marginLeft: 8, fontSize: 14, color: "var(--text-muted)", fontWeight: 600 }}>
+          {nounPlaceholder === "-" ? "___" : "___"}
+        </span>
+      </div>
+    </button>
   );
 }
 // frontend/src/components/WordPosInfoAdjektiv.jsx

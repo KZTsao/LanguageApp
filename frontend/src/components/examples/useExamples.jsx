@@ -142,6 +142,8 @@ function buildEffectiveRefs(rawRefs, ctx) {
   const pos = String(ctx?.partOfSpeech || "").toLowerCase().trim();
   const caseOpt = ctx?.caseOpt;
   const articleType = String(ctx?.articleType || "").toLowerCase().trim();
+
+  const sentenceType = ctx?.sentenceType; // 僅透傳，不影響 refs
   const gender = ctx?.gender;
 
   // 目前只處理名詞（noun / substantiv）
@@ -202,6 +204,7 @@ export default function useExamples({
   senseIndex,
   caseOpt,
   articleType,
+  sentenceType,
   explainLang,
 
   // ✅ 新增（可選）：多重參考（不破壞既有呼叫）
@@ -327,10 +330,11 @@ export default function useExamples({
       word: d?.word,
       senseIndex,
       explainLang,
+      sentenceType,
       multiRefEnabled: !!multiRefEnabled,
       refsCount: Array.isArray(refs) ? refs.length : 0,
     });
-  }, [multiRefEnabled, refs, headwordOverride, d, senseIndex, explainLang]);
+  }, [multiRefEnabled, refs, headwordOverride, d, senseIndex, sentenceType, explainLang]);
 
   /**
    * 中文功能說明：
@@ -450,6 +454,7 @@ export default function useExamples({
           explainLang,
           caseOpt,
           articleType,
+          sentenceType,
         }
       );
 
@@ -474,6 +479,11 @@ export default function useExamples({
             polarity: "pos",
             case: caseOpt || undefined,
             articleType: articleType || undefined,
+            // ✅ sentenceType：句型骨架（預設 default，不破壞既有行為）
+            sentenceType:
+              typeof sentenceType === "string" && sentenceType.trim()
+                ? sentenceType.trim()
+                : "default",
           },
 
           // ✅ 新增：多重參考 payload（後端可忽略，不影響舊邏輯）
@@ -554,7 +564,7 @@ export default function useExamples({
     }
 
     setLoading(false);
-  }, [d, senseIndex, caseOpt, articleType, explainLang]);
+  }, [d, senseIndex, caseOpt, articleType, sentenceType, explainLang]);
 
   useEffect(() => {
     if (!d || !d.word) return;

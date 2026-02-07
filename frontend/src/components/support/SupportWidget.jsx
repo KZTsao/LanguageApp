@@ -1,27 +1,18 @@
-// frontend/src/components/support/SupportWidget.jsx
+// PATH: frontend/src/components/support/SupportWidget.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import useSupportChat from "../../hooks/useSupportChat";
 
 /**
  * SupportWidget
- * - 右下角固定客服入口（UI shell + 最小資料層接線）
- * - ✅ Network 觸發時機：面板 open 時才啟動（避免一進站就打 API）
  *
- * MVP 能力（此版）
- * - 顯示訊息列表（user / support）
- * - 送出訊息（optimistic）
- * - 開啟面板自動 markRead（清除未讀 badge）
- * - 點擊視窗外自動關閉
+ * ✅ 需求對應（2026-02-03）
+ * 1) user 對話視窗保留歷史（localStorage）
+ * 3) 自己白色底、對方淡橘色底
+ * 4) user 未讀訊息 badge（面板關閉時也能更新）
  *
- * 異動紀錄（只追加，不刪除）：
- * - 2026-01-24：初版
- * - 2026-01-24：尺寸/位置/配色調整
- * - 2026-01-24：圖案改為對話雲
- * - 2026-01-24：點擊視窗外自動關閉
- * - 2026-01-24：純線條對話雲
- * - 2026-01-24：位置上移、尺寸放大
- * - 2026-01-24：接上 useSupportChat（open 才打 /api/support/*）
- * - 2026-01-24：補齊聊天 UI（列表/輸入/送出/scroll）
+ * ⚠️ 修正（針對你截圖的 404）
+ * - 不再呼叫 /api/support/unread（後端不存在）
+ * - 面板關閉時：若 hook 有 refreshUnread() 才輪詢；沒有就不打任何不存在的 API
  */
 
 function formatTime(iso) {
@@ -39,7 +30,7 @@ function formatTime(iso) {
 function safeRole(role) {
   const r = String(role || "").toLowerCase();
   if (r === "user") return "user";
-  if (r === "support" || r === "bot") return "support";
+  if (r === "support" || r === "bot" || r === "admin") return "support";
   return r || "support";
 }
 
@@ -48,46 +39,47 @@ export default function SupportWidget({ authUserId, uiLang }) {
   const lastCompositionEndAtRef = React.useRef(0);
 
   const [open, setOpen] = useState(false);
-
   const [draft, setDraft] = useState("");
   const [localError, setLocalError] = useState(null);
 
-  const buttonSize = 52; // 放大一點
-  const inset = 32; // 往內縮一些
-  const lift = 26; // 往上抬高
+  const buttonSize = 52;
+  const inset = 32;
+  const lift = 26;
 
   const panelRef = useRef(null);
   const buttonRef = useRef(null);
   const listRef = useRef(null);
   const endRef = useRef(null);
 
-  // ✅ 只在 open 時啟用 hook，確保「按下客服按鈕才會有 Network」
-  const support = useSupportChat({ authUserId, uiLang, enabled: open });
+  // ✅ per-user cache key（保留歷史）
+  const cacheKey = useMemo(() => {
+    const uid = String(authUserId || "").trim();
+    return uid ? `support_chat_history__${uid}` : "support_chat_history__anon";
+  }, [authUserId]);
+
+  // ✅ local cached messages (history)
+  const [cachedMessages, setCachedMessages] = useState(() => {
+    try {
+      const raw = localStorage.getItem(cacheKey);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  });
+
+  // ✅ hook 常駐（為了面板關閉時也能 refreshUnread / badge）
+  const support = useSupportChat({ authUserId, uiLang, enabled: true });
   const unreadCount = support?.unreadCount || 0;
 
-  // ✅ unread badge 不包含「自動回覆」
-  // - 規則：只算 support/bot 且 is_read=false 且 meta.auto !== true
-  const unreadCountEffective = useMemo(() => {
-    try {
-      const arr = Array.isArray(support?.messages) ? support.messages : [];
-      let c = 0;
-      for (const m of arr) {
-        const role = safeRole(m.senderRole || m.sender_role);
-        if (role === "user") continue;
-        const isRead = typeof m.is_read === "boolean" ? m.is_read : !!m.isRead;
-        if (isRead) continue;
-        const autoFlag = m?.meta?.auto || m?.meta?.isAuto || m?.meta?.autoReply;
-        if (autoFlag === true) continue;
-        c += 1;
-      }
-      return c;
-    } catch (e) {
-      return support?.unreadCount || 0;
-    }
-  }, [support?.messages, support?.unreadCount]);
-
+  // ✅ messages source: hook -> cache fallback
   const messages = useMemo(() => {
-    const arr = Array.isArray(support?.messages) ? support.messages : [];
+    const arr = Array.isArray(support?.messages)
+      ? support.messages
+      : Array.isArray(cachedMessages)
+      ? cachedMessages
+      : [];
     return arr.map((m) => ({
       id: m.id,
       senderRole: safeRole(m.senderRole || m.sender_role),
@@ -95,10 +87,72 @@ export default function SupportWidget({ authUserId, uiLang }) {
       createdAt: m.createdAt || m.created_at,
       optimistic: !!m.optimistic,
       isRead: typeof m.is_read === "boolean" ? m.is_read : undefined,
+      meta: m.meta,
     }));
-  }, [support?.messages]);
+  }, [support?.messages, cachedMessages]);
 
-  // 點擊視窗外自動關閉
+  // ✅ any new messages -> persist (keep history)
+  useEffect(() => {
+    try {
+      if (!Array.isArray(support?.messages)) return;
+      const arr = support.messages;
+      setCachedMessages(arr);
+      localStorage.setItem(cacheKey, JSON.stringify(arr));
+    } catch {
+      // ignore
+    }
+  }, [support?.messages, cacheKey]);
+
+  // ✅ unread badge 不包含「自動回覆」
+  // - 優先用 messages 自算（避免 hook unreadCount 不準）
+  // - 同時保留 unreadCount 作為 fallback
+  const unreadCountEffective = useMemo(() => {
+    try {
+      const arr = Array.isArray(messages) ? messages : [];
+      let c = 0;
+      for (const m of arr) {
+        const role = safeRole(m.senderRole);
+        if (role === "user") continue;
+        const isRead = typeof m.isRead === "boolean" ? m.isRead : false;
+        if (isRead) continue;
+        const autoFlag = m?.meta?.auto || m?.meta?.isAuto || m?.meta?.autoReply;
+        if (autoFlag === true) continue;
+        c += 1;
+      }
+      const hookUnread = Number.isFinite(unreadCount) ? unreadCount : 0;
+      return Math.max(c, hookUnread);
+    } catch (e) {
+      const hookUnread = Number.isFinite(unreadCount) ? unreadCount : 0;
+      return hookUnread;
+    }
+  }, [messages, unreadCount]);
+
+  // ✅ 面板關閉：輪詢 hook.refreshUnread()（若存在）
+  // 重要：不再打 /api/support/unread，所以不會再噴 404
+  useEffect(() => {
+    let timer = null;
+
+    async function tick() {
+      try {
+        if (typeof support?.refreshUnread === "function") {
+          await support.refreshUnread();
+        }
+      } catch {
+        // ignore（不要讓 console 被刷）
+      }
+    }
+
+    if (!open) {
+      tick();
+      timer = setInterval(tick, 30000);
+    }
+
+    return () => {
+      if (timer) clearInterval(timer);
+    };
+  }, [open, support]);
+
+  // click outside close
   useEffect(() => {
     if (!open) return;
 
@@ -114,36 +168,33 @@ export default function SupportWidget({ authUserId, uiLang }) {
     };
 
     document.addEventListener("mousedown", handleClickOutside);
-
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [open]);
 
-  // ESC 鍵關閉面板
+  // ESC close
   useEffect(() => {
     if (!open) return;
     const onKey = (e) => {
+      if (window.__SPEAK_PANEL_OPEN || window.__CONV_NAV_ACTIVE) return;
       if (e.key === "Escape") setOpen(false);
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [open]);
 
-
-  // ✅ open 後主動觸發一次：建立 session / 拉 messages / 標記已讀
+  // ✅ open: init session + fetch + markRead
   useEffect(() => {
     if (!open) return;
 
-    // 這三支 API 呼叫都在 hook 內，這裡只是確保 open 後立刻啟動
     if (support?.initSession) support.initSession();
     if (support?.fetchMessages) support.fetchMessages({ limit: 50 });
     if (support?.markRead) support.markRead();
 
-    // UI：開啟時把錯誤清掉
     setLocalError(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  // UI：新訊息時捲到最底
+  // scroll to bottom on new message (open only)
   useEffect(() => {
     if (!open) return;
     try {
@@ -158,10 +209,18 @@ export default function SupportWidget({ authUserId, uiLang }) {
 
     try {
       setLocalError(null);
-      await support.sendMessage({ content: text, meta: { uiLang, page: window.location?.pathname || "" } });
+
+      if (!support?.sessionId && support?.initSession) {
+        await support.initSession();
+      }
+
+      await support.sendMessage({
+        content: text,
+        meta: { uiLang, page: window.location?.pathname || "" },
+      });
+
       setDraft("");
 
-      // 送出後：拉一次 messages（拿到 bot 回覆），並刷新 unread（不影響你原本的邏輯）
       if (support?.fetchMessages) support.fetchMessages({ limit: 50 });
       if (support?.refreshUnread) support.refreshUnread();
     } catch (e) {
@@ -170,35 +229,24 @@ export default function SupportWidget({ authUserId, uiLang }) {
   };
 
   const onKeyDown = (e) => {
-    // ✅ IME（中文/日文）組字中：不要把 Enter 當送出
-    // - composingRef：由 onCompositionStart/End 維護（更穩）
-    // - e.nativeEvent.isComposing / keyCode===229：部分瀏覽器/輸入法會用
     const ne = e && e.nativeEvent ? e.nativeEvent : null;
     const isComposingNow = !!(composingRef.current || (ne && ne.isComposing) || e.keyCode === 229);
 
-    // ✅ Enter：預設換行（讓中文輸入/選字不被干擾）
-    // ✅ Ctrl/Cmd+Enter：才送出（避開 IME UX 問題）
     if (e.key === "Enter") {
-      const isCtrlOrCmd = !!(e.ctrlKey || e.metaKey);
+      if (e.shiftKey) return;
 
-      // 剛結束 composition 的極短時間內，某些情境 e.isComposing 可能已變 false
-      // 這裡用時間窗再保護一次，避免「按 Enter 選字 → 被當送出」
       const now = Date.now();
       const justEndedComposition = now - (lastCompositionEndAtRef.current || 0) < 80;
+      if (isComposingNow || justEndedComposition) return;
 
-      if (isCtrlOrCmd) {
-        if (isComposingNow || justEndedComposition) return;
-        e.preventDefault();
-        onSend();
-      }
-      // 不是 Ctrl/Cmd+Enter：一律交給 textarea 自己處理（換行/選字）
-      return;
+      e.preventDefault();
+      onSend();
     }
   };
 
   return (
     <>
-      {/* 浮動按鈕 */}
+      {/* Floating button */}
       <div
         style={{
           position: "fixed",
@@ -226,7 +274,6 @@ export default function SupportWidget({ authUserId, uiLang }) {
           }}
           title="客服"
         >
-          {/* 線條對話雲（柔和線條色：使用 --icon-soft，若未定義則 fallback） */}
           <svg
             width="22"
             height="22"
@@ -264,7 +311,7 @@ export default function SupportWidget({ authUserId, uiLang }) {
         </button>
       </div>
 
-      {/* 面板 */}
+      {/* Panel */}
       {open && (
         <div
           ref={panelRef}
@@ -309,8 +356,7 @@ export default function SupportWidget({ authUserId, uiLang }) {
             </button>
           </div>
 
-          {/* Status line removed (user-facing) */}
-          {/* Error line */}
+          {/* Error */}
           {(localError || support?.error) && (
             <div style={{ fontSize: 12, opacity: 0.8 }}>
               {String(localError || support?.error?.message || support?.error)}
@@ -336,7 +382,7 @@ export default function SupportWidget({ authUserId, uiLang }) {
               <div style={{ fontSize: 13, opacity: 0.65, lineHeight: 1.5 }}>
                 你好！如果你遇到問題或想回報 bug，可以在這裡留言，我們會盡快處理。
                 <div style={{ marginTop: 6, fontSize: 12, opacity: 0.6 }}>
-                  （此面板在打開時才會連線，不會影響主頁查字流程）
+                  （歷史訊息會保留在本機；打開面板才會同步）
                 </div>
               </div>
             ) : (
@@ -356,7 +402,10 @@ export default function SupportWidget({ authUserId, uiLang }) {
                       style={{
                         maxWidth: "85%",
                         border: "1px solid var(--border-subtle)",
-                        background: "var(--card-bg)",
+                        // ✅ 自己白色底、對方淡橘色底
+                        background: isUser
+                          ? "var(--card-bg, #fff)"
+                          : "var(--support-bubble-peer, rgb(253, 236, 214))",
                         borderRadius: 12,
                         padding: "8px 10px",
                         whiteSpace: "pre-wrap",
@@ -383,7 +432,7 @@ export default function SupportWidget({ authUserId, uiLang }) {
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={onKeyDown}
-              placeholder="輸入訊息…（Ctrl/Cmd+Enter 送出，Enter/Shift+Enter 換行）"
+              placeholder="輸入訊息…（Enter 送出，Shift+Enter 換行）"
               style={{
                 flex: 1,
                 resize: "none",
@@ -413,15 +462,10 @@ export default function SupportWidget({ authUserId, uiLang }) {
               Send
             </button>
           </div>
-
-          {/* Debug footer (保留但不影響 UI) */}
-          <div style={{ fontSize: 11, opacity: 0.45 }}>
-          {/* debug footer removed for user-facing UI */}
-          </div>
         </div>
       )}
     </>
   );
 }
-//
-// frontend/src/components/support/SupportWidget.jsx
+
+// END PATH: frontend/src/components/support/SupportWidget.jsx

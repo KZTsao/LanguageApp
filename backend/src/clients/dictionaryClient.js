@@ -528,13 +528,30 @@ async function callGroqChat({
   maxTokens,
   systemPrompt,
   userPrompt,
+  // optional: [{ role: 'user'|'assistant', content: string }, ...]
+  historyMessages,
 }) {
+  const safeHistory = Array.isArray(historyMessages)
+    ? historyMessages
+        .filter(Boolean)
+        .map((m) => {
+          const role = String(m?.role || "").trim();
+          const content = String(m?.content || "").trim();
+          if (!content) return null;
+          if (role !== "user" && role !== "assistant") return null;
+          return { role, content };
+        })
+        .filter(Boolean)
+        .slice(-3)
+    : [];
+
   return groqClient.chat.completions.create({
     model,
     temperature,
     max_tokens: maxTokens,
     messages: [
       { role: "system", content: systemPrompt },
+      ...safeHistory,
       { role: "user", content: userPrompt },
     ],
   });
@@ -569,23 +586,50 @@ function safeLogUsage({
  * 中文功能說明：把模型回傳整理成「最多 6 句」且看起來像句子的德文對話行
  */
 function normalizeGermanTurns(raw, baseSentence) {
+  const seed = normalizeText(baseSentence, "");
   let lines = splitLines(raw).map(stripLeadingNumber);
 
   // 過濾掉超奇怪的行（只剩一兩個字母之類）
   lines = lines.filter((line) => line.split(/\s+/).length >= 3);
 
-  // 最多只保留 6 句，避免太肥
-  if (lines.length > 6) lines = lines.slice(0, 6);
+  // 去掉空行與重複（保留原順序）
+  const seen = new Set();
+  lines = lines
+    .map((s) => (typeof s === "string" ? s.trim() : ""))
+    .filter(Boolean)
+    .filter((s) => {
+      if (seen.has(s)) return false;
+      seen.add(s);
+      return true;
+    });
+
+  // ✅ B：保證第一句 = 例句（生成當下就固定，不靠前端補救）
+  if (seed) {
+    lines = lines.filter((s) => s !== seed);
+    lines.unshift(seed);
+  }
 
   // 兜底：模型回傳太爛或空的情況
+  const fallbackTail = [
+    "Echt? Erzähl mir ein bisschen mehr dazu.",
+    "Klingt interessant, so etwas habe ich noch nicht erlebt.",
+    "Ja, das kenne ich gut.",
+    "Lass uns später noch weiter darüber sprechen.",
+  ];
+
   if (lines.length === 0) {
-    lines = [
-      baseSentence,
-      "Echt? Erzähl mir ein bisschen mehr dazu.",
-      "Klingt interessant, so etwas habe ich noch nicht erlebt.",
-      "Lass uns später noch weiter darüber sprechen.",
-    ];
+    lines = seed ? [seed, ...fallbackTail] : [...fallbackTail];
   }
+
+  // ✅ 保證 4–6 句（第一句已固定為例句）
+  while (lines.length < 4) {
+    const next = fallbackTail[(lines.length - 1) % fallbackTail.length];
+    // 避免再次重複
+    if (!lines.includes(next)) lines.push(next);
+    else lines.push("Okay, verstanden.");
+  }
+
+  if (lines.length > 6) lines = lines.slice(0, 6);
 
   return lines;
 }
@@ -615,6 +659,8 @@ function alignTranslations(translations, targetLen) {
 async function generateConversation({
   sentence,
   explainLang,
+  // optional: [{ role: 'user'|'assistant', content: string }, ...]
+  history,
 
   // ✅ 相容擴充：若 route 有傳就能做 user 切分；沒傳也不影響
   userId = "",
@@ -624,6 +670,7 @@ async function generateConversation({
   console.log("\n[conversation] generateConversation START", {
     sentence,
     explainLang,
+    historyLen: Array.isArray(history) ? history.length : 0,
   });
 
   const baseSentence = normalizeText(
@@ -644,6 +691,7 @@ async function generateConversation({
       temperature: 0.6,
       maxTokens: 400,
       systemPrompt: dialogSystem,
+      historyMessages: history,
       userPrompt:
         "Ausgangssatz:\n" +
         baseSentence +

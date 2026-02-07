@@ -809,6 +809,10 @@ export default function WordLibraryPanel({
   if (!isImportOpen) return;
 
   function onKeyDown(e) {
+  // Guard: do not handle history keys when speak/conversation is active
+  if (window.__SPEAK_PANEL_OPEN || window.__CONV_NAV_ACTIVE) {
+    return;
+  }
     const key = e && typeof e.key === "string" ? e.key : "";
     if (key === "Escape") {
       setIsImportOpen(false);

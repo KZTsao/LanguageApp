@@ -1,9 +1,12 @@
 const logger = {
   info: (...args) => {
-    console.log('[INFO]', ...args);
+    try { console.log("[INFO]", ...args); } catch (e) {}
+  },
+  warn: (...args) => {
+    try { console.warn("[WARN]", ...args); } catch (e) {}
   },
   error: (...args) => {
-    console.error('[ERROR]', ...args);
+    try { console.error("[ERROR]", ...args); } catch (e) {}
   },
 };
 

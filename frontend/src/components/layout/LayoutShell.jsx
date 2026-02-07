@@ -1,3 +1,5 @@
+// START PATH: frontend/src/components/layout/LayoutShell.jsx
+// BEGIN FILE: frontend/src/components/layout/LayoutShell.jsx
 // frontend/src/components/layout/LayoutShell.jsx
 /**
  * 文件說明（LayoutShell）
@@ -26,10 +28,104 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import SupportAdminPage from "../../pages/SupportAdminPage";
+// frontend/src/components/layout/LayoutShell.jsx
+
+// frontend/src/components/layout/LayoutShell.jsx
+const strokeWidth = 1.2;
+const BalanceScaleIcon = ({ size = 30, className }) => (
+  <svg
+  width={size}
+  height={size}
+  viewBox="0 0 24 24"
+  fill="none"
+  aria-hidden="true"
+  className={className}
+  xmlns="http://www.w3.org/2000/svg"
+>
+  <g transform="translate(12 12) scale(1.15) translate(-12 -12)">
+    <path d="M12 4v14" stroke="#F2992E" strokeWidth={strokeWidth} strokeLinecap="round" />
+    <path d="M6 7h12" stroke="#F2992E" strokeWidth={strokeWidth} strokeLinecap="round" />
+    <path d="M7 7l-2.5 4.5h5L7 7z" stroke="#F2992E" strokeWidth={strokeWidth} strokeLinejoin="round" />
+    <path d="M17 7l-2.5 4.5h5L17 7z" stroke="#F2992E" strokeWidth={strokeWidth} strokeLinejoin="round" />
+    <path d="M9 20h6" stroke="#F2992E" strokeWidth={strokeWidth} strokeLinecap="round" />
+  </g>
+</svg>
+
+);
+
+const SupportAdminIcon = ({ size = 30, className }) => (
+  <svg
+  width={size}
+  height={size}
+  viewBox="0 0 24 24"
+  fill="none"
+  aria-hidden="true"
+  className={className}
+  xmlns="http://www.w3.org/2000/svg"
+>
+  <g transform="translate(12 12) scale(1.15) translate(-12 -12)">
+    {/* shield outline */}
+    <path
+      d="M12 3.5
+         l6 2
+         v5.2
+         c0 4.1-2.6 6.6-6 8
+         c-3.4-1.4-6-3.9-6-8
+         V5.5
+         l6-2z"
+      stroke="#F2992E"
+      strokeWidth={strokeWidth}
+      strokeLinejoin="round"
+    />
+
+    {/* inner badge */}
+    <path
+      d="M12 7.5v6"
+      stroke="#F2992E"
+      strokeWidth={strokeWidth}
+      strokeLinecap="round"
+    />
+    <circle
+      cx="12"
+      cy="15.2"
+      r="0.9"
+      fill="#F2992E"
+    />
+  </g>
+</svg>
+
+
+);
+
+
 import LoginButton from "../auth/LoginButton";
 import { useAuth } from "../../context/AuthProvider";
 import { apiFetch } from "../../utils/apiClient";
 import uiText from "../../uiText";
+// ===== [20260202 support] console logger =====
+const __SUPPORT_TRACE_ON =
+  typeof import.meta !== "undefined" &&
+  import.meta?.env?.VITE_DEBUG_SUPPORT_ADMIN === "1";
+function __supportTrace(...args) {
+  if (!__SUPPORT_TRACE_ON) return;
+  try { console.log("[20260202 support]", ...args); } catch (_) {}
+}
+// ===== end logger =====
+
+// ✅ Proof trace（不影響正式執行）：.env -> VITE_AUTH_PROOF=1
+const AUTH_PROOF = import.meta.env.VITE_AUTH_PROOF === "1";
+const proof = (...args) => {
+  if (AUTH_PROOF) console.log("[***A]", ...args);
+};
+
+
+// ✅ Debug trace（不影響正式執行）：開關用 .env -> VITE_AUTH_TRACE=1
+const AUTH_TRACE = import.meta.env.VITE_AUTH_TRACE === "1";
+const trace = (...args) => {
+  if (AUTH_TRACE) console.log("[AUTH-TRACE]", ...args);
+};
+
 
 /** 模組：將字串 seed 穩定映射到色相（供頭像底色使用） */
 function hashToHue(seed = "") {
@@ -137,7 +233,7 @@ function getAccessTokenFromLocalStorage() {
     if (!key) return "";
     const raw = JSON.parse(localStorage.getItem(key));
     return raw?.access_token || raw?.currentSession?.access_token || "";
-  } catch {
+  } catch (e) {
     return "";
   }
 }
@@ -155,7 +251,7 @@ function getSupportAdminAllowlist() {
       if (w && w.__SUPPORT_ADMIN_EMAILS) {
         raw = String(w.__SUPPORT_ADMIN_EMAILS || "");
       }
-    } catch {}
+    } catch (e) {}
 
     // 2) localStorage（臨時測試）
     try {
@@ -164,7 +260,7 @@ function getSupportAdminAllowlist() {
         const v = w.localStorage.getItem("SUPPORT_ADMIN_EMAILS");
         if (v) raw = String(v);
       }
-    } catch {}
+    } catch (e) {}
 
     // 3) Vite env（正式）
     try {
@@ -180,11 +276,11 @@ function getSupportAdminAllowlist() {
           raw = String(import.meta.env.VITE_SUPPORT_ADMIN_EMAILS || "");
         }
       }
-    } catch {}
+    } catch (e) {}
 
     return String(raw)
-      .split(",")
-      .map((s) => s.trim())
+      .split(new RegExp("[,;\n\r\t\s]+", "g"))
+      .map((s) => String(s || "").trim().toLowerCase())
       .filter(Boolean);
   } catch (e) {
     return [];
@@ -193,14 +289,16 @@ function getSupportAdminAllowlist() {
 
 function isSupportAdminEmail(email) {
   try {
-    if (!email) return false;
+    const e = String(email || "").trim().toLowerCase();
+    if (!e) return false;
     const allow = getSupportAdminAllowlist();
     if (!allow.length) return false;
-    return allow.includes(String(email));
-  } catch {
+    return allow.includes(e);
+  } catch (e) {
     return false;
   }
-}
+} 
+
 
 /** 模組：Header 導覽區外框（查詢 / 單字庫） */
 function getNavPillWrapStyle() {
@@ -248,8 +346,36 @@ function LayoutShell({
   interactionDisabled,
   children,
 }) {
-  const { user, profile, signOut } = useAuth();
-  // ✅ 2026/01/26: uiText 以 import 方式導入（比照其他檔案）
+  const { user, profile, signOut, isSupportAdmin, authReady } = useAuth();
+  // ✅ Proof: LayoutShell render + auth-token key scan（不影響邏輯）
+  try {
+    const keys = []; // ✅ Legacy localStorage scan disabled (single token outlet)
+    const hit = null; // disabled
+    proof('LayoutShell:render', { hasUser: !!user, userId: user?.id, isSupportAdmin, authReady, authTokenKeyHit: hit || null });
+    proof('LayoutShell:shield', { willShow: !!authReady && !!isSupportAdmin });
+  } catch (e) {
+    proof('LayoutShell:render:error', { message: e?.message || String(e) });
+  }
+
+  // ✅ 時間序觀測：LayoutShell 往往會早於 Auth 初始化完成
+  trace("LayoutShell:render", { hasUser: !!user, userId: user?.id, isSupportAdmin });
+  trace("shield:check", { isSupportAdmin, willShow: !!authReady && !!isSupportAdmin });
+
+
+  // ✅ Debug: 追蹤 isSupportAdmin 是否「突然變動」導致盾牌消失
+  useEffect(() => {
+    proof('usage:effect', { hasUser: !!user, isSupportAdmin });
+
+    
+    trace("LayoutShell:isSupportAdminChanged", { isSupportAdmin, userId: user?.id });
+    proof('LayoutShell:isSupportAdminChanged', { isSupportAdmin, userId: user?.id });
+    console.log("[LayoutShell] isSupportAdmin changed", {
+      isSupportAdmin,
+      userId: user?.id,
+    });
+  }, [isSupportAdmin, user?.id]);
+
+// ✅ 2026/01/26: uiText 以 import 方式導入（比照其他檔案）
   // - 避免依賴 window.uiText（dev/prod/SSR 都可能是 undefined）
   // - uiText 本身是「純資料」模組，直接 import 即可
 
@@ -262,7 +388,9 @@ function LayoutShell({
   // 規則：不刪除既有 Terms 相關 legacy state，但本 modal 開關只使用 __termsOpenStateOnly
   const [__termsOpenStateOnly, __setTermsOpenStateOnly] = useState(false);
 
-  // ✅ 2026/01/26 Step 2 — Minimal MD-lite renderer (force title/heading styles)
+  // ✅ 2026/02/02 — Support Admin Modal (STATE-ONLY, no route)
+  const [supportAdminOpen, setSupportAdminOpen] = useState(false);
+// ✅ 2026/01/26 Step 2 — Minimal MD-lite renderer (force title/heading styles)
   // - 支援：# / ## / 一般段落（以換行切段）
   // - 目的：標題樣式不受 pre-wrap/外層 fontSize 影響
   
@@ -399,7 +527,7 @@ function LayoutShell({
       }
 
       return out;
-    } catch {
+    } catch (e) {
       return <div style={{ fontSize: 13, lineHeight: 1.7 }}>{String(raw || "")}</div>;
     }
   };
@@ -424,7 +552,7 @@ function LayoutShell({
         if (!res2.ok) throw new Error(String(res2.status));
         const txt2 = await res2.text();
         __setTermsText(txt2 || "");
-      } catch {
+      } catch (e) {
         __setTermsText("");
         __setTermsLoadErr("Failed to load Terms.");
       }
@@ -436,7 +564,7 @@ function LayoutShell({
       __setIsTermsOpen(true);
       try {
         __loadTermsMd(uiLang || "en");
-      } catch {}
+      } catch (e) {}
     };
     window.addEventListener("open-terms", __onOpen);
     return () => window.removeEventListener("open-terms", __onOpen);
@@ -445,7 +573,6 @@ function LayoutShell({
 
   useEffect(() => {
   }, [__isTermsOpen]);
-
   const __renderTermsModal = () => {
     if (!__termsOpenStateOnly) return null; // state-only
     return (
@@ -491,7 +618,7 @@ function LayoutShell({
             }}
           >
             <div style={{ fontWeight: 900, fontSize: 22, lineHeight: 1.2 }}>
-              {(uiText?.[uiLang]?.layout?.termsOfService || uiText?.en?.layout?.termsOfService) || "Terms of Service"}
+
             </div>
             <button
               type="button"
@@ -537,6 +664,80 @@ function LayoutShell({
   };
 
 
+  const renderSupportAdminModal = () => {
+    if (!supportAdminOpen) return null;
+    return (
+      <div
+        role="dialog"
+        aria-modal="true"
+        
+        style={{
+          position: "fixed",
+          inset: 0,
+          zIndex: 9999,
+          background: "rgba(0,0,0,0.45)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: 12,
+        }}
+      >
+        <div
+          onMouseDown={(e) => e.stopPropagation()}
+          style={{
+            width: "min(1200px, 96vw)",
+            height: "min(900px, 92vh)",
+            background: "var(--card-bg)",
+            border: "1px solid var(--border-subtle)",
+            borderRadius: 14,
+            boxShadow: "0 18px 60px rgba(0,0,0,0.28)",
+            overflow: "hidden",
+            display: "flex",
+            flexDirection: "column",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              padding: "10px 14px",
+              borderBottom: "1px solid var(--border-subtle)",
+            }}
+          >
+            <div style={{ fontWeight: 900, fontSize: 16 }}>
+              {((uiText?.[uiLang]?.support?.adminTitle || uiText?.en?.support?.adminTitle) || "Support Admin")}
+            </div>
+            <button
+              type="button"
+              onClick={() => setSupportAdminOpen(false)}
+              style={{
+                background: "transparent",
+                border: "none",
+                cursor: "pointer",
+                padding: 6,
+                lineHeight: 1,
+                color: "var(--text-muted)",
+                fontSize: 18,
+                fontWeight: 900,
+              }}
+              aria-label={(uiText?.[uiLang]?.common?.close || uiText?.en?.common?.close) || "Close"}
+              title={(uiText?.[uiLang]?.common?.close || uiText?.en?.common?.close) || "Close"}
+            >
+              ×
+            </button>
+          </div>
+
+          <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
+            <SupportAdminPage onClose={() => setSupportAdminOpen(false)} />
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+
+
   // ============================================================
   // Init Gating（2026/01/24）
   // - 上層 App.jsx 會在初始化期間設 window.__appInit.blockInteraction = true
@@ -548,7 +749,7 @@ function LayoutShell({
       const w = typeof window !== "undefined" ? window : null;
       const fromWin = Boolean(w?.__appInit?.blockInteraction);
       return Boolean(interactionDisabled || fromWin);
-    } catch {
+    } catch (e) {
       return Boolean(interactionDisabled);
     }
   })();
@@ -589,6 +790,8 @@ function LayoutShell({
 
   /** 模組：提供簡單的 debug 入口（避免在 console 使用 import.meta） */
   useEffect(() => {
+    trace("usage:effect", { hasUser: !!user, isSupportAdmin });
+
     window.__layoutShellDebug = window.__layoutShellDebug || {};
     window.__layoutShellDebug.showDebugKey = showDebugKey;
     window.__layoutShellDebug.userId = user?.id || null;
@@ -681,6 +884,10 @@ function LayoutShell({
 
   /** 模組：usage 來源（優先 /api/usage/me；保留 /admin/usage?days=7 作為 debug/fallback） */
   async function fetchUsageSummary() {
+      proof('usage:fetch:start');
+
+      trace("usage:fetch:start");
+
     const token = getAccessTokenFromLocalStorage();
 
     // ====== 2026/01/07 新增：runtime 觀察（Production 排查） ======
@@ -693,7 +900,7 @@ function LayoutShell({
         viteHasApiBaseUrl: Boolean(import.meta?.env?.VITE_API_BASE_URL),
         mode: (import.meta?.env?.MODE || "not available").toString(),
       });
-    } catch {
+    } catch (e) {
       // 靜默
     }
 
@@ -790,7 +997,7 @@ function LayoutShell({
             monthLLM,
             monthTTS,
           });
-        } catch {
+        } catch (e) {
           // 靜默
         }
       } else {
@@ -803,7 +1010,7 @@ function LayoutShell({
           console.warn("[LayoutShell][usage] /api/usage/me not ok", {
             status: rMe.status,
           });
-        } catch {
+        } catch (e) {
           // 靜默
         }
       }
@@ -817,7 +1024,7 @@ function LayoutShell({
         console.warn("[LayoutShell][usage] /api/usage/me fetch failed", {
           msg: e?.message || "not available",
         });
-      } catch {
+      } catch (e) {
         // 靜默
       }
     }
@@ -861,7 +1068,7 @@ function LayoutShell({
             monthLLM,
             monthTTS,
           });
-        } catch {
+        } catch (e) {
           // 靜默
         }
       }
@@ -898,7 +1105,7 @@ function LayoutShell({
         console.warn("[LayoutShell][usage] /admin/usage fetch failed (silent)", {
           msg: e?.message || "not available",
         });
-      } catch {
+      } catch (e) {
         // 靜默
       }
     }
@@ -906,13 +1113,16 @@ function LayoutShell({
 
   /** 模組：開站/登入狀態變化就抓一次 usage */
   useEffect(() => {
+    // ⛔ authReady=false：不發送任何需要權限的請求（避免 refresh restore 窗口 401 / 狀態誤判）
+    if (!authReady) return;
+
     if (!user?.id) {
       setGroqKeyDebug(null);
     }
 
     fetchUsageSummary();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.id, showDebugKey]);
+  }, [user?.id, showDebugKey, authReady]);
 
   /** 模組：核心：每次前端真的呼叫 API 成功就更新 usage（無輪詢） */
   useEffect(() => {
@@ -922,15 +1132,7 @@ function LayoutShell({
     window.addEventListener("usage-updated", onUsageUpdated);
     return () => window.removeEventListener("usage-updated", onUsageUpdated);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.id, showDebugKey]);
-
-  /** 模組：亮暗切換（只呼叫上層 onThemeChange；真正套用 <html>.dark 在 App.jsx） */
-  const handleToggleTheme = () => {
-    if (__interactionDisabled) return;
-    const cur = theme === "dark" ? "dark" : "light";
-    const next = cur === "dark" ? "light" : "dark";
-    if (typeof onThemeChange === "function") onThemeChange(next);
-  };
+  }, [user?.id, showDebugKey, authReady]);
 
   /** 模組：語言切換（只回傳上層 onUiLangChange） */
   const handleUiLangChange = (nextLang) => {
@@ -996,7 +1198,7 @@ function LayoutShell({
                   whiteSpace: "nowrap",
                 }}
               >
-                🌐 Muttersprache:
+                🌐 :
               </span>
 
               <select
@@ -1030,7 +1232,7 @@ function LayoutShell({
                   __setTermsOpenStateOnly(true);
                   try {
                     __loadTermsMd(uiLang || "en");
-                  } catch {}
+                  } catch (e) {}
                 }}
                 style={{
                   background: "transparent",
@@ -1039,43 +1241,27 @@ function LayoutShell({
                   cursor: __interactionDisabled ? "not-allowed" : "pointer",
                   color: "var(--text-muted)",
                   fontSize: 12,
-                  fontWeight: 700,
-                  textDecoration: "underline",
-                  textUnderlineOffset: 2,
-                  opacity: __interactionDisabled ? 0.55 : 1,
+                  fontWeight: 700,                  opacity: __interactionDisabled ? 0.55 : 1,
                 }}
                 title={(uiText?.[uiLang]?.layout?.termsOfService || uiText?.en?.layout?.termsOfService) || "Terms of Service"}
                 aria-label={(uiText?.[uiLang]?.layout?.termsOfService || uiText?.en?.layout?.termsOfService) || "Terms of Service"}
               >
-                {(uiText?.[uiLang]?.layout?.termsOfService || uiText?.en?.layout?.termsOfService) || "Terms of Service"}
+                <span style={{ width: 28, height: 28, borderRadius: "50%", border: "1px solid var(--border-subtle)", display: "inline-flex", alignItems: "center", justifyContent: "center", background: "#fff" }}>
+                  <BalanceScaleIcon size={18} />
+                </span>
               </button>
             </div>
 
 
             <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
               <LoginButton uiLang={uiLang} />
-
-              <button
-                disabled={__interactionDisabled}
-                onClick={handleToggleTheme}
-                style={{
-                  padding: "6px 10px",
-                  borderRadius: 999,
-                  border: "1px solid var(--border-subtle)",
-                  background: "var(--card-bg)",
-                  color: "var(--text-main)",
-                  fontSize: 12,
-                  cursor: "pointer",
-                }}
-              >
-                {theme === "dark" ? "🌙 Dark" : "☀️ Light"}
-              </button>
             </div>
           </div>
 
           {children}
 
           {__renderTermsModal()}
+          {renderSupportAdminModal()}
         </div>
       </div>
     );
@@ -1119,7 +1305,7 @@ function LayoutShell({
             gap: 12,
           }}
         >
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 0 }}>
             {/* 模組：語言選擇（同一個匡 pill） */}
             <div
               style={{
@@ -1142,7 +1328,7 @@ function LayoutShell({
                   whiteSpace: "nowrap",
                 }}
               >
-                🌐 Muttersprache:
+                🌐 :
               </span>
 
               <select
@@ -1167,7 +1353,7 @@ function LayoutShell({
               </select>
             </div>
 
-            <div style={{ display: "inline-flex", alignItems: "center", paddingLeft: 12 }}>
+            <div style={{ display: "inline-flex", alignItems: "Left" }}>
               <button
                 type="button"
                 disabled={__interactionDisabled}
@@ -1176,7 +1362,7 @@ function LayoutShell({
                   __setTermsOpenStateOnly(true);
                   try {
                     __loadTermsMd(uiLang || "en");
-                  } catch {}
+                  } catch (e) {}
                 }}
                 style={{
                   background: "transparent",
@@ -1185,15 +1371,12 @@ function LayoutShell({
                   cursor: __interactionDisabled ? "not-allowed" : "pointer",
                   color: "var(--text-muted)",
                   fontSize: 12,
-                  fontWeight: 700,
-                  textDecoration: "underline",
-                  textUnderlineOffset: 2,
-                  opacity: __interactionDisabled ? 0.55 : 1,
+                  fontWeight: 700,                  opacity: __interactionDisabled ? 0.55 : 1,
                 }}
                 title={(uiText?.[uiLang]?.layout?.termsOfService || uiText?.en?.layout?.termsOfService) || "Terms of Service"}
                 aria-label={(uiText?.[uiLang]?.layout?.termsOfService || uiText?.en?.layout?.termsOfService) || "Terms of Service"}
               >
-                {(uiText?.[uiLang]?.layout?.termsOfService || uiText?.en?.layout?.termsOfService) || "Terms of Service"}
+                <span style={{ width: 28, height: 28, borderRadius: "50%", border: "1px solid var(--border-subtle)", display: "inline-flex", alignItems: "center", justifyContent: "center", background: "#fff" }}><BalanceScaleIcon size={18} /></span>
               </button>
             </div>
 
@@ -1204,40 +1387,28 @@ function LayoutShell({
             style={{ display: "flex", alignItems: "center", gap: 12 }}
           >
 
-            {/* ✅ 2026/01/25：Support Admin 入口（僅 allowlist email 可見） */}
-            {isSupportAdminEmail(email) ? (
-              <a
-                href="/support-admin"
+            {/* ✅ 2026/01/25：Support Admin 入口（AuthProvider.isSupportAdmin 單一真相） */}
+            {authReady && isSupportAdmin ? (
+              <button
+                type="button"
                 onClick={(e) => {
-                  if (__interactionDisabled) {
-                    e.preventDefault();
-                    return;
-                  }
+                  if (__interactionDisabled) return;
+                  setSupportAdminOpen(true);
                 }}
+                disabled={__interactionDisabled}
                 style={{
-                  height: 28,
-                  padding: "0 10px",
-                  borderRadius: 10,
-                  // ⬇️ 這行：改成淺灰框線（不要主題橘）
-                  border: "1px solid var(--border-subtle, #ddd)",
-                  // ⬇️ 這行：白底
-                  background: "#fff",
-                  // ⬇️ 這行：黑字
-                  color: "#000",
-                  textDecoration: "none",
-                  fontSize: 12,
-                  // ⬇️ 這行：字重稍降，質感會好一點
-                  fontWeight: 700,
-                  display: "inline-flex",
-                  alignItems: "center",
-                  whiteSpace: "nowrap",
+                  background: "transparent",
+                  border: "none",
+                  padding: 0,
+                  cursor: __interactionDisabled ? "not-allowed" : "pointer",
                 }}
-                
                 title="客服管理"
                 aria-label="客服管理"
               >
-                客服管理
-              </a>
+                <span style={{ width: 30, height: 30, borderRadius: "50%", border: "1px solid var(--border-subtle)", display: "inline-flex", alignItems: "center", justifyContent: "center", background: "var(--card-bg)" }}>
+                  <SupportAdminIcon size={20} />
+                </span>
+              </button>
             ) : null}
 
             <div
@@ -1426,28 +1597,14 @@ function LayoutShell({
                 </div>
               )}
             </div>
-
-            <button
-              disabled={__interactionDisabled}
-              onClick={handleToggleTheme}
-              style={{
-                padding: "6px 10px",
-                borderRadius: 999,
-                border: "1px solid var(--border-subtle)",
-                background: "var(--card-bg)",
-                color: "var(--text-main)",
-                fontSize: 12,
-                cursor: "pointer",
-              }}
-            >
-              {theme === "dark" ? "🌙 Dark" : "☀️ Light"}
-            </button>
           </div>
+          
         </div>
 
         {children}
 
         {__renderTermsModal()}
+          {renderSupportAdminModal()}
 
         {/* ====== 2026/02/01 新增：Footer - {uiText[uiLang]?.layout?.termsOfService || 'Terms of Service'}（最小插入，不影響既有邏輯） ====== */}
         <div
@@ -1467,7 +1624,7 @@ function LayoutShell({
                       onClick={() => {
                         try {
                           window.dispatchEvent(new CustomEvent("open-terms"));
-                        } catch {}
+                        } catch (e) {}
                       }}
                       style={{
                         background: "transparent",
@@ -1499,3 +1656,6 @@ function LayoutShell({
 export default LayoutShell;
 
 // frontend/src/components/layout/LayoutShell.jsx
+// END FILE: frontend/src/components/layout/LayoutShell.jsx
+
+// END PATH: frontend/src/components/layout/LayoutShell.jsx

@@ -87,6 +87,7 @@ export default function ConversationBox({
   onSpeak,
   onWordClick,
   labels,
+  variant,
 }) {
   
   const {
@@ -140,6 +141,8 @@ export default function ConversationBox({
   const tConversationPlay = conversationPlayLabel || "播放";
   const tConversationClose = conversationCloseLabel || "關閉";
   const tConversationLoading = conversationLoadingLabel || "對話產生中…";
+
+  const effectiveVariant = (variant || "panel").toString();
 
   const [showConversationGerman, setShowConversationGerman] = useState(true);
   const [showConversationTranslation, setShowConversationTranslation] =
@@ -202,6 +205,118 @@ export default function ConversationBox({
       );
     });
   };
+
+  // ==================================================
+  // Compact overlay variant
+  // - Render ONLY current turn and navigation arrows
+  // - Meant to be placed directly on the example sentence row
+  // ==================================================
+  if (effectiveVariant === "overlay") {
+    return (
+      <div
+        data-ref="conversationOverlay"
+        style={{
+          width: "100%",
+          display: "flex",
+          flexDirection: "column",
+          gap: 4,
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+          }}
+        >
+          <button
+            type="button"
+            onClick={onPrev}
+            disabled={!hasConversationTurns || !!loading || conversation?.currentIndex <= 0}
+            title={tConversationPrev}
+            className="icon-button sound-button"
+            style={{
+              border: "none",
+              background: "transparent",
+              cursor: "pointer",
+              padding: 0,
+              opacity:
+                !hasConversationTurns || !!loading || conversation?.currentIndex <= 0
+                  ? 0.35
+                  : 0.95,
+            }}
+            aria-label="conversation-prev"
+          >
+            ◀
+          </button>
+
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 18, lineHeight: 1.6, wordBreak: "break-word" }}>
+              {loading ? (
+                <span style={{ opacity: 0.75 }}>{tConversationLoading}</span>
+              ) : error ? (
+                <span style={{ opacity: 0.85 }}>{String(error)}</span>
+              ) : currentTurnDe ? (
+                <span>{renderClickableGerman(currentTurnDe)}</span>
+              ) : (
+                <span style={{ opacity: 0.65 }}>{MOSAIC_LINE}</span>
+              )}
+            </div>
+            {showConversationTranslation && currentTurnTranslation ? (
+              <div style={{ fontSize: 13, opacity: 0.82, marginTop: 2 }}>
+                {currentTurnTranslation}
+              </div>
+            ) : null}
+          </div>
+
+          <button
+            type="button"
+            onClick={onNext}
+            disabled={
+              !hasConversationTurns ||
+              !!loading ||
+              conversation?.currentIndex >= (conversation?.turns?.length || 1) - 1
+            }
+            title={tConversationNext}
+            className="icon-button sound-button"
+            style={{
+              border: "none",
+              background: "transparent",
+              cursor: "pointer",
+              padding: 0,
+              opacity:
+                !hasConversationTurns ||
+                !!loading ||
+                conversation?.currentIndex >= (conversation?.turns?.length || 1) - 1
+                  ? 0.35
+                  : 0.95,
+            }}
+            aria-label="conversation-next"
+          >
+            ▶
+          </button>
+
+          <button
+            type="button"
+            onClick={onClose}
+            title={tConversationClose}
+            className="icon-button sound-button"
+            style={{
+              border: "none",
+              background: "transparent",
+              cursor: "pointer",
+              padding: 0,
+              opacity: 0.85,
+              marginLeft: 2,
+            }}
+            aria-label="conversation-close"
+          >
+            ✕
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div

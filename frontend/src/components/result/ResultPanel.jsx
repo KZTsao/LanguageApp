@@ -447,6 +447,14 @@ function ResultPanel({
     }
   }
 
+  // ============================================================
+  // ✅ Sentence Gate：
+  // - 若後端回 mode/kind=sentence，UI 只顯示整句（GrammarCard）
+  // - 避免 analyzeSentence 內部 token-by-token 產生的 words 被渲染成多筆 WordCard
+  // ============================================================
+  const isSentenceResult = !!(result && (result.mode === "sentence" || result.kind === "sentence"));
+
+
   const handleSpeak = async (text) => {
     if (!text) return;
     try {
@@ -552,41 +560,35 @@ function ResultPanel({
 
   // ✅ 低調清除文案（props > fallback）
   const clearLabel = (typeof clearHistoryLabel === "string" && clearHistoryLabel.trim()) || "點擊清除該筆紀錄";
+  const reportIssueHint = (typeof wordCardLabels?.reportIssueHint === "string" && wordCardLabels.reportIssueHint.trim()) || (typeof wordCardLabels?.reportIssueLabel === "string" && wordCardLabels.reportIssueLabel.trim()) || "回報問題";
   // ✅ 2026-01-17（需求變更）：註解（移除）「點擊清除該筆紀錄」功能
   // - 保留原本 props 與 UI 程式碼（以註解方式保留），但功能不啟用
   // - 之後若要恢復：把 canClear 改回原先判斷即可
   // const canClear = !!canClearHistory && typeof onClearHistoryItem === "function";
-  const canClear = false;
-
-  // ✅ 2026-01-17：History 導覽列三段式（固定單列、同高度、中心固定不偏移）
-  // 中文功能說明：
-  // - 僅改 UI render / 排版，不新增 state、不改 flow、不改 Prev/Next 行為
-  // - Prev/Next 必須是「箭頭+文字」同一顆按鈕
-  // - 中間固定在正中央（不因左右文字長短位移）
-  // - 全部單行 no-wrap；超過用 ellipsis；hover 用 title 顯示完整
-  // ✅ UX：更「集中」的導覽列（降低高度/寬度，減少空白，讓按鈕更像導航而非 input）
+  const canClear = !!canClearHistory && typeof onClearHistoryItem === "function";
+  // ✅ 2026-01-27：導覽列寬度規格調整
+  // - Prev / Current / Next 永遠「三等分」容器寬度（各 1/3）
+  // - 總寬度不超過 WordCard（因此這裡只用 width:100% + maxWidth:100%，不自設固定像素寬）
+  // - 僅改 UI 排版，不改 goPrevHistory / goNextHistory / index 計算等行為
   const HISTORY_NAV_ROW_HEIGHT = 30;
-  const HISTORY_NAV_SIDE_WIDTH = 220; // 左右固定寬（可微調，但要固定）
-  const HISTORY_NAV_CENTER_WIDTH = 220; // 中間固定寬（可微調，但要固定）
 
   const HISTORY_NAV_ROW_STYLE = {
-    position: "relative",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
+    display: "grid",
+    gridTemplateColumns: "1fr 1fr 1fr",
     gap: 8,
     width: "100%",
+    maxWidth: "100%",
     height: HISTORY_NAV_ROW_HEIGHT,
     minHeight: HISTORY_NAV_ROW_HEIGHT,
     maxHeight: HISTORY_NAV_ROW_HEIGHT,
     whiteSpace: "nowrap",
-    flexWrap: "nowrap",
+    alignItems: "center",
+    boxSizing: "border-box",
   };
 
   const HISTORY_NAV_SIDE_BTN_BASE = {
-    width: HISTORY_NAV_SIDE_WIDTH,
-    minWidth: HISTORY_NAV_SIDE_WIDTH,
-    maxWidth: HISTORY_NAV_SIDE_WIDTH,
+    width: "100%",
+    minWidth: 0,
     height: HISTORY_NAV_ROW_HEIGHT,
     borderRadius: 12,
     border: "1px solid var(--border-subtle)",
@@ -609,19 +611,15 @@ function ResultPanel({
     overflow: "hidden",
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
-    maxWidth: HISTORY_NAV_SIDE_WIDTH - 44, // 留給箭頭與 padding
     minWidth: 0,
     fontSize: 12,
     lineHeight: "16px",
+    flex: "1 1 auto",
   };
 
   const HISTORY_NAV_CENTER_STYLE = {
-    position: "absolute",
-    left: "50%",
-    transform: "translateX(-50%)",
-    width: HISTORY_NAV_CENTER_WIDTH,
-    minWidth: HISTORY_NAV_CENTER_WIDTH,
-    maxWidth: HISTORY_NAV_CENTER_WIDTH,
+    width: "100%",
+    minWidth: 0,
     height: HISTORY_NAV_ROW_HEIGHT,
     display: "flex",
     alignItems: "center",
@@ -644,8 +642,9 @@ function ResultPanel({
     overflow: "hidden",
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
-    maxWidth: HISTORY_NAV_CENTER_WIDTH - 80, // 留給 X/Y
     minWidth: 0,
+    flex: "1 1 auto",
+    textAlign: "center",
   };
 
   const HISTORY_NAV_PAGE_STYLE = {
@@ -711,6 +710,18 @@ function ResultPanel({
 
     function onKeyDown(e) {
       if (!e) return;
+
+      // ✅ Conversation/recording stage guard:
+      // - When dialog practice or SpeakAnalyzePanel is active, history navigation MUST be disabled.
+      try {
+        if (e.defaultPrevented) return;
+        if (typeof window !== "undefined") {
+          if (window.__CONV_NAV_ACTIVE) return;
+          if (window.__SPEAK_PANEL_OPEN) return;
+        }
+      } catch (err) {
+        // ignore
+      }
 
       // ✅ IME（中文/日文）組字中：不要攔鍵、不做任何快捷
       // - e.isComposing：標準欄位
@@ -837,6 +848,8 @@ function ResultPanel({
                 style={{
                   ...HISTORY_NAV_SIDE_BTN_BASE,
                   justifyContent: "flex-end",
+                  alignItems: "center",
+                  gap: 10,
                   cursor: canNextEffective ? "pointer" : "not-allowed",
                   opacity: canNextEffective ? 1 : 0.45,
                 }}
@@ -869,30 +882,82 @@ function ResultPanel({
                   justifyContent: "flex-end",
                 }}
               >
-                <span
-                  role="button"
-                  tabIndex={0}
-                  onClick={onClearHistoryItem}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.preventDefault();
-                      onClearHistoryItem();
-                    }
-                  }}
-                  aria-label={clearLabel}
-                  title={clearLabel}
-                  style={{
-                    opacity: 0.55,
-                    fontSize: 12,
-                    userSelect: "none",
-                    cursor: "pointer",
-                    textDecoration: "underline",
-                    textUnderlineOffset: 2,
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  {clearLabel}
-                </span>
+<button
+  type="button"
+  onClick={(e) => {
+    try {
+      e.preventDefault();
+      e.stopPropagation();
+    } catch (err) {}
+    try {
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new CustomEvent("soLang:toggleReportIssue"));
+      }
+    } catch (err) {
+      // ignore
+    }
+  }}
+  aria-label={reportIssueHint}
+  title={reportIssueHint}
+  style={{
+    opacity: 0.55,
+    fontSize: 12,
+    userSelect: "none",
+    cursor: "pointer",
+    background: "transparent",
+    border: "none",
+    padding: 0,
+    lineHeight: 1,
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 6,
+    whiteSpace: "nowrap",
+    color: "var(--text-muted)",
+  }}
+>
+  <svg
+    width="14"
+    height="14"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="1.8"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M6 3v18" />
+    <path d="M6 4h11l-2 4 2 4H6" />
+  </svg>
+  <span style={{ textDecoration: "underline", textUnderlineOffset: 2 }}>
+    
+  </span>
+</button>
+
+<span
+  role="button"
+  tabIndex={0}
+  onClick={onClearHistoryItem}
+  onKeyDown={(e) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      onClearHistoryItem();
+    }
+  }}
+  aria-label={clearLabel}
+  title={clearLabel}
+  style={{
+    opacity: 0.55,
+    fontSize: 12,
+    userSelect: "none",
+    cursor: "pointer",
+    textDecoration: "underline",
+    textUnderlineOffset: 2,
+    whiteSpace: "nowrap",
+  }}
+>
+  {clearLabel}
+</span>
               </div>
             )}
           </div>
@@ -1057,7 +1122,7 @@ function ResultPanel({
             </div>
           )}
 
-          {wordItems.length > 0 && WordCard && (
+          {!isSentenceResult && wordItems.length > 0 && WordCard && (
             <section>
               {wordItems.map((item, idx) => {
                 const d = item?.dictionary || {};

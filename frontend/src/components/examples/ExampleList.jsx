@@ -1,8 +1,54 @@
-// frontend/src/components/examples/ExampleList.jsx
-import React, { useMemo } from "react";
+// FILE: frontend/src/components/examples/ExampleList.jsx
+// END FILE: frontend/src/components/examples/ExampleList.jsx
+import React, { useEffect, useMemo } from "react";
 import ExampleSentence from "./ExampleSentence";
-import ConversationBox from "../conversation/ConversationBox";
 import useConversation from "../conversation/useConversation";
+
+// =========================
+// [***A] SentTypeTrace switch (dev-only)
+// - Default OFF
+// - Enable via Vite env: VITE_DEBUG_SENTENCE_TYPE_TRACE=1
+// =========================
+const __SENT_TYPE_TRACE_ON =
+  typeof import.meta !== "undefined" &&
+  import.meta?.env?.VITE_DEBUG_SENTENCE_TYPE_TRACE === "1";
+
+function __sentTypeTrace(component, event, payload) {
+  if (!__SENT_TYPE_TRACE_ON) return;
+  try {
+    // eslint-disable-next-line no-console
+    console.log(
+      `[***A][SentTypeTrace][${component}] ${new Date().toISOString()} ${event}`,
+      payload
+    );
+  } catch (e) {
+    // ignore
+  }
+}
+
+
+// =========================
+// [***A][***CONV] Conversation trace switch (dev-only)
+// - Default OFF
+// - Enable via Vite env: VITE_DEBUG_CONVERSATION=1
+// =========================
+const __CONV_TRACE_ON =
+  typeof import.meta !== "undefined" &&
+  import.meta?.env?.VITE_DEBUG_CONVERSATION === "1";
+
+function __convTrace(event, payload) {
+  if (!__CONV_TRACE_ON) return;
+  try {
+    // eslint-disable-next-line no-console
+    console.log(
+      `[***A][***CONV][ExampleList] ${new Date().toISOString()} ${event}`,
+      payload
+    );
+  } catch (e) {
+    // ignore
+  }
+}
+
 
 /**
  * 文件說明
@@ -76,7 +122,18 @@ export default function ExampleList({
   refBadgesInline,
   refActionInline,
   refConfirm,
+
+  // ✅ SentenceType（句型）— 由上游傳入
+  // - 注意：此檔僅轉傳/顯示，不在此產生 options
+  sentenceType,
+  sentenceTypeLabel,
+  sentenceTypeOptions,
+  onSentenceTypeChange,
 }) {
+  console.log("[20260203 record][ExampleList][render]", { ts: Date.now() });
+
+  console.log("[20260202 record][ExampleList][render]", { ts: Date.now() });
+  
   // =========================
   // 初始化狀態（Production 排查）
   // =========================
@@ -179,8 +236,47 @@ export default function ExampleList({
     __initState,
   ]);
 
+  // =========================
+  // [***A] SentTypeTrace: ExampleList presence/render snapshot
+  // - 不影響任何邏輯：僅 log
+  // - 依 VITE_DEBUG_SENTENCE_TYPE_TRACE 控制
+  // =========================
+  useMemo(() => {
+    __sentTypeTrace("ExampleList", "presence", {
+      loading: !!loading,
+      examplesLen: Array.isArray(examples) ? examples.length : -1,
+      headwordType: typeof headword,
+      sentenceTypeType: typeof sentenceType,
+      sentenceTypeLabelType: typeof sentenceTypeLabel,
+      sentenceTypeOptionsType: Array.isArray(sentenceTypeOptions)
+        ? "array"
+        : typeof sentenceTypeOptions,
+      sentenceTypeOptionsCount: Array.isArray(sentenceTypeOptions)
+        ? sentenceTypeOptions.length
+        : -1,
+    });
+    return null;
+  }, [examples, loading, headword, sentenceType, sentenceTypeLabel, sentenceTypeOptions]);
+
   const hasExamples = Array.isArray(examples) && examples.length > 0;
   const mainSentence = hasExamples ? examples[0] : "";
+
+// [***A][***CONV] lifecycle (dev-only)
+useEffect(() => {
+  const exampleCount = Array.isArray(examples) ? examples.length : 0;
+  __convTrace("mount", {
+    hasExamples: !!hasExamples,
+    exampleCount,
+    exampleIndex: 0,
+    mainSentencePreview: String(mainSentence || "").slice(0, 120),
+    explainLang,
+  });
+  return () => {
+    __convTrace("unmount", {});
+  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, []);
+
 
   // 連續對話邏輯：統一集中在 useConversation
   const {
@@ -190,9 +286,46 @@ export default function ExampleList({
     isOpen: isConversationOpen,
     openConversation,
     closeConversation,
+    clearConversation,
     nextTurn,
     prevTurn,
-  } = useConversation({ mainSentence, explainLang });
+  } = useConversation({
+    mainSentence,
+    mainTranslation: exampleTranslation,
+    explainLang,
+  });
+
+  // ✅ Conversation overlay data mapping
+  const __convTurns =
+    conversation && Array.isArray(conversation.turns) ? conversation.turns : [];
+  const __convIndex =
+    conversation && Number.isFinite(conversation.currentIndex)
+      ? conversation.currentIndex
+      : 0;
+  const __convTotal = __convTurns.length;
+  const __convPage = __convTotal > 0 ? __convTurns[__convIndex] : null;
+  const __convCanPrev = __convIndex > 0;
+  const __convCanNext = __convIndex < __convTotal - 1;
+
+  // ✅ Single source of truth for "currently displayed sentence" (for recording reference)
+  // - conversation open: use current turn
+  // - otherwise: use example sentence
+  const displayedSentence = isConversationOpen
+    ? (__convPage && typeof __convPage.de === "string" && __convPage.de.trim()
+        ? __convPage.de
+        : mainSentence)
+    : mainSentence;
+
+  // ✅ Single source of truth for "currently displayed translation"
+  // - conversation open:
+  //   - index 0 MUST reuse the original example translation (do not re-translate)
+  //   - other turns use their own translation
+  // - otherwise: use example translation
+  const displayedTranslation = isConversationOpen
+    ? (__convIndex === 0
+        ? (exampleTranslation || "")
+        : (__convPage && typeof __convPage.translation === "string" ? __convPage.translation : ""))
+    : (exampleTranslation || "");
 
   // ===== 文案：這裡只做「有傳就用、沒傳用預設中文」的 fallback =====
   const tConversationTitle = conversationTitle || "連續對話";
@@ -281,16 +414,51 @@ export default function ExampleList({
       <ExampleSentence
         hasExamples={hasExamples}
         mainSentence={mainSentence}
+        displayedSentence={displayedSentence}
+        displayedTranslation={displayedTranslation}
         exampleTranslation={exampleTranslation}
         sectionExample={sectionExample}
         sectionExampleTranslation={sectionExampleTranslation}
         loading={loading}
-        onRefresh={onRefresh}
+        onRefresh={() => {
+          try {
+            if (typeof clearConversation === "function") clearConversation();
+          } catch (e) {
+            // ignore
+          }
+          try {
+            if (typeof onRefresh === "function") onRefresh();
+          } catch (e) {
+            // ignore
+          }
+        }}
         refreshTooltip={refreshTooltip}
         onWordClick={onWordClick}
         onSpeak={onSpeak}
-        onToggleConversation={openConversation}
+        onToggleConversation={(...args) => {
+          console.log("[20260203 record][ExampleList][onToggleConversation]", { ts: Date.now() });
+
+  __convTrace("conversation:toggle", {
+    isOpen: isConversationOpen,
+    mainSentencePreview: String(mainSentence || "").slice(0, 120),
+    exampleIndex: 0,
+    
+  }        
+);
+  return openConversation(...args);
+}}
         conversationToggleTooltip={tConversationToggleTooltip}
+        // ✅ Conversation navigation (overlay on ExampleSentence)
+        conversationActive={!!isConversationOpen}
+        conversationPage={__convPage}
+        conversationIndex={__convIndex}
+        conversationTotal={__convTotal}
+        conversationCanPrev={__convCanPrev}
+        conversationCanNext={__convCanNext}
+        onConversationPrev={prevTurn}
+        onConversationNext={nextTurn}
+        conversationLoading={conversationLoading}
+        conversationError={conversationError}
         // ✅ 2026-01-07：headword 往下傳（例句標題顯示用）
         headword={headword}
         headwordRefHint={tHeadwordRefHint}
@@ -298,6 +466,11 @@ export default function ExampleList({
         // - 目的：讓「點 headword badge」可以重新產生例句（不改既有 onRefresh button 行為）
         // - 注意：此處只做「把 handler 往下傳」；實際 click 行為要由 ExampleSentence 實作
         onHeadwordClick={() => {
+          try {
+            if (typeof clearConversation === "function") clearConversation();
+          } catch (e) {
+            // ignore
+          }
           try {
             if (typeof onRefresh === "function") onRefresh();
           } catch (e) {
@@ -319,6 +492,11 @@ export default function ExampleList({
         refBadgesInline={refBadgesInline}
         refActionInline={refActionInline}
         refConfirm={refConfirm}
+        // ✅ 2026-01-29: sentenceType（句型）selector（顯示於 headword badge 右側）
+        sentenceTypeLabel={sentenceTypeLabel}
+        sentenceType={sentenceType}
+        sentenceTypeOptions={sentenceTypeOptions}
+        onSentenceTypeChange={onSentenceTypeChange}
       />
 
       {/* ✅ Phase 2-UX：refs 控制區塊下移插槽（ExampleSentence 下方） */}
@@ -334,27 +512,6 @@ export default function ExampleList({
       ) : null}
 
       {/* 連續對話區塊 */}
-      {isConversationOpen && conversation && (
-        <ConversationBox
-          conversation={conversation}
-          loading={conversationLoading}
-          error={conversationError}
-          onPrev={prevTurn}
-          onNext={nextTurn}
-          onClose={closeConversation}
-          onSpeak={onSpeak}
-          labels={{
-            conversationTitle: tConversationTitle,
-            conversationTurnLabel: tConversationTurnLabel,
-            conversationPrevLabel: tConversationPrev,
-            conversationNextLabel: tConversationNext,
-            conversationCloseLabel: tConversationClose,
-            conversationPlayLabel: tConversationPlay,
-            conversationLoadingLabel: tConversationLoading,
-          }}
-          onWordClick={onWordClick}
-        />
-      )}
     </div>
   );
 }

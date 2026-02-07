@@ -1,3 +1,4 @@
+// PATH: backend/src/routes/dictionaryRoute.js
 // backend/src/routes/dictionaryRoute.js
 const express = require("express");
 const router = express.Router();
@@ -41,6 +42,63 @@ const {
 // ✅ 2026/01/14：加入 logLLMUsage，用於記錄 /api/dictionary/examples 的真實 token
 const { logUsage, logLLMUsage } = require("../utils/usageLogger");
 
+
+const { commitQueryCountSafe,
+  commitLookupCountSafe} = require("../utils/usageIO");
+
+// ======================================
+// ✅ Anonymous daily query limit
+// - Enforced server-side (hard limit)
+// - Identity: logged-in userId OR anonId from header x-visit-id
+// - Limit: 10 / day
+// ======================================
+const ANON_DAILY_QUERY_LIMIT = 10;
+
+function __isUuidLike(v) {
+  try {
+    const s = String(v || "").trim();
+    if (!s) return false;
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(s);
+  } catch {
+    return false;
+  }
+}
+
+function __getTodayDateStr() {
+  const d = new Date();
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function __getAnonIdFromReq(req) {
+  try {
+    const h = req?.headers || {};
+    return String(h["x-visit-id"] || h["x-visitor-id"] || h["x-anon-id"] || "").trim();
+  } catch {
+    return "";
+  }
+}
+
+async function __getDailyQueryCountByUserId({ userId }) {
+  try {
+    if (!userId) return 0;
+    const supa = getSupabaseAdmin();
+    if (!supa) return 0;
+    const day = __getTodayDateStr();
+    const { data, error } = await supa
+      .from("usage_daily")
+      .select("query_count")
+      .eq("user_id", userId)
+      .eq("day", day)
+      .maybeSingle();
+    if (error) return 0;
+    return Number(data?.query_count || 0) || 0;
+  } catch {
+    return 0;
+  }
+}
 // =========================
 // refs 診斷開關（預設 false）
 // =========================
@@ -203,6 +261,7 @@ function postCheckMissingRefs({ refs, examples }) {
 // POST /api/dictionary/lookup
 // =========================
 router.post("/lookup", async (req, res) => {
+  console.info("[統計] dictionary lookup hit");
   try {
     const {
       word,
@@ -215,6 +274,20 @@ router.post("/lookup", async (req, res) => {
 
     const authUser = tryGetAuthUser(req);
 
+    // ======================================
+    // ✅ Anonymous daily query limit (10/day)
+    // - If not logged in, require x-visit-id header (uuid)
+    // - Hard limit enforced BEFORE lookupWord()
+    // ======================================
+    const anonId = !authUser?.id ? __getAnonIdFromReq(req) : "";
+    const anonUsageUserId = !authUser?.id && __isUuidLike(anonId) ? anonId : "";
+    if (!authUser?.id) {
+      const todayCount = await __getDailyQueryCountByUserId({ userId: anonUsageUserId });
+      if (todayCount >= ANON_DAILY_QUERY_LIMIT) {
+        return res.status(429).json({ error: "ANON_DAILY_LIMIT_REACHED" });
+      }
+    }
+
     const result = await lookupWord({
       word,
       explainLang,
@@ -223,6 +296,9 @@ router.post("/lookup", async (req, res) => {
       enableMultiSense,
       includeDictEntry,
     });
+
+    // ✅ usage key: logged-in userId OR anonUsageUserId
+    const usageUserId = authUser?.id || anonUsageUserId || "";
 
     // ✅ 用量紀錄（若沒有登入也可寫匿名，不阻塞）
     try {
@@ -235,11 +311,40 @@ router.post("/lookup", async (req, res) => {
     } catch (e) {
       console.warn("[dictionaryRoute] logUsage lookup failed:", e);
     }
+    // ✅ 主帳本：查詢次數（完成交易才算）
+    try {
+      if (usageUserId) {
+        console.info("[20260203 統計][query_count][route] before", {
+          userId: usageUserId,
+          word,
+        });
+        await commitQueryCountSafe({
+          userId: usageUserId,
+          email: authUser?.email || null,
+          inc: 1,
+          endpoint: "/api/dictionary/lookup",
+          path: req.originalUrl || req.path || "",
+          ip: (req.headers["x-forwarded-for"] || "").toString() || req.ip || "",
+        });
+        console.info("[20260203 統計][query_count][route] after", {
+          userId: usageUserId,
+          word,
+        });
+      } else {
+        console.info("[20260203 統計][query_count][route] skip (no authUser)");
+      }
+    } catch (e) {
+      console.warn("[20260203 統計][query_count][route] commitQueryCountSafe failed:", e?.message || String(e));
+    }
 
-    res.json(result);
+    // [統計] dictionary lookup count (主帳本) - 完成交易才算
+    await commitLookupCountSafe({ userId: usageUserId, inc: 1 });
+
+    return res.json(result);
   } catch (error) {
     console.error("[dictionaryRoute] /lookup error:", error);
-    res.status(500).json({ error: "dictionary_lookup_failed" });
+    if (res.headersSent) return;
+    return res.status(500).json({ error: "dictionary_lookup_failed" });
   }
 });
 
@@ -488,11 +593,17 @@ router.post("/examples", async (req, res) => {
 router.post("/conversation", async (req, res) => {
   try {
     const {
+      // ✅ 新 schema（前端目前送的）
+      sentence,
+      history,
+
+      // ✅ 兼容舊 schema（若其他地方仍在用）
       word,
       baseForm,
       partOfSpeech,
       gender,
       senseIndex,
+
       explainLang,
       uiLang,
 
@@ -504,14 +615,26 @@ router.post("/conversation", async (req, res) => {
 
     const authUser = tryGetAuthUser(req);
 
+    // ✅ explainLang 以新欄位為主；若只送 uiLang 也可相容
+    const finalExplainLang = explainLang || uiLang;
+
     const result = await generateConversation({
+      // ✅ B：例句作為對話基礎句（後端必須吃到）
+      sentence: typeof sentence === "string" ? sentence : "",
+      explainLang: finalExplainLang,
+      history,
+
+      // ✅ 用於 tokens log / 歸戶（不影響既有輸出）
+      userId: authUser?.id || "",
+      email: authUser?.email || "",
+      requestId: req.headers["x-request-id"] || "",
+
+      // ✅ 保留舊欄位（即使目前 generateConversation 未使用，也不破壞未來擴充）
       word,
       baseForm,
       partOfSpeech,
       gender,
       senseIndex,
-      explainLang,
-      uiLang,
       scenario,
       difficulty,
       options,
@@ -523,12 +646,18 @@ router.post("/conversation", async (req, res) => {
         authUserId: authUser ? authUser.id : null,
         type: "dictionary_conversation",
         input: {
+          // ✅ 新 schema
+          sentence: typeof sentence === "string" ? sentence : "",
+          historyLen: Array.isArray(history) ? history.length : 0,
+
+          // ✅ 舊 schema（保留）
           word,
           baseForm,
           partOfSpeech,
           gender,
           senseIndex,
-          explainLang,
+
+          explainLang: finalExplainLang,
           uiLang,
           scenario,
           difficulty,
@@ -829,3 +958,4 @@ router.post("/reportIssue", async (req, res) => {
 
 module.exports = router;
 // backend/src/routes/dictionaryRoute.js
+// END PATH: backend/src/routes/dictionaryRoute.js

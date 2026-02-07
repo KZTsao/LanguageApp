@@ -1,3 +1,5 @@
+// ===== FILE: frontend/src/components/search/SearchBox.jsx =====
+// ===== FILE: frontend/src/components/search/SearchBox.jsx =====
 // PATH: frontend/src/components/search/SearchBox.jsx
 // frontend/src/components/search/SearchBox.jsx
 /**
@@ -43,6 +45,23 @@
 
 import React, { useEffect, useRef } from "react";
 import ExamIcon from "../icons/ExamIcon";
+
+// =========================
+// [normal] trace helper (dev)
+// - Enable: VITE_DEBUG_NORMALIZE_TRACE=1
+// =========================
+const __NTRACE_ON =
+  (typeof import.meta !== "undefined" &&
+    import.meta?.env?.VITE_DEBUG_NORMALIZE_TRACE === "1") ||
+  (typeof window !== "undefined" &&
+    window?.localStorage?.getItem("DEBUG_NORMALIZE_TRACE") === "1");
+
+function __nlog(event, payload) {
+  if (!__NTRACE_ON) return;
+  try {
+    console.info("[normal]", "SearchBox", event, payload || {});
+  } catch (e) {}
+}
 
 // ============================================================
 // Task 1（UI）：全域模式切換按鈕（Search / Learning）
@@ -665,7 +684,9 @@ function SearchBox({
 
   const handleKeyDown = (e) => {
     if (e.key === "Enter") {
-      triggerAnalyzeWithPreprocess("enter");
+      
+              __nlog("enter", { valueLen: (e?.target?.value ?? "").toString().length });
+triggerAnalyzeWithPreprocess("enter");
     }
   };
 
@@ -720,16 +741,27 @@ function SearchBox({
               paddingRight: 6,
               fontSize: 12,
               lineHeight: 1.35,
-              color: queryHint.type === "error" ? "var(--danger)" : "var(--text-subtle)",
+              color:
+                queryHint.reason === "normalizedQuery"
+                  ? "var(--text-subtle)"
+                  : (queryHint.type === "error" ? "var(--danger)" : "var(--text-subtle)"),
               userSelect: "text",
               cursor: "default",
             }}
             onClick={() => {
-              if (typeof onClearQueryHint === "function") onClearQueryHint();
+              
+            __nlog("click", { valueLen: (e?.target?.value ?? "").toString().length });
+if (typeof onClearQueryHint === "function") onClearQueryHint();
             }}
             title={uiText?.searchHintClickToClear || "Click to clear"}
           >
-            {queryHint.text}
+            {queryHint.reason === "normalizedQuery" ? (
+              <span style={{ fontSize: "0.85em", opacity: 0.6 }}>
+                ({queryHint.text})
+              </span>
+            ) : (
+              queryHint.text
+            )}
           </div>
         )}
 
@@ -812,3 +844,5 @@ export default SearchBox;
 // frontend/src/components/search/SearchBox.jsx
 
 // END PATH: frontend/src/components/search/SearchBox.jsx
+// ===== END FILE: frontend/src/components/search/SearchBox.jsx =====
+// ===== END FILE =====

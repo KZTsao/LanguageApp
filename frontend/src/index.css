@@ -636,3 +636,79 @@ select {
           min-width: 34px;
           text-align: center;
         }
+
+
+/* === POS Info subtle titles/hints (Adjektiv) === */
+.posinfo-subtle-title {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-weight: 500;
+  opacity: 0.65;
+  margin-top: 10px;
+  margin-bottom: 6px;
+}
+
+.posinfo-subtle-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-weight: 500;
+  opacity: 0.65;
+}
+
+.posinfo-de-outline {
+  padding: 2px 4px;
+  border-radius: 0;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0;
+}
+
+/* Gender color badges */
+.posinfo-gender-badge {
+  min-width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-main);
+  border-radius: 0;
+  opacity: 0.9;
+}
+
+.posinfo-gender-m { background: rgba(147, 197, 253, 0.35); } /* pastel blue */
+.posinfo-gender-f { background: rgba(251, 182, 206, 0.35); } /* pastel pink */
+.posinfo-gender-n { background: rgba(167, 243, 208, 0.35); } /* pastel green */
+.posinfo-gender-p { background: rgba(253, 230, 138, 0.35); } /* pastel orange */
+
+
+/* [形容詞優化] Lower emphasis helpers */
+.posinfo-subtle-title--low{
+  font-size: 11px;
+  opacity: 0.55;
+}
+
+.posinfo-subtle-hint--low{
+  font-size: 11px;
+  opacity: 0.55;
+}
+
+
+/* [形容詞優化] Gender colors (pastel) */
+.posinfo-gender-badge{
+  font-weight: 500;
+  border-radius: 10px;
+  padding: 2px 8px;
+  border: 1px solid transparent;
+}
+
+.posinfo-gender-m{ background: rgba(147, 197, 253, 0.25); border-color: rgba(147, 197, 253, 0.45); color: var(--text-main); }
+.posinfo-gender-f{ background: rgba(251, 113, 133, 0.22); border-color: rgba(251, 113, 133, 0.45); color: var(--text-main); }
+.posinfo-gender-n{ background: rgba(134, 239, 172, 0.22); border-color: rgba(134, 239, 172, 0.45); color: var(--text-main); }
+.posinfo-gender-p{ background: rgba(253, 186, 116, 0.22); border-color: rgba(253, 186, 116, 0.45); color: var(--text-main); }
+
+
+/* [形容詞優化] Selected outline (pink-purple) */
+.posinfo-de-outline { border: 3px solid transparent; }
+.posinfo-de-outline--selected { border-color: rgba(216, 180, 254, 0.9); }

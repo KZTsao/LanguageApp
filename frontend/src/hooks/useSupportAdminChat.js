@@ -1,156 +1,265 @@
 // PATH: frontend/src/hooks/useSupportAdminChat.js
 /**
- * useSupportAdminChat (前端 MVP / mock)
- * - 目的：支援 SupportAdminPage 的「未讀列表 / 會話切換 / 回覆」最小可用功能
- * - 本版不接後端、不打 API：以記憶體 mock data 模擬
- * - 後續要接後端時：把 openSession/sendReply/markRead 內的 mock 操作換成 fetch 即可
+ * useSupportAdminChat（前端 MVP / 串後端 admin API）
+ * - 目的：支援 SupportAdminPage 的「未讀列表 / 會話切換 / 回覆」
+ *
+ * ✅ 新需求（2026-02-03）
+ * 2) admin 對話視窗要能夠保留同一個 user 對話歷史紀錄
+ *    - 以 session_id 為 key，localStorage cache + 先渲染 cache 再背景刷新
  */
 
-import { useMemo, useRef, useState } from "react";
+import {useMemo, useRef, useState, useEffect} from "react";
+import { apiFetch } from "../utils/apiClient";
 
-function nowIso() {
+// =========================
+// [support] trace helpers (usa, dev-only)
+// =========================
+function __supportTraceOn_usa() {
   try {
-    return new Date().toISOString();
+    if (typeof import.meta !== "undefined" && import.meta?.env?.VITE_DEBUG_SUPPORT === "1") return true;
+  } catch (e) {}
+  try {
+    if (typeof window !== "undefined") {
+      const qs = new URLSearchParams(window.location.search);
+      if (qs.get("debugSupport") === "1") return true;
+      if (window.localStorage?.getItem("VITE_DEBUG_SUPPORT") === "1") return true;
+    }
+  } catch (e) {}
+  return false;
+}
+function __supportTrace_usa(event, payload) {
+  if (!__supportTraceOn_usa()) return;
+  try { console.info("[support]", event, payload || {}); } catch (e) {}
+}
+
+
+// =========================
+// [support] trace helpers (dev-only, no logic change)
+// Enable without restart via:
+// - localStorage.setItem("VITE_DEBUG_SUPPORT","1")
+// - or add ?debugSupport=1 to URL
+// - or VITE_DEBUG_SUPPORT=1 env (requires dev server restart)
+// =========================
+function __supportTraceOn() {
+  try {
+    if (typeof import.meta !== "undefined" && import.meta?.env?.VITE_DEBUG_SUPPORT === "1") return true;
+  } catch (e) {}
+  try {
+    if (typeof window !== "undefined") {
+      const qs = new URLSearchParams(window.location.search);
+      if (qs.get("debugSupport") === "1") return true;
+      if (window.localStorage?.getItem("VITE_DEBUG_SUPPORT") === "1") return true;
+    }
+  } catch (e) {}
+  return false;
+}
+function __supportTrace(event, payload) {
+  if (!__supportTraceOn()) return;
+  try { console.info("[support]", event, payload || {}); } catch (e) {}
+}
+
+
+
+// ===== end logger =====
+
+function makeClientMessageId() {
+  try {
+    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+      return crypto.randomUUID();
+    }
+  } catch {}
+  return `cm_${Math.random().toString(36).slice(2, 10)}_${Date.now()}`;
+}
+
+async function readJsonSafe(res) {
+  try {
+    return await res.json();
   } catch {
-    return "";
+    return null;
   }
 }
 
-function makeId(prefix = "m") {
-  return `${prefix}_${Math.random().toString(36).slice(2, 10)}_${Date.now()}`;
-}
-
-function buildMockStore() {
-  const sessionA = "sess_demo_001";
-  const sessionB = "sess_demo_002";
-
-  const store = {
-    sessions: [sessionA, sessionB],
-    messagesBySession: {
-      [sessionA]: [
-        {
-          id: makeId("u"),
-          session_id: sessionA,
-          sender_role: "user",
-          content: "我付款成功了但還是顯示 free plan，怎麼辦？",
-          created_at: nowIso(),
-        },
-        {
-          id: makeId("a"),
-          session_id: sessionA,
-          sender_role: "admin",
-          content: "我先幫你看一下帳號狀態，你方便提供 email 嗎？",
-          created_at: nowIso(),
-        },
-        {
-          id: makeId("u"),
-          session_id: sessionA,
-          sender_role: "user",
-          content: "email 是 test@example.com",
-          created_at: nowIso(),
-        },
-      ],
-      [sessionB]: [
-        {
-          id: makeId("u"),
-          session_id: sessionB,
-          sender_role: "user",
-          content: "我在 ExampleSentence 按錄音會直接關掉面板",
-          created_at: nowIso(),
-        },
-      ],
-    },
-    unreadBySession: {
-      [sessionA]: true,
-      [sessionB]: true,
-    },
-  };
-
-  return store;
+function ensureOk(res, json, fallback) {
+  if (res.ok) return;
+  const msg = json?.error || json?.message || fallback || `request failed (${res.status})`;
+  throw new Error(String(msg));
 }
 
 export default function useSupportAdminChat() {
-  // mock store lives in a ref so it persists across renders
-  const storeRef = useRef(null);
-  if (!storeRef.current) storeRef.current = buildMockStore();
+  __supportTrace_usa("init", {});
 
-  const [activeSession, setActiveSession] = useState("");
+  __supportTrace("useSupportAdminChat:init", {});
+
+  
+  // ✅ recent conversations (email grouped)
+  const [conversations, setConversations] = useState([]);
+
+  const fetchRecentConversations = async (days = 30) => {
+    const __days = Number(days || 30) || 30;
+    try {
+      const res = await __supportTrace("apiFetch", { url: String(`/api/support/admin/conversations?days=${__days}`) });
+    apiFetch(`/api/support/admin/conversations?days=${__days}`, { method: "GET" });
+      const json = await readJsonSafe(res);
+      ensureOk(res, json, "conversations fetch failed");
+
+      // allow both {items:[...]} or [...]
+      const items = Array.isArray(json) ? json : (json?.items || json?.conversations || json?.rows || []);
+      setConversations(Array.isArray(items) ? items : []);
+      return Array.isArray(items) ? items : [];
+    } catch (e) {
+      setConversations([]);
+      return [];
+    }
+  };
+
+  useEffect(() => {
+    fetchRecentConversations(30);
+  }, []);
+
+const ADMIN_CACHE_KEY = "support_admin_cache__v1";
+
+  const loadCacheSafe = () => {
+    try {
+      const raw = localStorage.getItem(ADMIN_CACHE_KEY);
+      if (!raw) return {
+    fetchRecentConversations,
+conversations,
+lastActiveSession: "", sessions: {} };
+      const parsed = JSON.parse(raw);
+      return {
+        lastActiveSession: String(parsed?.lastActiveSession || ""),
+        sessions: parsed?.sessions && typeof parsed.sessions === "object" ? parsed.sessions : {},
+      };
+    } catch {
+      return { lastActiveSession: "", sessions: {} };
+    }
+  };
+
+  const saveCacheSafe = (next) => {
+    try {
+      localStorage.setItem(ADMIN_CACHE_KEY, JSON.stringify(next));
+    } catch {
+      // ignore
+    }
+  };
+
+  const bootCacheRef = useRef(loadCacheSafe());
+  const sessionsCacheRef = useRef(bootCacheRef.current.sessions || {});
+
+  const [activeSession, setActiveSession] = useState(() => bootCacheRef.current.lastActiveSession || "");
   const [loading, setLoading] = useState(false);
 
-  // state that UI reads
-  const [messages, setMessages] = useState([]);
+  const [messages, setMessages] = useState(() => {
+    const sid = String(bootCacheRef.current.lastActiveSession || "");
+    const cached = sid ? sessionsCacheRef.current?.[sid] : null;
+    return Array.isArray(cached) ? cached : [];
+  });
+
   const [unreadVersion, setUnreadVersion] = useState(0);
 
+  const unreadCacheRef = useRef([]);
+  const inFlightRef = useRef(new Set());
+
   const unread = useMemo(() => {
-    const store = storeRef.current;
-    const out = [];
-    (store.sessions || []).forEach((sid) => {
-      if (!store.unreadBySession?.[sid]) return;
-      const msgs = store.messagesBySession?.[sid] || [];
-      const last = msgs[msgs.length - 1];
-      if (!last) return;
-      out.push({
-        id: `unread_${sid}`,
-        session_id: sid,
-        content: last.content || "",
-        created_at: last.created_at || "",
-      });
-    });
-    // newest first (best-effort)
-    out.sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")));
-    return out;
+    const arr = unreadCacheRef.current;
+    return Array.isArray(arr) ? arr : [];
   }, [unreadVersion]);
+
+  const refreshUnread = async () => {
+    const res = await __supportTrace("apiFetch", { url: String("/api/support/admin/unread") });
+    apiFetch("/api/support/admin/unread", { method: "GET" });
+    const json = await readJsonSafe(res);
+    ensureOk(res, json, "unread fetch failed");
+
+    unreadCacheRef.current = Array.isArray(json?.messages) ? json.messages : [];
+    setUnreadVersion((v) => v + 1);
+    return unreadCacheRef.current;
+  };
 
   const openSession = async (sessionId) => {
     const sid = String(sessionId || "");
     if (!sid) return;
 
+    // ✅ 先用 cache 立即渲染（保留歷史），再背景刷新
+    try {
+      const cached = sessionsCacheRef.current?.[sid];
+      if (Array.isArray(cached) && cached.length > 0) {
+        setMessages(cached);
+      }
+    } catch {}
+
     setLoading(true);
     try {
       setActiveSession(sid);
 
-      const store = storeRef.current;
-      const msgs = store.messagesBySession?.[sid] || [];
-      // simulate async
-      await new Promise((r) => setTimeout(r, 120));
-      setMessages(msgs.slice());
+      // ✅ persist activeSession
+      try {
+        saveCacheSafe({ lastActiveSession: sid, sessions: sessionsCacheRef.current });
+      } catch {}
+
+      const res = await __supportTrace("apiFetch", { url: String(`/api/support/admin/sessions/${sid}/messages`) });
+    apiFetch(`/api/support/admin/sessions/${sid}/messages`, { method: "GET" });
+      const json = await readJsonSafe(res);
+      ensureOk(res, json, "openSession failed");
+
+      const arr = Array.isArray(json?.messages) ? json.messages : [];
+      setMessages(arr);
+
+      // ✅ cache per session
+      try {
+        sessionsCacheRef.current = { ...(sessionsCacheRef.current || {}), [sid]: arr };
+        saveCacheSafe({ lastActiveSession: sid, sessions: sessionsCacheRef.current });
+      } catch {}
+
+      return arr;
     } finally {
       setLoading(false);
     }
   };
 
-  const markRead = (sessionId) => {
+  const markRead = async (sessionId) => {
     const sid = String(sessionId || "");
     if (!sid) return;
 
-    const store = storeRef.current;
-    if (store.unreadBySession && store.unreadBySession[sid]) {
-      store.unreadBySession[sid] = false;
-      setUnreadVersion((v) => v + 1);
-    }
+    const res = await __supportTrace("apiFetch", { url: String(`/api/support/admin/sessions/${sid}/read`) });
+    apiFetch(`/api/support/admin/sessions/${sid}/read`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+    const json = await readJsonSafe(res);
+    ensureOk(res, json, "markRead failed");
+
+    await refreshUnread();
+    return true;
   };
 
-  const sendReply = (text) => {
+  const sendReply = async (text) => {
+    const sid = String(activeSession || "");
+    if (!sid) return;
+
     const content = String(text || "").trim();
     if (!content) return;
-    if (!activeSession) return;
 
-    const sid = activeSession;
-    const store = storeRef.current;
+    const clientMessageId = makeClientMessageId();
+    if (inFlightRef.current.has(clientMessageId)) return;
+    inFlightRef.current.add(clientMessageId);
 
-    const msg = {
-      id: makeId("a"),
-      session_id: sid,
-      sender_role: "admin",
-      content,
-      created_at: nowIso(),
-    };
+    try {
+      const res = await __supportTrace("apiFetch", { url: String(`/api/support/admin/sessions/${sid}/reply`) });
+    apiFetch(`/api/support/admin/sessions/${sid}/reply`, {
+        method: "POST",
+        body: JSON.stringify({ content, clientMessageId }),
+      });
+      const json = await readJsonSafe(res);
+      ensureOk(res, json, "sendReply failed");
 
-    if (!store.messagesBySession[sid]) store.messagesBySession[sid] = [];
-    store.messagesBySession[sid].push(msg);
+      await openSession(sid);
+      await refreshUnread();
 
-    // UI update
-    setMessages((prev) => prev.concat([msg]));
+      return json;
+    } finally {
+      inFlightRef.current.delete(clientMessageId);
+    }
   };
 
   return {
@@ -159,9 +268,12 @@ export default function useSupportAdminChat() {
     activeSession,
     loading,
     openSession,
+    // aliases (email/user based UI)
+    openConversation: openSession,
+    openUser: openSession,
     sendReply,
     markRead,
+    refreshUnread,
   };
 }
-
 // END PATH: frontend/src/hooks/useSupportAdminChat.js

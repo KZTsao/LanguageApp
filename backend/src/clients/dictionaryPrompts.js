@@ -110,11 +110,59 @@ JSON schema:
   "notes": "string or empty",
 
   "recommendations": {
+    "sameWord": "string[]",
     "synonyms": "string[]",
     "antonyms": "string[]",
-    "roots": "string[]"
+    "related": "string[]",
+    "wordFamily": "string[]",
+    "roots": "string[]",
+    "collocations": "string[]"
   }
 }
+
+
+===============================
+RECOMMENDATIONS RULES (IMPORTANT)
+===============================
+
+- You MUST always output the full "recommendations" object with ALL keys:
+  sameWord, synonyms, antonyms, related, wordFamily, roots, collocations
+  (Use empty arrays [] when there are none; do NOT omit keys.)
+
+- For NOUNS (Nomen), prioritize:
+  - related: semantic neighbors / associated nouns (e.g. Tisch → Stuhl, Möbel, Esstisch)
+  - collocations: common short phrases (e.g. am Tisch sitzen, den Tisch decken)
+  Synonyms/antonyms may naturally be empty for many concrete nouns.
+
+- For VERBS, roots/wordFamily can be helpful; collocations may include fixed patterns with prepositions/cases.
+- Do NOT invent unnatural synonyms/antonyms just to fill lists. Prefer fewer but correct items.
+
+
+===============================
+COMPARISON RULES (CRITICAL)
+===============================
+
+Goal: COVERAGE-first. Provide comparison forms whenever possible, including irregular and phrase-based forms.
+- Comparison (positive / comparative / superlative) is a LEXEME-level property, NOT a part-of-speech property.
+- Do NOT infer "not comparable" from partOfSpeech. Adverbs MAY be comparable.
+- You SHOULD try to fill comparison even if you are not 100% sure.
+
+Rules:
+1) If you know (or strongly believe) the comparison forms:
+   - Fill "positive" (usually the base form), and fill "comparative" and/or "superlative" when available.
+   - Irregular and phrase forms are allowed (e.g. "am liebsten").
+
+2) If you are guessing / not fully confident but want to provide coverage:
+   - Still provide your best guess for "comparative" and/or "superlative".
+   - You MUST add a warning in "notes" that clearly marks it as LLM-generated and needs verification.
+     Use this exact pattern somewhere in notes:
+     "⚠️ LLM guess: please verify"
+
+3) Only set ALL three fields to empty strings when you are confident the word truly has NO comparison.
+   - If not confident, do NOT leave them all empty; follow rule (2) instead.
+
+- Never silently leave comparison empty.
+- The "notes" field may contain other helpful remarks, but MUST include the warning when rule (2) is used.
 
 ===============================
 TYPE FIELD RULE (IMPORTANT)
@@ -150,8 +198,14 @@ If and only if "partOfSpeech" is a noun (Nomen), you MUST set the field "type":
   - Examples: Berlin, München, Köln, Deutschland, Europa.
 
 - "organization"
-  - Institutions or organizations.
-  - Examples: UN, EU, WHO, NATO.
+  - NAMED institutions or organizations (named entities), typically acronyms or official proper names.
+  - Examples: UN, EU, WHO, NATO, Deutsche Bahn (as an official entity name).
+  - IMPORTANT: Do NOT use "organization" for generic category nouns like:
+    - Firma, Unternehmen (company)
+    - Organisation (organization)
+    - Regierung (government)
+    - Universität, Schule (university, school)
+    Those are regular common nouns and MUST be type="common_noun".
 
 Rules for "type":
 
@@ -159,7 +213,8 @@ Rules for "type":
   - You MUST set "gender" = "".
   - You MUST set "plural" = "".
   - You MUST NOT invent articles or declension tables.
-- If you are unsure which type applies, default to "common_noun".
+- If the noun is a GENERIC category word (like Firma/Unternehmen/Organisation/etc.), it is ALWAYS a "common_noun".
+- If you are unsure which type applies, default to "common_noun" (never "organization").
 - The "type" field does NOT depend on the learner's language; it is purely grammatical/semantic.
 
 ===============================
@@ -169,6 +224,30 @@ VALENZ RULES (IMPORTANT)
 - DO NOT output placeholder empty objects like:
   [{"prep":null,"kasus":"","note":""}]
 - If the verb has no fixed preposition/case complement, you MUST return: "valenz": [].
+
+
+===============================
+SEPARABLE VERB RULES (CRITICAL)
+===============================
+
+- "separable" is ONLY about separable verb PREFIXES (Trennbare Verben), e.g. "ankommen", "aufstehen".
+- DO NOT confuse separable prefixes with:
+  - prepositional valency / fixed complements ("valenz"), e.g. "auf etw. antworten", "an jdn. denken".
+  - These are NOT separable prefixes. A verb having a fixed preposition does NOT make it separable.
+
+STRICT DECISION RULE:
+- Set "separable": true ONLY when you can justify the split with a natural separable sentence pattern:
+  - Proof pattern: "ich <finite form> <prefix>" (prefix at the end), e.g. "ich komme an", "ich stehe auf".
+- If you cannot produce such a proof pattern confidently, you MUST set "separable": false.
+
+ANTI-PATTERN (FORBIDDEN):
+- Do NOT set separable=true just because the lemma starts with letters like "an/ab/auf/...".
+  - Example: "antworten" starts with "an" but is NOT separable.
+  - Correct: "antworten" → separable=false; valenz may include "auf" (Akk) such as "auf eine Frage antworten".
+
+CONTRAST EXAMPLES:
+- "ankommen" → separable=true; proof: "ich komme an".
+- "antworten" → separable=false; correct example: "Ich antworte auf deine Frage." (NOT "*ich tworte an*").
 
 ===============================
 Language rules for definitions & examples
@@ -389,6 +468,62 @@ Return ONLY the JSON object, no markdown, no explanation.
  * - 用於避免把 definition_de_translation 誤當成 definition
  * - definition：1～3 個詞的短釋義；多義請回傳 array，且不得用逗號合併
  */
+// Phase A2: Separable verb verification (optional second call)
+// Goal: prevent false positives caused by prefix-heuristics (e.g. anti- vs an-).
+const separableCheckSystemPrompt = `
+You are a strict German grammar verifier.
+
+Task:
+- Decide whether the given German lemma is a separable verb (Trennbares Verb).
+- Return ONLY a single JSON object with this schema (no extra keys, no markdown):
+
+{
+  "separable": boolean,
+  "proofExample": "string (empty unless separable=true)"
+}
+
+STRICT DECISION RULE (HARD):
+- Set "separable": true ONLY if you can produce a NATURAL, native-acceptable proof sentence:
+  "Ich <finite verb> <prefix>."
+  where the prefix is sentence-final and does NOT require an object/complement.
+- If you cannot confidently produce such a proof sentence, you MUST set "separable": false.
+
+Additional hard constraints:
+- DO NOT confuse fixed prepositions (valency) with separable prefixes.
+  - e.g. "an jdn. denken", "auf etw. antworten" are NOT separable.
+- DO NOT confuse foreign prefixes like "anti-" with German separable prefixes like "an-".
+  - If the lemma begins with "anti" (e.g. "antizipieren"), you MUST set separable=false.
+- Never invent a non-existent verb stem (e.g. "*tizipieren"). If a split would imply an implausible/non-existing stem, set separable=false.
+
+If separable=false, set "proofExample" to "".
+If separable=true, set "proofExample" to a correct proof sentence in present tense, first person singular, ending with the separated prefix.
+`;
+
+function buildSeparableCheckUserPrompt({
+  word,
+  partOfSpeech,
+  candidatePrefixes,
+  currentSeparable,
+  currentExample,
+}) {
+  const safePrefixes = Array.isArray(candidatePrefixes) ? candidatePrefixes : [];
+  return `
+German lemma:
+"${word}"
+
+partOfSpeech: "${partOfSpeech}"
+Current output (may be wrong):
+- separable: ${String(!!currentSeparable)}
+- example: ${currentExample ? JSON.stringify(currentExample) : '""'}
+
+Candidate separable prefixes whitelist (string match at start of lemma):
+${JSON.stringify(safePrefixes)}
+
+Decide separable according to STRICT DECISION RULE.
+Return ONLY the JSON object.
+`;
+}
+
 const glossSystemPrompt = `
 You are a precise gloss generator for a German dictionary app.
 
@@ -484,6 +619,10 @@ Return ONLY the JSON object with fields "definition_de", "definition_de_translat
 module.exports = {
   systemPrompt,
   buildUserPrompt,
+  // Phase A2 (optional second call): separable verification
+  separableCheckSystemPrompt,
+  buildSeparableCheckUserPrompt,
+
   // Phase B/C (multi-call for better quality)
   glossSystemPrompt,
   buildGlossUserPrompt,

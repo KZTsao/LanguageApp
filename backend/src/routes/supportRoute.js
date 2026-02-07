@@ -3,6 +3,7 @@ const express = require("express");
 const router = express.Router();
 const crypto = require("crypto");
 const { getSupabaseAdmin } = require("../db/supabaseAdmin");
+const authMiddleware = require("../middleware/authMiddleware");
 
 /**
  * Support API
@@ -14,18 +15,21 @@ const { getSupabaseAdmin } = require("../db/supabaseAdmin");
  * - support_chat_sessions / support_chat_messages 存在但未使用
  *
  * 本次改動目標（最小且不破壞）：
- * 1) 保留既有行為：仍以 support_sessions/support_messages 為主（不改 response shape）
- * 2) 新增「雙寫」到 support_chat_*（避免未來切換 schema 時資料斷層）
- * 3) 改用既有 supabaseAdmin（統一後端 DB client）
+ * 1) 🔒 強制登入：未登入不可建立/讀取/送出客服訊息（API 401）
+ * 2) ✅ 雙向未讀（以接收者為主體）：
+ *    - user send → admin 未讀（is_read_by_admin=false）
+ *    - admin send → user 未讀（is_read_by_user=false）
+ * 3) 保留既有行為：response shape 不改（仍回傳 legacy is_read）
+ * 4) 保留雙寫到 support_chat_*（可用 env 關閉）
  *
  * 雙寫開關：
  * - env SUPPORT_DUAL_WRITE_CHAT=0 可關閉（預設開啟）
- *
- * 異動紀錄（只追加，不刪除）：
- * - 2026-01-24：初版 routes
- * - 2026-01-24：加入 bot auto-reply、未讀 unread/read 規則（只算非 user）
- * - 2026-01-27：改用 supabaseAdmin + 增加 support_chat_* 雙寫（預設開）
  */
+
+// ------------------------------------------------------------
+// 🔒 強制登入（所有 /support/* 都需要 Bearer token）
+// ------------------------------------------------------------
+router.use(authMiddleware);
 
 // ------------------------------------------------------------
 // helpers
@@ -124,13 +128,36 @@ async function dualMarkAgentRead({ supabase, sessionId }) {
 /**
  * POST /api/support/session
  * - 仍維持「每次開啟就建立 session」的行為（不改既有邏輯）
- * - 但新增：同 UUID 雙寫到 support_chat_sessions（可關閉）
+ * - 新增：同 UUID 雙寫到 support_chat_sessions（可關閉）
  */
 router.post("/support/session", async (req, res, next) => {
   try {
     const supabase = getSupabaseAdmin();
 
+    // ✅ 30 天內同一個 user 共用同一個 session（以 user 歸戶）
+    const userId = String(req?.authUser?.id || "");
+    if (!userId) return res.status(401).json({ error: "unauthorized" });
+
     const { anonId, uiLang, pagePath, meta } = req.body || {};
+
+    const DAYS = 30;
+    const since = new Date(Date.now() - DAYS * 24 * 60 * 60 * 1000).toISOString();
+
+    // 0) 先找 30 天內是否已有 session
+    const { data: existed, error: existedErr } = await supabase
+      .from("support_sessions")
+      .select("id, created_at")
+      .eq("user_id", userId)
+      .gte("created_at", since)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (existedErr) throw existedErr;
+    if (existed?.id) {
+      return res.json({ sessionId: existed.id, unreadCount: 0 });
+    }
+
     const sessionId = crypto.randomUUID();
 
     // 1) legacy: support_sessions
@@ -138,6 +165,7 @@ router.post("/support/session", async (req, res, next) => {
       .from("support_sessions")
       .insert({
         id: sessionId,
+        user_id: userId,
         anon_id: anonId || null,
         ui_lang: uiLang || null,
         page_path: pagePath || null,
@@ -178,10 +206,17 @@ router.get("/support/messages", async (req, res, next) => {
     const { sessionId } = req.query;
     const limit = normalizeLimit(req.query?.limit, 50);
 
+    if (!sessionId) return res.status(400).json({ error: "missing sessionId" });
+
+    // ✅ 只回 30 天內
+    const DAYS = 30;
+    const since = new Date(Date.now() - DAYS * 24 * 60 * 60 * 1000).toISOString();
+
     const { data, error } = await supabase
       .from("support_messages")
       .select("id, session_id, sender_role, content, meta, is_read, created_at")
       .eq("session_id", sessionId)
+      .gte("created_at", since)
       .order("created_at", { ascending: true })
       .limit(limit);
 
@@ -195,6 +230,7 @@ router.get("/support/messages", async (req, res, next) => {
 /**
  * POST /api/support/messages
  * - 插入 user 訊息後，自動插入一則 bot/support 回覆
+ * - 新增：雙向未讀欄位（is_read_by_admin / is_read_by_user）
  * - 新增：雙寫到 support_chat_messages + 更新 support_chat_sessions.last_message_at
  */
 router.post("/support/messages", async (req, res, next) => {
@@ -211,7 +247,7 @@ router.post("/support/messages", async (req, res, next) => {
       return res.status(400).json({ error: "missing content" });
     }
 
-    // 1) 插入 user 訊息（legacy）
+    // 1) 插入 user 訊息（legacy + 雙向未讀）
     const { data: userMsg, error: userErr } = await supabase
       .from("support_messages")
       .insert({
@@ -219,8 +255,13 @@ router.post("/support/messages", async (req, res, next) => {
         sender_role: "user",
         content: text,
         meta: safeJson(meta),
-        // user 的訊息不需要 unread 追蹤，直接視為已讀
+
+        // legacy：user 自己的訊息直接視為已讀（避免前端把自己訊息當未讀）
         is_read: true,
+
+        // ✅ 雙向未讀：user 自己已讀；admin 未讀
+        is_read_by_user: true,
+        is_read_by_admin: false,
       })
       .select("id, created_at")
       .single();
@@ -236,50 +277,13 @@ router.post("/support/messages", async (req, res, next) => {
       meta: safeJson(meta),
     });
 
-    // 2) 自動插入 bot/support 回覆（legacy）
-    let uiLang = meta?.uiLang;
-    if (!uiLang) {
-      const { data: sess } = await supabase
-        .from("support_sessions")
-        .select("ui_lang")
-        .eq("id", sessionId)
-        .maybeSingle();
-      uiLang = sess?.ui_lang;
-    }
-
-    const replyText = getAutoReplyText(uiLang);
-
-    const { data: botMsg, error: botErr } = await supabase
-      .from("support_messages")
-      .insert({
-        session_id: sessionId,
-        sender_role: "support",
-        content: replyText,
-        meta: { auto: true, reason: "auto-reply" },
-        is_read: false,
-      })
-      .select("id, created_at")
-      .single();
-
-    if (botErr) throw botErr;
-
-    // 2b) dual-write: chat messages（不影響主流程）
-    await dualInsertChatMessage({
-      supabase,
-      sessionId,
-      senderRole: "support",
-      content: replyText,
-      meta: { auto: true, reason: "auto-reply" },
-    });
-
+    // 2) ✅ Task A：停用 Auto-reply
+    // - user send 後：只新增 1 筆 user message（寫入 DB）
+    // - 不再自動新增 sender_role=support 且 meta.auto=true 的罐頭訊息
     // 回傳 user message id（前端 optimistic 用）
     res.json({
       messageId: userMsg.id,
       createdAt: userMsg.created_at,
-      autoReply: {
-        messageId: botMsg.id,
-        createdAt: botMsg.created_at,
-      },
     });
   } catch (e) {
     next(e);
@@ -288,7 +292,8 @@ router.post("/support/messages", async (req, res, next) => {
 
 /**
  * GET /api/support/unread_count
- * - 仍用 legacy unread：只算「非 user」訊息的未讀（support/bot）
+ * - legacy：前端仍依賴 unreadCount（support/bot 未讀）
+ * - ✅ 改為雙向未讀：只算「非 user」訊息的 user 未讀（is_read_by_user=false）
  */
 router.get("/support/unread_count", async (req, res, next) => {
   try {
@@ -296,12 +301,18 @@ router.get("/support/unread_count", async (req, res, next) => {
 
     const { sessionId } = req.query;
 
+    if (!sessionId) return res.status(400).json({ error: "missing sessionId" });
+
+    const DAYS = 30;
+    const since = new Date(Date.now() - DAYS * 24 * 60 * 60 * 1000).toISOString();
+
     const { count, error } = await supabase
       .from("support_messages")
       .select("*", { count: "exact", head: true })
       .eq("session_id", sessionId)
+      .gte("created_at", since)
       .neq("sender_role", "user")
-      .eq("is_read", false);
+      .eq("is_read_by_user", false);
 
     if (error) throw error;
     res.json({ unreadCount: count || 0 });
@@ -313,6 +324,7 @@ router.get("/support/unread_count", async (req, res, next) => {
 /**
  * POST /api/support/read
  * - legacy：只把「非 user」訊息標記為已讀（support/bot）
+ * - ✅ 改為雙向未讀：更新 is_read_by_user=true
  * - 新增：同步寫入 chat session agent_last_read_at（不影響主流程）
  */
 router.post("/support/read", async (req, res, next) => {
@@ -322,12 +334,19 @@ router.post("/support/read", async (req, res, next) => {
     const { sessionId } = req.body || {};
     if (!sessionId) return res.status(400).json({ error: "missing sessionId" });
 
+    const DAYS = 30;
+    const since = new Date(Date.now() - DAYS * 24 * 60 * 60 * 1000).toISOString();
+
+    // legacy + dual
     const { error } = await supabase
       .from("support_messages")
-      .update({ is_read: true })
+      .update({
+        is_read: true,
+        is_read_by_user: true,
+      })
       .eq("session_id", sessionId)
-      .neq("sender_role", "user")
-      .eq("is_read", false);
+      .gte("created_at", since)
+      .neq("sender_role", "user");
 
     if (error) throw error;
 

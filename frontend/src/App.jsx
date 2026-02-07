@@ -1,3 +1,5 @@
+// ===== FILE: frontend/src/App.jsx =====
+// ===== FILE: frontend/src/App.jsx =====
 // PATH: frontend/src/App.jsx
 // frontend/src/App.jsx
 /**
@@ -118,9 +120,26 @@ import SupportAdminPage from "./pages/SupportAdminPage";
 import uiText from "./uiText";
 import WordCard from "./components/word/WordCard";
 import GrammarCard from "./components/grammar/GrammarCard";
-import { AuthProvider, useAuth } from "./context/AuthProvider";
+import { useAuth } from "./context/AuthProvider";
 import AppShellView from "./components/layout/AppShellView";
 import { getSnapshot, upsertSnapshot } from "./app/snapshotStore"; // Task 4C-fix
+
+// =========================
+// [normal] trace helper (dev)
+// - Enable: VITE_DEBUG_NORMALIZE_TRACE=1
+// =========================
+const __NTRACE_ON =
+  (typeof import.meta !== "undefined" &&
+    import.meta?.env?.VITE_DEBUG_NORMALIZE_TRACE === "1") ||
+  (typeof window !== "undefined" &&
+    window?.localStorage?.getItem("DEBUG_NORMALIZE_TRACE") === "1");
+
+function __nlog(event, payload) {
+  if (!__NTRACE_ON) return;
+  try {
+    console.info("[normal]", "App", event, payload || {});
+  } catch (e) {}
+}
 
 // ✅ 新增：統一帶 Authorization
 import { apiFetch } from "./utils/apiClient";
@@ -178,6 +197,15 @@ import { useAppState } from "./app/useAppState";
 // ✅ 拆出：單字庫/收藏 controller
 import { useLibraryController } from "./hooks/useLibraryController";
 import { findFavoritesSnapshot, upsertFavoritesSnapshot } from "./app/favoritesSnapshotStorage";
+// ===== [20260202 support] console logger =====
+const __SUPPORT_TRACE_ON =
+  typeof import.meta !== "undefined" &&
+  import.meta?.env?.VITE_DEBUG_SUPPORT_ADMIN === "1";
+function __supportTrace(...args) {
+  if (!__SUPPORT_TRACE_ON) return;
+  try { console.log("[20260202 support]", ...args); } catch (_) {}
+}
+// ===== end logger =====
 
 // ============================================================
 // Email/Password Auth Pages (minimal, no extra files)
@@ -559,6 +587,36 @@ function AppInner() {
   const { user } = useAuth();
   const authUserId = user && user.id ? user.id : "";
 
+
+// 🧭 Debug flags (safe no-op in prod)
+// - enable by: localStorage.DEBUG_APP = "1"  (or add ?debug=1)
+const __APP_DEBUG =
+  typeof window !== "undefined" &&
+  (String(window.location.search || "").includes("debug=1") ||
+    String(window.localStorage?.getItem("DEBUG_APP") || "") === "1");
+
+useEffect(() => {
+  if (!__APP_DEBUG) return;
+
+  // Optional breakpoint:
+  // localStorage.DEBUG_BREAK_APP = "1"
+  if (String(window.localStorage?.getItem("DEBUG_BREAK_APP") || "") === "1") {
+    debugger; // eslint-disable-line no-debugger
+  }
+
+  const payload = {
+    tag: "AppInnerMounted",
+    at: new Date().toISOString(),
+    path: String(window.location.pathname || ""),
+    hash: String(window.location.hash || ""),
+    readyState: typeof document !== "undefined" ? document.readyState : "(no-document)",
+    hasAuthUser: Boolean(user && user.id),
+    authUserId: user && user.id ? String(user.id) : "",
+  };
+
+  window.__APP_INIT__ = payload;
+  console.log("[APP_INIT]", payload);
+}, []); // run once
   // ✅ 2026-01-26：Support Admin routing（最小侵入、避免依賴 router / import.meta）
   // - 只用 window.location（不使用 import.meta，避免「Cannot use import.meta outside a module」）
   // - 同時支援：/support-admin、/support-admin/、以及 hash #/support-admin（保守）
@@ -610,6 +668,10 @@ function AppInner() {
 
   const {
     text,
+    // ✅ Task 5
+    displayText,
+    queryText,
+    lastNormalizedQuery,
     result,
     uiLang,
     loading,
@@ -667,6 +729,9 @@ function AppInner() {
     isVisitDebugEnabled,
     isExamplesDebugEnabled,
     normalizeSearchQuery,
+    // ✅ Task 5
+    buildQueryForSubmit,
+    applyAnalyzeResult,
   } = helpers;
 
   const {
@@ -933,11 +998,7 @@ function AppInner() {
 
   // ============================================================
   // 深淺色主題（分桶，但初始仍可用 legacy 當 fallback）
-  const [theme, setTheme] = useState(() => {
-    const legacy = window.localStorage.getItem(THEME_KEY_LEGACY);
-    if (legacy === "light" || legacy === "dark") return legacy;
-    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-  });
+  const [theme, setTheme] = useState(() => "light");
   // ============================================================
   // Init Gate — 初始化完成前，禁止任何互動入口
   // - hydrationDone：scoped/legacy localStorage 值已套用
@@ -987,10 +1048,18 @@ function AppInner() {
       if (scopedLang) setUiLang(scopedLang);
       else if (legacyLang) setUiLang(legacyLang);
 
-      const scopedTheme = window.localStorage.getItem(THEME_KEY);
-      const legacyTheme = window.localStorage.getItem(THEME_KEY_LEGACY);
-      if (scopedTheme === "light" || scopedTheme === "dark") setTheme(scopedTheme);
-      else if (legacyTheme === "light" || legacyTheme === "dark") setTheme(legacyTheme);
+            // ✅ 強制亮色：不讀取/不切換 dark，並清除 legacy dark 設定，避免暗版出現
+      setTheme("light");
+      try {
+        window.localStorage.setItem(THEME_KEY, "light");
+      } catch {}
+      try {
+        window.localStorage.removeItem(THEME_KEY_LEGACY);
+      } catch {}
+      try {
+        document.documentElement.classList.remove("dark");
+      } catch {}
+
 
       const scopedLast = window.localStorage.getItem(LASTTEXT_KEY);
       const legacyLast = window.localStorage.getItem(LASTTEXT_KEY_LEGACY);
@@ -1114,7 +1183,16 @@ function AppInner() {
       options?.preflightNormalize !== false &&
       (__intent === "user-search" || __intent === "searchbox" || __intent === "" || __intent === "manual");
 
-    if (__shouldPreflight) {
+    // ✅ Task 5：若外部已提供「實際查詢字」（normalizedQuery），則直接用它，並跳過 preflight
+    const __qOverride =
+      options && typeof options.queryTextOverride === "string"
+        ? options.queryTextOverride.trim()
+        : "";
+    if (__qOverride) {
+      __rawText = __qOverride;
+    }
+
+    if (__shouldPreflight && !__qOverride) {
       const { finalText, hint } = await preflightNormalizeQuery(__rawText0);
       if (hint) {
         try {
@@ -1354,6 +1432,7 @@ function AppInner() {
         delete apiOptions.noHistory;
         delete apiOptions.source;
         delete apiOptions.intent;
+        delete apiOptions.queryTextOverride;
       }
 
       const res = await apiFetch(`/api/analyze`, {
@@ -1390,7 +1469,15 @@ function AppInner() {
         },
       }) : data;
 
+      __nlog("api:analyze:res", { kind: dataWithExamples?.kind || dataWithExamples?.mode, normalizedQuery: dataWithExamples?.normalizedQuery, rawInput: import.meta?.env?.VITE_DEBUG_NORMALIZE_TRACE_TEXT === "1" ? dataWithExamples?.rawInput : undefined });
       setResult(dataWithExamples);
+
+      // ✅ Task 5：更新 display/query（只依賴後端 rawInput/normalizedQuery）
+      try {
+        if (typeof applyAnalyzeResult === "function") {
+          applyAnalyzeResult(dataWithExamples, { rawTextSent: __rawText0, qSent: q });
+        }
+      } catch {}
 
       // Task 4B-0: SnapshotStore sidecar write（不改流程、不 return）
       // refKey 規則：headword + canonicalPos（以 :: 串接）
@@ -1675,7 +1762,15 @@ function AppInner() {
 
   // ✅ 查詢：Analyze（字典）
   const handleAnalyze = async () => {
-    const q = normalizeSearchQuery(text, "handleAnalyze");
+    
+    __nlog("handleAnalyze:start", { displayTextLen: (displayText||text||"").toString().length, queryTextLen: (queryText||"").toString().length, displayText: import.meta?.env?.VITE_DEBUG_NORMALIZE_TRACE_TEXT === "1" ? (displayText||"") : undefined, queryText: import.meta?.env?.VITE_DEBUG_NORMALIZE_TRACE_TEXT === "1" ? (queryText||"") : undefined });
+// ✅ Task 5：實際送出的查詢字必須走 normalizedQuery（queryText）優先，且 trim；括號不污染查詢
+    const __hasBuild = typeof buildQueryForSubmit === "function";
+    const { q: __q0, rawText: __rawText0 } = __hasBuild
+      ? buildQueryForSubmit()
+      : { q: normalizeSearchQuery(text, "handleAnalyze"), rawText: (text || "").toString() };
+    __nlog("handleAnalyze:query", { q: (__q0||"").toString().trim(), rawText: import.meta?.env?.VITE_DEBUG_NORMALIZE_TRACE_TEXT === "1" ? __rawText0 : undefined });
+    const q = (__q0 || "").toString().trim();
     if (!q) return;
 
     // ============================================================
@@ -1683,7 +1778,7 @@ function AppInner() {
     // - 統一走 handleAnalyzeByText（含：必要時切回 search/history + history-hit 回放 + 寫入 history）
     // - 保留下方既有 legacy 實作（避免誤刪；但此處 return 後不會再執行）
     // ============================================================
-    return await handleAnalyzeByText(q, { intent: "searchbox" });
+    return await handleAnalyzeByText(__rawText0, { intent: "searchbox", queryTextOverride: q });
 
     // ✅ Phase X：若命中 history，直接回放（不重打 /api/analyze）
     const hitIndex = findHistoryHitIndex(q);
@@ -2806,10 +2901,14 @@ function AppInner() {
     [appReady]
   );
 
-  const setThemeSafe = useCallback(
-    (next) => {
+    const setThemeSafe = useCallback(
+    (_next) => {
       if (!appReady) return;
-      setTheme(next);
+      // ✅ 強制亮色：忽略下游切換請求
+      setTheme("light");
+      try {
+        document.documentElement.classList.remove("dark");
+      } catch {}
     },
     [appReady]
   );
@@ -2839,6 +2938,7 @@ function AppInner() {
     },
     [appReady, handleToggleFavoriteForUI]
   );
+  console.log("[INIT_GATE]", { /* 把 if 用到的每個變數都列出來 */ });
 
   return (
     <div style={{ position: "relative" }}>
@@ -2907,9 +3007,9 @@ function AppInner() {
       testMetaLoading={testMetaLoading}
       setTestMetaLoading={setTestMetaLoading}
       // search box
-      text={text}
+      text={displayText || text}
       onTextChange={handleTextChange}
-      queryHint={queryHint}
+      queryHint={lastNormalizedQuery ? { text: lastNormalizedQuery, reason: "normalizedQuery", type: "info" } : queryHint}
       onClearQueryHint={clearQueryHint}
       onAnalyze={handleAnalyze}
       onEnterSearch={enterSearchMode}
@@ -2976,15 +3076,9 @@ function AppInner() {
   );
 }
 
-function App() {
-  return (
-    <AuthProvider>
-      <AppInner />
-    </AuthProvider>
-  );
-}
-
-export default App;
+export default AppInner;
 
 // frontend/src/App.jsx
 // END PATH: frontend/src/App.jsx
+// ===== END FILE: frontend/src/App.jsx =====
+// ===== END FILE: frontend/src/App.jsx =====

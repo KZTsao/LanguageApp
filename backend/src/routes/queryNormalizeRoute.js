@@ -34,9 +34,8 @@ const express = require("express");
 // ✅ 依你現有專案：大多使用 Groq/OpenAI client
 // - 若你已經有 groqClient.js 的統一介面，請在這裡替換成實際呼叫方式
 // - 以下用「最小可讀」的抽象，避免綁死特定 SDK
-const groqClient = require("../clients/groqClient");
 const { guessLanguage } = require("../core/languageRules");
-const groqChatCompletion = groqClient && groqClient.groqChatCompletion ? groqClient.groqChatCompletion : null;
+const llmGateway = require("../clients/llmGateway");
 const router = express.Router();
 
 // ✅ DB preflight：用 DB 先判斷「是否為合法詞形」，避免過早進入 typo / lemma rewrite
@@ -255,16 +254,24 @@ function buildPromptStage3(text) {
 
 async function callLLMJsonOrNull(opts) {
   try {
-    const llm = await groqChatCompletion({
+    const llm = await llmGateway.chat({
+      purpose: "query-normalize",
+      provider: "auto",
+      models: {
+        openai: process.env.OPENAI_QUERY_NORMALIZE_MODEL || undefined,
+        groq: process.env.GROQ_QUERY_NORMALIZE_MODEL || undefined,
+      },
+
       messages: [
         { role: "system", content: "Return ONLY valid JSON." },
         { role: "user", content: opts.prompt },
       ],
       temperature: opts.temperature ?? 0.1,
-      max_tokens: opts.max_tokens ?? 160,
+      maxTokens: opts.max_tokens ?? 160,
     });
     try {
-      return JSON.parse(llm?.content || llm || "{}");
+      const text = llm && llm.ok === true ? (llm.text || "") : "";
+      return JSON.parse(text || "{}");
     } catch (e) {
       return null;
     }

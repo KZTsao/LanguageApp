@@ -1,3 +1,4 @@
+// FILE: frontend/src/components/examples/WordExampleBlock.jsx
 // frontend/src/components/examples/WordExampleBlock.jsx
 // FILE: frontend/src/components/examples/WordExampleBlock.jsx
 // frontend/src/components/examples/WordExampleBlock.jsx
@@ -50,6 +51,15 @@ export default function WordExampleBlock({
   onWordClick,
   uiLang,
 
+  // ✅ plumbing: query hints (e.g. reflexive) from upstream analyze result
+  query,
+  queryHints,
+
+  // ✅ plumbing: headword/raw input for lexicographic guards (e.g. sich + Verb)
+  headword,
+  rawInput,
+  normalizedQuery,
+
   // ✅ Task 1：Entry Header 可被置換（只影響例句 header 顯示）
   // - 來源：上游容器（WordCard / 同層容器）或其他上游 state
   // - 注意：僅用於 UI 顯示，不影響 refs、不觸發造句
@@ -95,6 +105,23 @@ export default function WordExampleBlock({
   learningContext,
 }) {
 
+  // [***A][SentTypeTrace] debug switch (Vite env)
+  // - enable by setting: VITE_DEBUG_SENTENCE_TYPE_TRACE=1
+  const __DBG_SENTTYPE_TRACE =
+    (import.meta && import.meta.env && import.meta.env.VITE_DEBUG_SENTENCE_TYPE_TRACE) === "1";
+
+  const __stNow = () => {
+    try { return new Date().toISOString(); } catch (e) { return ""; }
+  };
+
+  const __stLog = (stage, payload) => {
+    if (!__DBG_SENTTYPE_TRACE) return;
+    try {
+      console.log(`[***A][SentTypeTrace][WordExampleBlock] ${__stNow()} ${stage}`, payload || {});
+    } catch (e) {}
+  };
+
+
   // =========================
   // 初始化狀態（Production 排查）
   // =========================
@@ -116,33 +143,54 @@ export default function WordExampleBlock({
   // - 做法：用 localStorage + window 變數（同分頁立即生效）
   // - 不影響查詢 / 快取 / 例句產生，只是 UI 展示
   const POSINFO_COLLAPSE_KEY = "langapp::ui::posinfo_collapsed_v1";
+  // ✅ 2026-02-07：建議字收合狀態（全域）
+  // - 與 POS 補充同規格：localStorage + window 快取
+  const RECS_COLLAPSE_KEY = "langapp::ui::recs_collapsed_v1";
 
-  const [posInfoCollapsed, setPosInfoCollapsed] = useState(() => {
+  // ✅ 共用：讀取 boolean 狀態（localStorage + window cache）
+  const __readUiCollapsed = (storageKey, windowKey, fallback = false) => {
     try {
-      // 1) 優先用 window 快取（同分頁立刻一致）
-      if (typeof window !== "undefined" && window.__langappPosInfoCollapsed != null) {
-        return !!window.__langappPosInfoCollapsed;
+      if (typeof window !== "undefined" && windowKey && window[windowKey] != null) {
+        return !!window[windowKey];
       }
     } catch (e) {}
     try {
-      // 2) 再讀 localStorage（可跨 reload）
-      const v = window.localStorage.getItem(POSINFO_COLLAPSE_KEY);
+      const v = window.localStorage.getItem(storageKey);
       if (v === "1") return true;
       if (v === "0") return false;
     } catch (e) {}
-    return false; // 預設展開
-  });
+    return !!fallback;
+  };
 
-  useEffect(() => {
+  // ✅ 共用：寫入 boolean 狀態（localStorage + window cache）
+  const __writeUiCollapsed = (storageKey, windowKey, value) => {
     try {
-      if (typeof window !== "undefined") {
-        window.__langappPosInfoCollapsed = !!posInfoCollapsed;
+      if (typeof window !== "undefined" && windowKey) {
+        window[windowKey] = !!value;
       }
     } catch (e) {}
     try {
-      window.localStorage.setItem(POSINFO_COLLAPSE_KEY, posInfoCollapsed ? "1" : "0");
+      window.localStorage.setItem(storageKey, value ? "1" : "0");
     } catch (e) {}
+  };
+
+  const [posInfoCollapsed, setPosInfoCollapsed] = useState(() =>
+    __readUiCollapsed(POSINFO_COLLAPSE_KEY, "__langappPosInfoCollapsed", false)
+  );
+
+  // ✅ 2026-02-07：建議字收合狀態（全域）
+  // - 需求：查詢/瀏覽/學習切換時不重置（與 POS 補充同規格）
+  const [recsCollapsed, setRecsCollapsed] = useState(() =>
+    __readUiCollapsed(RECS_COLLAPSE_KEY, "__langappRecsCollapsed", false)
+  );
+
+  useEffect(() => {
+    __writeUiCollapsed(POSINFO_COLLAPSE_KEY, "__langappPosInfoCollapsed", posInfoCollapsed);
   }, [posInfoCollapsed]);
+
+  useEffect(() => {
+    __writeUiCollapsed(RECS_COLLAPSE_KEY, "__langappRecsCollapsed", recsCollapsed);
+  }, [recsCollapsed]);
 
   // ✅ Phase 2-UX（Step A-6）：例句標題顯示 headword（銳角外方匡）
   // 中文功能說明：
@@ -178,10 +226,19 @@ export default function WordExampleBlock({
     return `${w}::${si}::${lang}`;
   }, [d, senseIndex, explainLang]);
 
+  __stLog("wordKey", { wordKey, hasWordKey: !!wordKey });
+
   const [multiRefEnabledByWordKey, setMultiRefEnabledByWordKey] = useState({});
   const [refsByWordKey, setRefsByWordKey] = useState({});
   const [dirtyByWordKey, setDirtyByWordKey] = useState({});
   const [refInputByWordKey, setRefInputByWordKey] = useState({});
+
+  // ✅ 2026-01-27：sentenceType（句型骨架）— per wordKey（不進 DB）
+  // - 只影響 examples options，預設 default（維持既有行為）
+  const [sentenceTypeByWordKey, setSentenceTypeByWordKey] = useState({});
+  // ✅ 2026-01-30：sentenceType 變更不自動重打例句（避免浪費 LLM）
+  // - 變更句型只標記 dirty，需手動點「重新產生例句」才會打 API
+  const [sentenceTypeDirtyByWordKey, setSentenceTypeDirtyByWordKey] = useState({});
 
   // =========================
   // Phase 2-UX（Step B-0）：新增參考小視窗開關（Production 排查）
@@ -227,6 +284,11 @@ export default function WordExampleBlock({
   const refs = Array.isArray(refsByWordKey[wordKey]) ? refsByWordKey[wordKey] : [];
   const dirty = !!dirtyByWordKey[wordKey];
   const refInput = typeof refInputByWordKey[wordKey] === "string" ? refInputByWordKey[wordKey] : "";
+
+  const sentenceTypeRaw = typeof sentenceTypeByWordKey[wordKey] === "string" ? sentenceTypeByWordKey[wordKey] : "";
+  const sentenceTypeDirty = !!sentenceTypeDirtyByWordKey[wordKey];
+  const sentenceType = (sentenceTypeRaw && sentenceTypeRaw.trim()) ? sentenceTypeRaw.trim() : "default";
+  __stLog("sentenceType", { wordKey, sentenceTypeRaw, sentenceTypeRawType: typeof sentenceTypeRaw, sentenceType, sentenceTypeType: typeof sentenceType });
 
   // ✅ UI 檢核訊息
   const refError = typeof refErrorByWordKey[wordKey] === "string" ? refErrorByWordKey[wordKey] : "";
@@ -381,34 +443,63 @@ export default function WordExampleBlock({
   // - key 規則：
   //   - wordCard.* 直接用 "refreshExamplesTooltipLabel"
   //   - exampleBlock.* 用 "exampleBlock.multiRefLabel"（映射到 wordCard.exampleBlock.multiRefLabel）
+  // ✅ deep key resolver: 支援任意層級（例如 grammar.sentenceType.default.label）
+  const __getDeep = useCallback((obj, pathParts) => {
+    let cur = obj;
+    for (const p of pathParts) {
+      if (!cur || typeof cur !== "object") return "";
+      cur = cur[p];
+    }
+    return cur;
+  }, []);
+
   const __t = useCallback(
     (key, hardFallback) => {
       if (typeof key !== "string" || !key) return hardFallback || "----";
 
-      const parts = key.split(".");
-      const k0 = parts[0];
-      const k1 = parts[1];
-
-      let v = "";
-
-      // exampleBlock.*
-      if (k0 === "exampleBlock" && k1) {
-        v =
-          (__tExampleBlock && __tExampleBlock[k1]) ||
-          (__tExampleBlockFallback && __tExampleBlockFallback[k1]) ||
+      // 1) exampleBlock.* -> wordCard.exampleBlock.*
+      if (key.startsWith("exampleBlock.")) {
+        const rest = key.slice("exampleBlock.".length).split(".");
+        const v =
+          __getDeep(__tExampleBlock, rest) ||
+          __getDeep(__tExampleBlockFallback, rest) ||
           "";
-      } else {
-        // wordCard.*
-        v =
-          (__tWordCard && __tWordCard[key]) ||
-          (__tWordCardFallback && __tWordCardFallback[key]) ||
-          "";
+        if (typeof v === "string" && v.trim()) return v;
+        return hardFallback || "----";
       }
 
-      if (typeof v === "string" && v.trim()) return v;
+      // 2) wordCard.* -> wordCard.*
+      if (key.startsWith("wordCard.")) {
+        const rest = key.slice("wordCard.".length).split(".");
+        const v =
+          __getDeep(__tWordCard, rest) || __getDeep(__tWordCardFallback, rest) || "";
+        if (typeof v === "string" && v.trim()) return v;
+        return hardFallback || "----";
+      }
+
+      // 3) 其他任意深度 key（例如 grammar.sentenceType.default.label）
+      const deepParts = key.split(".");
+      const vDeep = __getDeep(__ui, deepParts) || __getDeep(__uiFallback, deepParts) || "";
+      if (typeof vDeep === "string" && vDeep.trim()) return vDeep;
+
+      // 4) 向後相容：舊版 flat key（例如 wordCard["refreshExamplesTooltipLabel"]）
+      const vFlat =
+        (__tWordCard && __tWordCard[key]) ||
+        (__tWordCardFallback && __tWordCardFallback[key]) ||
+        "";
+      if (typeof vFlat === "string" && vFlat.trim()) return vFlat;
+
       return hardFallback || "----";
     },
-    [__tWordCard, __tExampleBlock, __tWordCardFallback, __tExampleBlockFallback]
+    [
+      __ui,
+      __uiFallback,
+      __tWordCard,
+      __tExampleBlock,
+      __tWordCardFallback,
+      __tExampleBlockFallback,
+      __getDeep,
+    ]
   );
 
   // DEPRECATED 2026/01/06: 舊 i18n fallback（isEn/isJa/zh hardcode）改為「只透過 uiText」取字
@@ -432,7 +523,7 @@ export default function WordExampleBlock({
       ? "Add reference (noun/verb/grammar)..."
       : isJa
       ? "参照を追加（名詞/動詞/文法）..."
-      : "新增參考（名詞/動詞/文法）..."
+      : "exampleBlock.refPlaceholder"
   );
 
   const tAddRefBtn = __pickText(
@@ -446,7 +537,7 @@ export default function WordExampleBlock({
       ? "Refs changed — refresh to regenerate"
       : isJa
       ? "参照が変更されました。再生成してください"
-      : "參考已變更，按重新產生才會套用"
+      : "exampleBlock.refsDirtyHint"
   );
 
   // ✅ 新增：toggle button 旁的短說明（亮暗版也可讀）
@@ -456,7 +547,7 @@ export default function WordExampleBlock({
       ? "Use multiple refs for examples"
       : isJa
       ? "複数の参照で例文を生成"
-      : "使用多個參考點產生例句"
+      : "exampleBlock.multiRefHint"
   );
 
   // ✅ Phase 2-UX（Step A-5）：ref 不合理輸入提示
@@ -466,7 +557,7 @@ export default function WordExampleBlock({
       ? "Invalid reference (e.g., 'xxx' / '...' / '…')."
       : isJa
       ? "不正な参照です（例：'xxx' / '...' / '…'）。"
-      : "不合理的參考（例如：xxx / ... / …），已阻擋加入"
+      : "exampleBlock.refInvalidHint"
   );
 
   // ✅ refs badge 狀態提示文字（used/missing）
@@ -486,57 +577,88 @@ export default function WordExampleBlock({
       ? "Some references were not used. Please regenerate."
       : isJa
       ? "一部の参照が使用されていません。再生成してください。"
-      : "有參考未被使用，請再重新產生"
+      : "exampleBlock.missingRefsHint"
   );
   */
 
   // ✅ 現行 i18n：只透過 uiText 取字（uiLang -> zh-TW -> hardFallback）
   const tRefreshTooltip = __t(
     "refreshExamplesTooltipLabel",
-    refreshExamplesTooltipLabel || "重新產生例句"
+    refreshExamplesTooltipLabel || "refreshExamplesTooltipLabel"
   );
 
-  const tMultiRefLabel = __t("exampleBlock.multiRefLabel", "多重參考");
+  const tMultiRefLabel = __t("exampleBlock.multiRefLabel", "exampleBlock.multiRefLabel");
 
   const tRefPlaceholder = __t(
     "exampleBlock.refPlaceholder",
-    "新增參考（名詞/動詞/文法）..."
+    "exampleBlock.refPlaceholder"
   );
 
-  const tAddRefBtn = __t("exampleBlock.addRefBtn", "加入");
+  const tAddRefBtn = __t("exampleBlock.addRefBtn", "exampleBlock.addRefBtn");
 
   const tDirtyHint = __t(
     "exampleBlock.refsDirtyHint",
-    "參考已變更，按重新產生才會套用"
+    "exampleBlock.refsDirtyHint"
   );
 
   // ✅ 新增：toggle button 旁的短說明（亮暗版也可讀）
   const tMultiRefHint = __t(
     "exampleBlock.multiRefHint",
-    "使用多個參考點產生例句"
+    "exampleBlock.multiRefHint"
   );
 
   // ✅ Phase 2-UX（Step A-5）：ref 不合理輸入提示
   const tRefInvalidHint = __t(
     "exampleBlock.refInvalidHint",
-    "不合理的參考（例如：xxx / ... / …），已阻擋加入"
+    "exampleBlock.refInvalidHint"
   );
 
   // ✅ refs badge 狀態提示文字（used/missing）
-  const tRefStatusUsed = __t("exampleBlock.refStatusUsed", "已使用");
-  const tRefStatusMissing = __t("exampleBlock.refStatusMissing", "缺少");
+  const tRefStatusUsed = __t("exampleBlock.refStatusUsed", "exampleBlock.refStatusUsed");
+  const tRefStatusMissing = __t("exampleBlock.refStatusMissing", "exampleBlock.refStatusMissing");
 
   // ✅ missing refs 提示
   const tMissingRefsHint = __t(
     "exampleBlock.missingRefsHint",
-    "有參考未被使用，請再重新產生"
+    "exampleBlock.missingRefsHint"
   );
 
   // ✅ 2026-01-27：例句 header 旁「ⓘ」提示（參考形式說明）
   const tHeadwordRefHint = __t(
     "exampleBlock.headwordRefHint",
-    "這個參考形式會提高例句出現機率，但不保證一定出現"
+    "exampleBlock.headwordRefHint"
   );
+
+  // ✅ sentenceType（UI 文案走 uiText；value 只進 options，不進 DB/snapshot）
+  const tSentenceTypeLabel = __t("wordCard.exampleBlock.sentenceTypeLabel", "wordCard.exampleBlock.sentenceTypeLabel");
+  // ✅ sentenceType dirty 提示（多國字串由 uiText 提供）
+  const tSentenceTypeDirtyHint = __t(
+    "wordCard.exampleBlock.sentenceTypeDirtyHint",
+    "wordCard.exampleBlock.sentenceTypeDirtyHint"
+  );
+  const tSentenceTypeRegenerateBtn = __t(
+    "wordCard.exampleBlock.sentenceTypeRegenerateBtn",
+    "wordCard.exampleBlock.sentenceTypeRegenerateBtn"
+  );
+  const sentenceTypeOptions = [
+    { value: "default", label: __t("wordCard.grammar.sentenceType.default.label", "wordCard.grammar.sentenceType.default.label") },
+    { value: "question_yesno", label: __t("wordCard.grammar.sentenceType.question_yesno.label", "wordCard.grammar.sentenceType.question_yesno.label") },
+    { value: "question_w", label: __t("wordCard.grammar.sentenceType.question_w.label", "wordCard.grammar.sentenceType.question_w.label") },
+    { value: "imperative", label: __t("wordCard.grammar.sentenceType.imperative.label", "wordCard.grammar.sentenceType.imperative.label") },
+    { value: "request_polite", label: __t("wordCard.grammar.sentenceType.request_polite.label", "wordCard.grammar.sentenceType.request_polite.label") },
+    { value: "prohibition", label: __t("wordCard.grammar.sentenceType.prohibition.label", "wordCard.grammar.sentenceType.prohibition.label") },
+    { value: "suggestion", label: __t("wordCard.grammar.sentenceType.suggestion.label", "wordCard.grammar.sentenceType.suggestion.label") },
+    { value: "exclamation", label: __t("wordCard.grammar.sentenceType.exclamation.label", "wordCard.grammar.sentenceType.exclamation.label") },
+  ];
+
+  __stLog("sentenceTypeOptions", {
+    count: Array.isArray(sentenceTypeOptions) ? sentenceTypeOptions.length : 0,
+    sample: Array.isArray(sentenceTypeOptions) ? sentenceTypeOptions.slice(0, 3) : sentenceTypeOptions,
+    sampleTypes: Array.isArray(sentenceTypeOptions)
+      ? sentenceTypeOptions.slice(0, 3).map((o) => ({ valueType: typeof (o && o.value), labelType: typeof (o && o.label) }))
+      : typeof sentenceTypeOptions,
+  });
+
 
   // ============================================================
   // Task F2 — Favorites/Learning：auto-refresh 預設關閉（deprecated）
@@ -603,6 +725,8 @@ export default function WordExampleBlock({
     d,
     senseIndex,
     explainLang,
+    // ✅ sentenceType：句型骨架（只透傳到 options）
+    sentenceType,
     // ✅ Task F2：補齊完成回寫 favorites cache（若上游有注入）
     onExamplesResolved,
     // ✅ Task 3：favorites-learning 以 needsRefresh gate 決定是否開啟 auto-refresh
@@ -1056,7 +1180,7 @@ export default function WordExampleBlock({
       const audio = new Audio(audioBase64);
       audio.play();
     } catch (err) {
-      console.error("[TTS 播放失敗]", err);
+      console.error("[TTS_PLAY_FAILED]", err);
     }
   }
 
@@ -1101,6 +1225,40 @@ export default function WordExampleBlock({
   const onToggleMultiRefForExampleHeader = useCallback(() => {
     handleToggleMultiRefButton();
   }, [handleToggleMultiRefButton]);
+
+  // ✅ SentenceType（句型）切換：只改 state，並沿用既有「切換後直接重打例句」行為
+  // - UI 位置由 ExampleSentence（例句 header）負責
+  // - 這裡只提供回呼，不新增任何規則/白名單
+  const handleSentenceTypeChange = useCallback(
+    (nextValue) => {
+      const v = String(nextValue || "");
+      setSentenceTypeByWordKey((prev) => ({
+        ...prev,
+        [wordKey]: v,
+      }));
+
+      // ✅ 句型變更：不自動重打例句（避免浪費 LLM）
+      // - 只標記 dirty，待使用者手動點「重新產生例句」
+      setSentenceTypeDirtyByWordKey((prev) => ({
+        ...prev,
+        [wordKey]: true,
+      }));
+    },
+    [wordKey]
+  );
+
+  const handleSentenceTypeRegenerate = useCallback(async () => {
+    try {
+      await refreshExamples();
+    } finally {
+      setSentenceTypeDirtyByWordKey((prev) => ({
+        ...prev,
+        [wordKey]: false,
+      }));
+    }
+  }, [refreshExamples, wordKey]);
+
+
 
   const handleAddRef = useCallback(async () => {
     // ✅ Phase 2-UX（Step A-5）：先做 UI 檢核（空值 / placeholder）
@@ -1396,12 +1554,12 @@ setRefsByWordKey((prev) => {
           // DEPRECATED 2026/01/10: old fallback "not available" kept below for reference
           // title={__t("exampleBlock.addRefButtonTooltip", "not available") || "not available"}
           // aria-label={__t("exampleBlock.addRefButtonAria", "not available") || "not available"}
-          title={__t("exampleBlock.addRefButtonTooltip", "新增") || "新增"}
-          aria-label={__t("exampleBlock.addRefButtonAria", "新增") || "新增"}
+          title={__t("exampleBlock.addRefButtonTooltip", "exampleBlock.addRefButtonTooltip") || ""}
+          aria-label={__t("exampleBlock.addRefButtonAria", "exampleBlock.addRefButtonAria") || ""}
         >
           {/* DEPRECATED 2026/01/10: old fallback "not available" kept below for reference */}
           {/* {__t("exampleBlock.addRefButtonLabel", "not available") || "not available"} */}
-          {__t("exampleBlock.addRefButtonLabel", "新增") || "新增"}
+          {__t("exampleBlock.addRefButtonLabel", "exampleBlock.addRefButtonLabel") || ""}
         </button>
 
         {/* ✅ Step B-0：小視窗（只有點「新增」才顯示） */}
@@ -1761,10 +1919,10 @@ setRefsByWordKey((prev) => {
           }}
           style={addRefButtonStyle}
           // ✅ 多國：確認按鈕（fallback 以中文顯示）
-          title={__t("exampleBlock.addRefButtonTooltip", "新增") || "新增"}
-          aria-label={__t("exampleBlock.addRefButtonAria", "新增") || "新增"}
+          title={__t("exampleBlock.addRefButtonTooltip", "exampleBlock.addRefButtonTooltip") || ""}
+          aria-label={__t("exampleBlock.addRefButtonAria", "exampleBlock.addRefButtonAria") || ""}
         >
-          {__t("exampleBlock.addRefButtonLabel", "新增") || "新增"}
+          {__t("exampleBlock.addRefButtonLabel", "exampleBlock.addRefButtonLabel") || ""}
         </button>
 
         {isAddRefPopupOpen && (
@@ -2093,9 +2251,32 @@ setRefsByWordKey((prev) => {
                 {tDirtyHint}
               </span>
             )}
+
+            {sentenceTypeDirty && (
+              <span style={{ fontSize: 12, opacity: 0.85, display: "inline-flex", alignItems: "center", gap: 8 }}>
+                <span>{tSentenceTypeDirtyHint}</span>
+                <button
+                  type="button"
+                  onClick={handleSentenceTypeRegenerate}
+                  style={{
+                    border: "1px solid var(--border-subtle)",
+                    background: "transparent",
+                    color: "inherit",
+                    borderRadius: 999,
+                    padding: "4px 10px",
+                    fontSize: 12,
+                    cursor: "pointer",
+                  }}
+                >
+                  {tSentenceTypeRegenerateBtn}
+                </button>
+              </span>
+            )}
           </>
         )}
       </div>
+
+      
 
       <ExampleList
         examples={Array.isArray(examples) ? examples : []}
@@ -2121,6 +2302,17 @@ setRefsByWordKey((prev) => {
 
         // ✅ 2026-01-27：參考形式提示（ⓘ hover）
         headwordRefHint={tHeadwordRefHint}
+
+        // ✅ SentenceType（句型）— UI 移到 ExampleSentence header（headword badge 右側）
+        sentenceTypeLabel={tSentenceTypeLabel}
+        sentenceType={sentenceType}
+        sentenceTypeOptions={sentenceTypeOptions}
+        onSentenceTypeChange={handleSentenceTypeChange}
+        sentenceTypeDirty={sentenceTypeDirty}
+        sentenceTypeDirtyHint={tSentenceTypeDirtyHint}
+        sentenceTypeRegenerateLabel={tSentenceTypeRegenerateBtn}
+        onSentenceTypeRegenerate={handleSentenceTypeRegenerate}
+
 
         // ✅ Phase 2-UX（Step A-1）：轉傳到 ExampleSentence（例句標題列）用的 multiRef toggle props
         // - 這裡只提供資料/事件，不改現有 UI；ExampleSentence 若尚未接，這些 props 也不會影響任何行為
@@ -2194,13 +2386,121 @@ setRefsByWordKey((prev) => {
                   baseForm={d.baseForm || d.word}
                   gender={d.gender}
                   uiLabels={{}}
-                  extraInfo={{ plural: injectedPlural, dictionary: d }}
+                  extraInfo={{ plural: injectedPlural, dictionary: d, query, queryHints, hints: queryHints, headword, rawInput, normalizedQuery }}
                   type={d.type}
                   uiLang={uiLang}
                   onSelectForm={setSelectedForm}
                   onEntrySurfaceChange={onEntrySurfaceChange}
                   onWordClick={onWordClick}
                 />
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
+      {/* ===== 建議字（與「詞性補充」同層級 + 可收合 + localStorage 記憶） ===== */}
+      {d && (d.baseForm || d.word) && (() => {
+        const rec = (d && d.recommendations && typeof d.recommendations === "object") ? d.recommendations : {};
+        const getArr = (v) => (Array.isArray(v) ? v : []);
+
+        const groups = [
+          { key: "sameWord", label: __t("exampleBlock.recs.sameWord", "同字"), items: getArr(rec.sameWord) },
+          { key: "synonyms", label: __t("exampleBlock.recs.synonyms", "同義"), items: getArr(rec.synonyms) },
+          { key: "antonyms", label: __t("exampleBlock.recs.antonyms", "反義"), items: getArr(rec.antonyms) },
+          { key: "related", label: __t("exampleBlock.recs.related", "相關"), items: getArr(rec.related) },
+          { key: "wordFamily", label: __t("exampleBlock.recs.wordFamily", "同詞根家族"), items: getArr(rec.wordFamily) },
+          { key: "roots", label: __t("exampleBlock.recs.roots", "同詞根"), items: getArr(rec.roots) },
+          { key: "collocations", label: __t("exampleBlock.recs.collocations", "常用搭配"), items: getArr(rec.collocations) },
+        ].filter((g) => g.items.length > 0);
+
+        // 沒任何建議字：不顯示此區塊（避免空卡片干擾）
+        if (groups.length === 0) return null;
+
+        const __recsTitle = __t("exampleBlock.recsTitle", "建議字");
+        const __arrow = recsCollapsed ? "▶" : "▼";
+
+        const onClickWord = (w) => {
+          const word = (w || "").toString().trim();
+          if (!word) return;
+          try {
+            if (typeof onWordClick === "function") {
+              onWordClick(word);
+              return;
+            }
+          } catch (e) {}
+          try {
+            window.dispatchEvent(new CustomEvent("wordSearch", { detail: { text: word, reason: "recommendations" } }));
+          } catch (e) {}
+        };
+
+        const Chip = ({ text }) => (
+          <button
+            type="button"
+            onClick={() => onClickWord(text)}
+            style={{
+              border: "1px solid var(--border-subtle)",
+              background: "var(--surface)",
+              color: "var(--text)",
+              borderRadius: 999,
+              padding: "6px 10px",
+              fontSize: 12,
+              lineHeight: "14px",
+              cursor: "pointer",
+            }}
+          >
+            {text}
+          </button>
+        );
+
+        return (
+          <div
+            style={{
+              marginTop: 10,
+              borderRadius: 10,
+              border: "1px solid var(--border-subtle)",
+              background: "var(--surface-2)",
+              color: "var(--text)",
+              overflow: "hidden",
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => setRecsCollapsed((v) => !v)}
+              style={{
+                width: "100%",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "flex-start",
+                gap: 8,
+                padding: "10px 12px",
+                border: "none",
+                background: "transparent",
+                color: "inherit",
+                cursor: "pointer",
+                textAlign: "left",
+              }}
+              aria-expanded={!recsCollapsed}
+            >
+              <span style={{ fontWeight: 700, fontSize: 13, lineHeight: "16px" }}>
+                {__arrow} {__recsTitle}
+              </span>
+            </button>
+
+            {!recsCollapsed && (
+              <div style={{ padding: "0 12px 12px 12px", display: "flex", flexDirection: "column", gap: 10 }}>
+                {groups.map((g) => (
+                  <div key={g.key}>
+                    <div style={{ fontSize: 12, fontWeight: 700, opacity: 0.85, marginBottom: 6 }}>
+                      {g.label}
+                    </div>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                      {g.items.map((it, idx) => (
+                        <Chip key={`${g.key}-${idx}`} text={String(it)} />
+                      ))}
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
           </div>
@@ -2216,12 +2516,3 @@ setRefsByWordKey((prev) => {
 // __pad_keep_linecount_posinfo
 
 // frontend/src/components/examples/WordExampleBlock.jsx
-
-
-
-
-
-
-
-
-

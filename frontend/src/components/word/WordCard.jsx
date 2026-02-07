@@ -222,6 +222,25 @@ function WordCard({
     }
   }, []);
 
+
+// ✅ 2026-02-07：允許外部（例如 ResultPanel 導覽列）觸發「問題回報」開啟/關閉
+// - 使用 window CustomEvent：soLang:toggleReportIssue
+// - 未登入：直接忽略（避免 UI 困惑）
+useEffect(() => {
+  try {
+    if (typeof window === "undefined") return;
+    const handler = () => {
+      if (!reportIssueAuthed) return;
+      setReportIssueOpen((v) => !v);
+      setReportIssueLastAt(new Date().toISOString());
+    };
+    window.addEventListener("soLang:toggleReportIssue", handler);
+    return () => window.removeEventListener("soLang:toggleReportIssue", handler);
+  } catch (e) {
+    // ignore
+  }
+}, [reportIssueAuthed]);
+
   // ✅ 2026-01-09：Phase X（問題回報）— 多國文字 + 分類清單
   const reportIssueLabel = wordUi.reportIssueLabel || wordUi.reportIssue || "-";
   const reportIssueHint = wordUi.reportIssueHint || "-";
@@ -438,6 +457,15 @@ function WordCard({
   // 其他詞性（Verb/Adjektiv...）維持 user 輸入的樣子
   const inputText = data.text;
 
+  // ✅ phrase：若後端提供 normalized/canonical/headword，優先作為顯示 headword（不影響 word/sentence）
+  const isPhrase = data?.kind === "phrase" || data?.mode === "phrase" || data?.queryMode === "phrase";
+  const canonicalFromResult = (
+    (typeof data?.headword === "string" && data.headword.trim()) ||
+    (typeof data?.query?.canonical === "string" && data.query.canonical.trim()) ||
+    (typeof data?.normalizedQuery === "string" && data.normalizedQuery.trim()) ||
+    ""
+  ).trim();
+
   const lemmaFromDict =
     (typeof d.baseForm === "string" && d.baseForm.trim()) ||
     (typeof d.base_form === "string" && d.base_form.trim()) ||
@@ -452,6 +480,7 @@ function WordCard({
 
   // ✅ 先得到原始 headword（可能是小寫）
   const headwordRaw = (
+    (isPhrase && canonicalFromResult) ||
     (shouldPreferLemma && lemmaFromDict) ||
     (typeof d.word === "string" && d.word.trim()) ||
     (typeof inputText === "string" && inputText.trim()) ||
@@ -616,12 +645,21 @@ function WordCard({
     isVerb &&
     (d.separable === true ||
       d.separable === "true" ||
-      d.separable === 1 ||
-      !!detectedPrefix);
+      d.separable === 1);
 
-  const isReflexive =
-    isVerb &&
-    (d.reflexive === true || d.reflexive === "true" || d.reflexive === 1);
+const __looksLikeReflexiveLemma = (s) => String(s || "").trim().toLowerCase().startsWith("sich ");
+
+const isReflexive =
+  isVerb &&
+  (d.reflexive === true ||
+    d.reflexive === "true" ||
+    d.reflexive === 1 ||
+    // ✅ hard fallback: if headword/input starts with "sich ", treat as reflexive verb
+    __looksLikeReflexiveLemma(headwordRaw) ||
+    __looksLikeReflexiveLemma(inputText) ||
+    __looksLikeReflexiveLemma(data?.rawInput) ||
+    __looksLikeReflexiveLemma(data?.query?.raw) ||
+    __looksLikeReflexiveLemma(data?.query?.normalizedQuery));
 
   // ★ 新增：不規則動詞（來自後端 normalized.irregular）
   const irregularInfo = d.irregular || null;
@@ -1739,6 +1777,12 @@ function WordCard({
 
       <WordExampleBlock
         d={d}
+        // ✅ plumbing: pass query hints for POS info (reflexive etc.)
+        query={data?.query}
+        queryHints={data?.query?.hints}
+        headword={headwordRaw}
+        rawInput={data?.rawInput || inputText}
+        normalizedQuery={data?.query?.normalizedQuery}
         senseIndex={senseIndex}
         // ✅ 2026-01-20：Task F2（Favorites/Learning examples 快取回寫）— 往下傳遞導覽狀態與回寫 callback
         // - WordExampleBlock/useExamples 會用 mode+learningContext 判斷是否關閉 auto-refresh
