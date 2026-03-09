@@ -132,7 +132,7 @@ export const AuthProvider = ({ children }) => {
 
   const hardClearSupabaseAuthStorage = (tag = "") => {
     try {
-      return; // 永久停用：完全停用 hard clear sb-*-auth-token
+      // ✅ 硬清 supabase auth storage（登出後避免 refresh 仍為登入狀態）
       const isTarget = (k) =>
         k.startsWith("sb-") && (k.includes("auth-token") || k.includes("-auth-token"));
 
@@ -437,7 +437,9 @@ console.log("[Auth][onAuthStateChange]", {
       __PROD_DIAG__.lastError = { where: "signOut", message: e?.message || String(e) };
       prodWarn("signOut error", e);
     } finally {
-      // ✅ 強制清掉本機 auth-token（你剛剛驗證：按登出前後 key 沒變，代表必須硬清）
+      // ✅ 強制清掉本機 auth-token（你剛剛驗證：按登出前後 key 沒變，代表必須硬清）      // ✅ 同步清掉自訂 Authorization token（避免 apiClient refresh 後仍帶 token）
+      clearAuthAccessToken();
+
       hardClearSupabaseAuthStorage("final");
       setLoading(false);
     }

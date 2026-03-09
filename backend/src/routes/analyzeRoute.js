@@ -18,6 +18,7 @@
  * - 2026-01-11：✅ Step Set Seen（最小閉環）：/api/analyze 成功後，寫入 user_learning_progress（seen/touch，不覆蓋 familiar）
  * - 2026-01-29：✅ Task3 /api/analyze 分流重構（串接 Task1 + Task2）
  *   - detectMode(text) => word | phrase | uncertain
+
  *   - word/phrase => analyzeWord
  *   - uncertain => classifySentence(text)（Task2）=> sentence => analyzeSentence；phrase => analyzeWord(phrase)
  *   - route 不得自行猜 sentence（sentence 只能由 classifier 判定）
@@ -247,7 +248,7 @@ const { classifySentence } = require("../services/classifySentence");
 
 const { AppError } = require("../utils/errorHandler");
 const { logUsage } = require("../utils/usageLogger");
-const { commitUsageEventSafe, commitLlmTokensSafe, commitQueryCountSafe } = require("../utils/usageIO");
+const { commitUsageEventSafe, commitLlmTokensSafe, commitQueryCountSafe, commitAnalyzeCountSafe } = require("../utils/usageIO");
 
 // ======================================
 // ✅ Anonymous daily query limit
@@ -519,13 +520,14 @@ function sanitizeInputText(input) {
   const s = String(input || "");
   return s.replace(/\s+/g, " ").trim();
 }
-
 router.post("/", async (req, res, next) => {
   try {
     // ✅ 維持既有 input schema，不破壞 consumer：text 必填；rawText/explainLang/其他 options 沿用既有
     const body = req.body || {};
     const { text, rawText, explainLang, targetPosKey, ...restOptions } = body;
 
+
+    try { console.log("[classify][be][analyzeRoute] enter", { text, rawText, explainLang, targetPosKey }); } catch (_) {}
     // ✅ rawInput：rawText ?? text（顯示用）
     const rawInput =
       rawText != null && typeof rawText === "string" ? rawText.trim() : null;
@@ -536,6 +538,7 @@ router.post("/", async (req, res, next) => {
 
     const trimmed = sanitizeInputText(text);
     const rawInputFinal = rawInput && rawInput.trim() ? rawInput.trim() : trimmed;
+    try { console.log("[classify][be][analyzeRoute] sanitized", { trimmed, rawInputFinal }); } catch (_) {}
     if (!trimmed) return res.json({ error: "empty_input" });
 
     INIT_STATUS.runtime.lastCalledAt = new Date().toISOString();
@@ -781,7 +784,20 @@ router.post("/", async (req, res, next) => {
 
 const result = await analyzeWord(lookupText, options);
       
-      // ✅ phrase canonical adopted: sync canonical/headword for UI (WordCard)
+      
+    try {
+      const dict = result && (result.dictionary || result);
+      console.log('[定冠詞][analyzeRoute] /analyze res', {
+        ok: result && (result.ok ?? true),
+        word: dict && dict.word,
+        partOfSpeech: dict && dict.partOfSpeech,
+        canonicalPos: dict && dict.canonicalPos,
+        primaryPos: dict && dict.primaryPos,
+        posKey: dict && dict.posKey,
+        posOptions: dict && dict.posOptions,
+      });
+    } catch {}
+// ✅ phrase canonical adopted: sync canonical/headword for UI (WordCard)
       // - do NOT change analysis logic; only align output fields for display
       if (lookupMode === "phrase" && phraseCanonicalAdopted) {
         try {
@@ -919,7 +935,8 @@ __nlog("analyzeWord:done", { lookupMode, normalizedQuery: (result && result.quer
           options.requestId ? `rid=${options.requestId}` : "",
           e?.message || String(e)
         );
-        return await analyzeWordFlow("phrase");
+                try { console.log("[classify][be][analyzeRoute] branch", { clsMode, to: "analyzeWordFlow", as: "phrase" }); } catch (_) {}
+return await analyzeWordFlow("phrase");
       }
 
       try {
@@ -940,6 +957,7 @@ __nlog("analyzeWord:done", { lookupMode, normalizedQuery: (result && result.quer
 
     // ===== 分流主流程（固定順序）=====
     if (detected === "word" || detected === "phrase") {
+      try { console.log("[classify][be][analyzeRoute] branch", { detected, to: "analyzeWordFlow" }); } catch (_) {}
       __nlog("route:branch", { from: "detectMode", to: "analyzeWordFlow", detected, requestId: options.requestId || "" });
       // 規則：word → lookupMode=word；phrase → lookupMode=phrase
       return await analyzeWordFlow(detected);
@@ -966,6 +984,7 @@ if (cls && cls.mode === "sentence") clsMode = "sentence";
     __nlog("route:branch", { from: "classifySentence", to: clsMode === "sentence" ? "analyzeSentenceFlow" : "analyzeWordFlow", clsMode, requestId: options.requestId || "" });
 
     if (clsMode === "sentence") {
+      try { console.log("[classify][be][analyzeRoute] branch", { clsMode, to: "analyzeSentence" }); } catch (_) {}
       return await analyzeSentenceFlow();
     }
 
@@ -1016,15 +1035,52 @@ router.post("/pronunciation-tips", async (req, res) => {
     const body = req && req.body ? req.body : {};
     const tokens = Array.isArray(body.tokens) ? body.tokens : [];
 
+    // ✅ usage identity (logged-in userId OR anonymous visitId)
+    const authUser = tryGetAuthUser(req);
+    const userId = String(authUser?.id || "").trim();
+    const visitIdRaw = __getAnonIdFromReq(req);
+    const visitId = __isUuidLike(visitIdRaw) ? visitIdRaw : "";
+    const usageKey = userId || visitId;
+    if (!usageKey) {
+      return res.status(400).json({
+        error: "MISSING_IDENTITY",
+        need: ["Authorization: Bearer <token>", "x-visit-id"],
+      });
+    }
+
+    async function __commitPronTipsAnalyzeCount() {
+      // Only count when pronunciation-tips returns successfully (no error)
+      await commitAnalyzeCountSafe({
+        userId,
+        visitId,
+        inc: 1,
+        path: req?.originalUrl || req?.path || "",
+        endpoint: "pronunciation-tips",
+        requestId: getRequestId(req),
+      });
+    }
     const uiLang = (body.uiLang || body.explainLang || "zh-TW").toString();
-    const langLower = uiLang.toLowerCase();
-    const replyLang =
-      langLower.startsWith("zh-cn") ? "zh-CN" :
-      langLower.startsWith("zh") ? "zh-TW" :
-      langLower.startsWith("en") ? "en" :
-      langLower.startsWith("de") ? "de" :
-      langLower.startsWith("ar") ? "ar" :
-      "zh-TW";
+    const langLower = uiLang.toLowerCase().trim();
+
+    // Normalize common UI labels and locale codes
+    const replyLang = (() => {
+      if (!langLower) return "en";
+      if (langLower === "english") return "en";
+      if (langLower === "german" || langLower === "deutsch") return "de";
+      if (langLower === "arabic" || langLower === "العربية") return "ar";
+      if (langLower === "traditional chinese" || langLower.includes("繁體") || langLower.includes("繁体")) return "zh-TW";
+      if (langLower === "simplified chinese" || langLower.includes("简体")) return "zh-CN";
+
+      if (langLower.startsWith("zh-cn")) return "zh-CN";
+      if (langLower.startsWith("zh")) return "zh-TW";
+      if (langLower.startsWith("en")) return "en";
+      if (langLower.startsWith("de")) return "de";
+      if (langLower.startsWith("ar")) return "ar";
+
+      // fallback: primary subtag, but default to English (not zh)
+      const base = langLower.split("-")[0];
+      return base || "en";
+    })();
 
     const openaiKey = process.env.OPENAI_API_KEY || "";
 
@@ -1086,6 +1142,7 @@ router.post("/pronunciation-tips", async (req, res) => {
 
     // ✅ all-green short-circuit: if no miss and no shallow-green candidates -> no LLM
     if (focusTokens.length === 0) {
+      await __commitPronTipsAnalyzeCount();
       return res.json({ tips: [], allGreen: true });
     }
 
@@ -1169,6 +1226,7 @@ router.post("/pronunciation-tips", async (req, res) => {
 
     // ✅ Observation phase: return raw model output (no post-processing / guardrails)
     const raw = String(outText || "").trim();
+    await __commitPronTipsAnalyzeCount();
     return res.json({ tips: raw ? [raw] : [] });
   } catch (e) {
     try {

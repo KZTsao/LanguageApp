@@ -666,6 +666,15 @@ async function analyzeWord(rawText, options = {}) {
   INIT_STATUS.runtime.lastExplainLang = explainLang;
 
   const lookupInput = (rawText || '').trim();
+  // 只做資料流觀測：避免在變數初始化前引用（TDZ）
+  console.log('[定冠詞][analyzeWord] start', {
+    rawText,
+    lookupInput,
+    explainLang,
+    queryMode,
+    targetPosKey,
+    hasRawInput: !!rawInput,
+  });
   const rawInputText = (rawInput && typeof rawInput === 'string') ? rawInput.trim() : lookupInput;
 
   // ============================================================
@@ -674,7 +683,9 @@ async function analyzeWord(rawText, options = {}) {
   // - lookupText 用於實際 lookupWord
   // ============================================================
   const phraseMeta = derivePhraseQueryMeta(rawInputText);
-  const __baseText = (queryMode === 'word') ? tokenizeWord(lookupInput) : lookupInput;
+  
+  console.log('[定冠詞][analyzeWord] phraseMeta', phraseMeta);
+const __baseText = (queryMode === 'word') ? tokenizeWord(lookupInput) : lookupInput;
 
   // lookupText：若是可分/反身片語，優先用 meta.lookupText（例如 mitnehmen / kümmern）
   const text = (phraseMeta && phraseMeta.lookupText) ? phraseMeta.lookupText : __baseText;
@@ -688,7 +699,9 @@ async function analyzeWord(rawText, options = {}) {
     ...options,
     targetPosKey,
   });
-  INIT_STATUS.runtime.lastRequestedPosKey = lookupOptions ? (lookupOptions.targetPosKey || null) : null;
+  
+  console.log('[定冠詞][analyzeWord] lookupOptions', lookupOptions);
+INIT_STATUS.runtime.lastRequestedPosKey = lookupOptions ? (lookupOptions.targetPosKey || null) : null;
   INIT_STATUS.runtime.lastLookupOptions = lookupOptions || null;
 
   // ✅ 2026-01-05：Step 4：記錄 usage attribution runtime（Production 排查）
@@ -712,7 +725,18 @@ async function analyzeWord(rawText, options = {}) {
   // ⚠️ 不影響既有邏輯：lookupWord 若不支援第三參數，JS 仍可安全呼叫
   const dictEntry = await lookupWord(text, explainLang, lookupOptions);
 
-  // ✅ runtime console（Production 排查）
+  
+  console.log('[定冠詞][analyzeWord] lookupWord result (raw)', {
+    word: dictEntry && dictEntry.word,
+    partOfSpeech: dictEntry && dictEntry.partOfSpeech,
+    canonicalPos: dictEntry && dictEntry.canonicalPos,
+    type: dictEntry && dictEntry.type,
+    gender: dictEntry && dictEntry.gender,
+    plural: dictEntry && dictEntry.plural,
+    baseForm: dictEntry && dictEntry.baseForm,
+    posOptions: dictEntry && dictEntry.posOptions,
+  });
+// ✅ runtime console（Production 排查）
   if (lookupOptions && lookupOptions.targetPosKey) {
     console.log("[analyzeWord][posRequery][requested]", {
       text,

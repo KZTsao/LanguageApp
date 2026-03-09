@@ -91,6 +91,22 @@ const raw = String(text ?? "").trim();
   if (startsWithUpper && wordTokens.length >= 3) return "uncertain";
 
   // 剩下的安全落在 phrase
+  
+  // [classify][heuristic] sentence-like signals → uncertain
+  const lowerTokens = wordTokens.map(t => t.toLowerCase());
+  const questionWords = ["wer","was","wie","wo","wann","warum","welche","welcher","welches","wessen","wem","wen"];
+  const pronouns = ["ich","du","er","sie","es","wir","ihr","sie","mich","dich","ihm","ihr","uns","euch","ihnen"];
+  const commonVerbs = ["bin","bist","ist","sind","seid","war","waren","habe","hast","hat","haben","hatte","hatten","komme","kommt","kommen","ging","gingen"];
+
+  if (
+    questionWords.includes(lowerTokens[0]) ||
+    lowerTokens.some(t => pronouns.includes(t)) ||
+    lowerTokens.some(t => commonVerbs.includes(t)) ||
+    wordTokens.length >= 4
+  ) {
+    return "uncertain";
+  }
+
   return "phrase";
 }
 

@@ -89,6 +89,9 @@ export default function LibraryItemsList({
   // ✅ S｜義項狀態 UI 即時更新（前端覆蓋層，避免後端成功但 UI 未刷新）
   const [senseUiOverrides, setSenseUiOverrides] = React.useState(() => ({}));
 
+  // ✅ UI: keep learning list minimal (hide sense rows & like/dislike UI)
+  const SHOW_SENSE_ROWS = false;
+
   // ✅ S｜中文功能說明：產生義項 key（穩定且可讀）
   function getSenseKey(headword, canonicalPos, senseIndex) {
     const idx = senseIndex === null || typeof senseIndex === "undefined" ? 0 : senseIndex;
@@ -170,6 +173,20 @@ export default function LibraryItemsList({
 
   function getIsExcluded(row) {
     const v = pickRowField(row, "isHidden", "is_hidden");
+    return !!v;
+  }
+
+  // ✅ 2026-02-12：對齊資料模型（AI 推薦 vs 手動星號）
+  // - src 來自 user_word_category_links.src
+  // - hasProgress 來自 user_learning_progress（learning_item_id join）
+  // - ⚠️ 若 src 為 null：視為「來源未知」，暫時以「待學習」顯示並記 log（避免誤判為手動）
+  function getSrc(row) {
+    const v = pickRowField(row, "src", "src");
+    return typeof v === "string" ? v : null;
+  }
+
+  function getHasProgress(row) {
+    const v = pickRowField(row, "hasProgress", "has_progress");
     return !!v;
   }
 
@@ -619,10 +636,51 @@ export default function LibraryItemsList({
       }}
     >
       {groupedItems.map((g, gidx) => {
-        const posDisplay = getPosDisplayName(g.canonicalPos || "");
         const mergedGloss = buildMergedGlossLineWithIndex(g.rows);
-        const glossLineText = mergedGloss ? mergedGloss : t.glossEmpty;
+        // ✅ 2026-02-12：以 src/hasProgress 決定 UI 顯示
+        const firstRow = (g.rows || [])[0] || null;
+        const groupSrc = getSrc(firstRow);
+        const groupHasProgress = (g.rows || []).some((r) => getHasProgress(r));
 
+        const toLearnText = (t && (t.pendingToLearn || t.toLearn || t.toLearnLabel)) || "待學習";
+        const isUnknownSrc = groupSrc === null || (groupSrc && groupSrc !== "ai_recommend" && groupSrc !== "user_star");
+        const isAiRecommend = groupSrc === "ai_recommend";
+        const isUserStar = groupSrc === "user_star";
+
+        // 顯示規則：
+        // - ai_recommend + !progress => 待學習
+        // - ai_recommend + progress  => POS + GLOSS
+        // - user_star               => POS + GLOSS
+        // - src=null 或未知值（legacy） => 待學習 + log（⚠️ 不可默認 user_star）
+        const isToLearnByModel = (isAiRecommend && !groupHasProgress) || isUnknownSrc;
+
+        if (isUnknownSrc) {
+          try {
+            if (typeof window !== "undefined") {
+              if (!window.__wlMissingSrcLog) window.__wlMissingSrcLog = { seen: new Set() };
+              const k = `${g.headword}__${g.canonicalPos}__${String(groupSrc)}`;
+              if (!window.__wlMissingSrcLog.seen.has(k)) {
+                window.__wlMissingSrcLog.seen.add(k);
+                console.warn("[LibraryItemsList] src missing/unknown (fallback to 待學習)", {
+                  headword: g.headword,
+                  canonicalPos: g.canonicalPos,
+                  src: groupSrc,
+                });
+              }
+            }
+          } catch (e) {
+            // no-op
+          }
+        }
+
+        let posDisplay = getPosDisplayName(g.canonicalPos || "");
+        let glossLineText = mergedGloss ? mergedGloss : t.glossEmpty;
+
+        if (isToLearnByModel && !isUserStar) {
+          // 待學習：詞性區塊也顯示為「待學習」，避免呈現成「未知」造成語意混淆
+          posDisplay = toLearnText;
+          glossLineText = toLearnText;
+        }
         const isFavorited = true;
         const favText = getFavButtonText(isFavorited);
 
@@ -635,6 +693,10 @@ export default function LibraryItemsList({
         const isPendingThisWord = !!(
           favoriteWordKey && typeof isFavoritePending === "function" ? isFavoritePending(favoriteWordKey) : false
         );
+        if (isPendingThisWord) {
+          posDisplay = t.pendingToLearn || "";
+          glossLineText = t.pendingToLearn || "";
+        }
         const canToggleEffective = !!canToggle && !isPendingThisWord;
 
         const favAria = canToggleEffective ? favText : t.cannotOperateTitle;
@@ -663,8 +725,8 @@ export default function LibraryItemsList({
                     onClick={(e) => handleHeadwordClick(e, g.headword)}
                     title={t.headwordButtonTitle || t.reviewTitle}
                     style={{
-                      fontSize: 20,
-                      fontWeight: 850,
+                      fontSize: 13,
+                      fontWeight: 500,
                       letterSpacing: 0.2,
                       whiteSpace: "nowrap",
                       overflow: "hidden",
@@ -674,9 +736,12 @@ export default function LibraryItemsList({
                     {g.headword}
                   </button>
 
-                  <span className="wl-posInline" title={g.canonicalPos || ""}>
-                    {posDisplay || ""}
-                  </span>
+                  {/* ✅ UI: hide POS in Learning Book list */}
+                  {false && (
+                    <span className="wl-posInline" title={g.canonicalPos || ""}>
+                      {posDisplay || ""}
+                    </span>
+                  )}
                 </div>
 
                 {false && <div style={{ fontSize: 12, opacity: 0.62, marginTop: 4 }}>{t.lemmaLabel}</div>}
@@ -707,7 +772,7 @@ export default function LibraryItemsList({
                     }
                   }}
                 >
-                  <span className="wl-favText">{favText}</span>
+                  {/* ✅ UI: keep star only (no text) */}
 
                   <FavoriteStar
                     active={isFavorited}
@@ -769,11 +834,21 @@ export default function LibraryItemsList({
 
                 const sampleLog = typeof window !== "undefined" && gidx < 2 && ridx < 2;
 
+                if (!SHOW_SENSE_ROWS) return null;
+
                 return (
                   <div key={`sense__${ridx}`} className="wl-senseRow">
                     <div className="wl-senseIdx">{formatCircledNumber(idx0)}</div>
-                    <div className="wl-senseGloss">{gloss ? gloss : t.glossEmpty || "—"}</div>
+                    <div className="wl-senseGloss">
+                      {isPendingThisWord
+                        ? (t.pendingToLearn || "")
+                        : (isToLearnByModel && !isUserStar)
+                          ? toLearnText
+                          : (gloss ? gloss : t.glossEmpty || "—")}
+                    </div>
 
+                      {/* ✅ UI: hide like/dislike (sense status) for now */}
+                      {false && (
                     <div className="wl-senseStatus" title={canUpdateSenseStatus ? t.senseStatusTitle : t.senseStatusDisabledTitle}>
                       <button
                         type="button"
@@ -837,6 +912,7 @@ export default function LibraryItemsList({
                         {isExcludedEffective ? "🚫" : "○"}
                       </button>
                     </div>
+                      )}
                   </div>
                 );
               })}

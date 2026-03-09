@@ -1,7 +1,9 @@
 // ===== FILE: frontend/src/app/useAppState.js =====
 // ===== FILE: frontend/src/app/useAppState.js =====
 // frontend/src/app/useAppState.js
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState, useEffect } from "react";
+const __rl = (...args) => console.log("[返回學習]", ...args);
+
 
 // =========================
 // [normal] trace helper (dev)
@@ -128,12 +130,14 @@ export function useAppState({ authUserId, defaultUiLang = "zh-TW" } = {}) {
 
   // ✅ 動作：切回查詢模式（不清 learningContext，保持可回復）
   const enterSearchMode = useCallback(() => {
+    __rl("useAppState.enterSearchMode");
     setMode("search");
   }, []);
 
   // ✅ 動作：進入學習模式 + 更新 context
   const enterLearningMode = useCallback(
     (ctx) => {
+      __rl("useAppState.enterLearningMode", { title: ctx?.title, items: ctx?.items?.length, sourceType: ctx?.sourceType });
       setMode("learning");
       setLearningContext((prev) => ({
         ...(prev && typeof prev === "object" ? prev : buildDefaultLearningContext()),

@@ -89,7 +89,14 @@ function normalizePartOfSpeech(posRaw) {
   if (!posRaw) return "unknown";
   const s = String(posRaw).trim().toLowerCase();
 
-  if (["noun", "substantiv", "nomen", "名詞", "名词"].includes(s)) {
+  
+  try {
+    const w = String((globalThis && globalThis.__solang_last_lookup_word) || '').trim().toLowerCase();
+    if (w === 'der' || w === 'die' || w === 'das') {
+      console.log('[定冠詞][dictionaryNormalizer] normalizePartOfSpeech', { posRaw, normalizedCandidate: s });
+    }
+  } catch {}
+if (["noun", "substantiv", "nomen", "名詞", "名词"].includes(s)) {
     return "Nomen";
   }
   if (["verb", "verben", "動詞", "动词"].includes(s)) {

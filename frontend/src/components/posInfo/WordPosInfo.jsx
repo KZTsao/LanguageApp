@@ -137,8 +137,15 @@ export default function WordPosInfo({
     const surface =
       form && typeof form.surface === "string" ? form.surface.trim() : "";
 
+    // ✅ Allow per-form TTS override (e.g. Pronomen card wants MALE)
+    // - If not provided, ttsClient will fall back to stored prefs.
+    const ttsOpts =
+      form && typeof form === "object" && form.tts && typeof form.tts === "object"
+        ? form.tts
+        : null;
+
     if (surface) {
-      playTTS(surface, "de-DE");
+      playTTS(surface, "de-DE", ttsOpts);
     }
 
     // ✅ Task 1（只影響顯示）：把 surface 往上回拋（上層用 wordKey/senseIndex 分流）
@@ -147,18 +154,61 @@ export default function WordPosInfo({
       if (typeof onEntrySurfaceChange === "function") {
         const nounMeta =
           form && form.noun && typeof form.noun === "object" ? form.noun : null;
-        const meta = nounMeta
-          ? {
-              case:
-                typeof nounMeta.case === "string" ? nounMeta.case : undefined,
-              number:
-                typeof nounMeta.number === "string"
-                  ? nounMeta.number
-                  : undefined,
-            }
-          : undefined;
+        const artikelMeta =
+          form && form.artikel && typeof form.artikel === "object" ? form.artikel : null;
 
-        onEntrySurfaceChange(surface || null, meta);
+        const meta = {
+          ...(nounMeta
+            ? {
+                case:
+                  typeof nounMeta.case === "string" ? nounMeta.case : undefined,
+                number:
+                  typeof nounMeta.number === "string"
+                    ? nounMeta.number
+                    : undefined,
+              }
+            : null),
+          ...(artikelMeta
+            ? {
+                artikelCase:
+                  typeof artikelMeta.case === "string" ? artikelMeta.case : undefined,
+                artikelGender:
+                  typeof artikelMeta.gender === "string"
+                    ? artikelMeta.gender
+                    : undefined,
+                artikelType:
+                  typeof artikelMeta.type === "string" ? artikelMeta.type : undefined,
+                artikelNumber:
+                  typeof artikelMeta.number === "string" ? artikelMeta.number : undefined,
+              }
+            : null),
+        };
+
+        // ✅ merge extra meta from form (Pronomen / Verb etc.)
+        const pronMeta =
+          form && typeof form === "object" && form.pronoun && typeof form.pronoun === "object"
+            ? __pickDefined(form.pronoun, [
+                "headwordHintKey",
+                "hintKey",
+                "pronounMeaningKey",
+                "card",
+                "case",
+                "gender",
+                "stem",
+                "sieVariant",
+                "ihrMode",
+              ])
+            : {};
+
+        const mergedMeta = {
+          ...(Object.keys(meta).length ? meta : null),
+          ...(Object.keys(pronMeta).length ? pronMeta : null),
+        };
+
+        onEntrySurfaceChange(
+          surface || null,
+          Object.keys(mergedMeta).length ? mergedMeta : undefined
+        );
       }
     } catch (e) {
       // 不阻斷 UI；只要不 throw 影響點擊體驗
@@ -383,9 +433,35 @@ case "Adjektiv":
       );
 
     case "Pronomen": {
+      // [代名詞] console trace (no logic change)
+      try {
+        // eslint-disable-next-line no-console
+        console.debug("[代名詞] WordPosInfo: Pronomen branch", {
+          partOfSpeech,
+          pos,
+          queryWord,
+          baseForm,
+          uiLang,
+          currentLang,
+          hasUiTextLang: !!(uiLang && uiText?.[uiLang]),
+          uiLabelsKeys: uiLabels ? Object.keys(uiLabels) : null,
+          hasPronLabels: !!uiLabels?.pron,
+          pronLabelsKeys:
+            uiLabels?.pron && typeof uiLabels.pron === "object"
+              ? Object.keys(uiLabels.pron)
+              : null,
+          note:
+            "WordPosInfoPronomen receives uiLang + onSelectForm here; this log is for flow verification.",
+        });
+      } catch (e) {}
       return (
         <>
-          <WordPosInfoPronomen baseForm={baseForm} labels={uiLabels.pron} />
+          <WordPosInfoPronomen
+            baseForm={baseForm}
+            labels={uiLabels.pron}
+            uiLang={currentLang}
+            onSelectForm={handleSpeakForm}
+          />
         </>
       );
     }
@@ -393,7 +469,13 @@ case "Adjektiv":
     case "Artikel": {
       return (
         <>
-          <WordPosInfoArtikel labels={uiLabels.art} />
+          <WordPosInfoArtikel
+            baseForm={baseForm}
+            queryWord={queryWord}
+            labels={uiLabels.art}
+            uiLang={currentLang}
+            onSelectForm={handleSpeakForm}
+          />
         </>
       );
     }

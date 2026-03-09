@@ -460,12 +460,131 @@ async function generateExamples(params = {}) {
     senseIndex = 0,
     explainLang = "zh-TW",
     options = {},
+
+    // ✅ Pronomen meaning hint (optional)
+    headwordHintKey,
+    // ✅ Artikel control（可選）：由前端格表點選傳入（deterministic mapping）
+    articleCase,
+    articleGender,
+    articleType,
+    articleNumber,
     definitionDeList,
     definitionLangList,
 
     // ✅ Phase 2：refs（可選）
     refs,
   } = params;
+
+  // =============================
+  // Artikel deterministic mapping (NO LLM)
+  // - 用於：Prompt 強制 + 結果後驗檢查 + 自動 retry
+  // =============================
+  function __normCase(c) {
+    const s = String(c || "").trim().toLowerCase();
+    if (!s) return "";
+    if (s === "n" || s === "nom" || s.startsWith("nom")) return "Nominativ";
+    if (s === "a" || s === "akk" || s.startsWith("akk")) return "Akkusativ";
+    if (s === "d" || s === "dat" || s.startsWith("dat")) return "Dativ";
+    if (s === "g" || s === "gen" || s.startsWith("gen")) return "Genitiv";
+    if (s.startsWith("nom")) return "Nominativ";
+    if (s.startsWith("akk")) return "Akkusativ";
+    if (s.startsWith("dat")) return "Dativ";
+    if (s.startsWith("gen")) return "Genitiv";
+    // full labels
+    if (s === "nominativ") return "Nominativ";
+    if (s === "akkusativ") return "Akkusativ";
+    if (s === "dativ") return "Dativ";
+    if (s === "genitiv") return "Genitiv";
+    return "";
+  }
+
+  function __normGender(g) {
+    const s = String(g || "").trim().toLowerCase();
+    if (!s) return "";
+    if (s === "m" || s.startsWith("masc") || s.startsWith("mask") || s.startsWith("m")) return "Maskulin";
+    if (s === "f" || s.startsWith("fem") || s.startsWith("f")) return "Feminin";
+    if (s === "n" || s.startsWith("neut") || s.startsWith("neu") || s.startsWith("n")) return "Neutrum";
+    if (s === "p" || s === "pl" || s.startsWith("pl")) return "Plural";
+    return "";
+  }
+
+  function __normNumber(n) {
+    const s = String(n || "").trim().toLowerCase();
+    if (!s) return "";
+    if (s === "p" || s === "pl" || s.startsWith("pl")) return "Plural";
+    if (s === "s" || s === "sg" || s.startsWith("sg") || s.startsWith("sing")) return "Singular";
+    if (s === "plural") return "Plural";
+    if (s === "singular") return "Singular";
+    return "";
+  }
+
+  function __normArticleType(t) {
+    const s = String(t || "").trim().toLowerCase();
+    if (!s) return "";
+    if (s === "def" || s === "definite" || s === "definit" || s === "definite_article") return "definite";
+    if (s === "indef" || s === "indefinite" || s === "indefinit" || s === "indefinite_article") return "indefinite";
+    return "";
+  }
+
+  const __DEF = {
+    Nominativ: { Maskulin: "der", Feminin: "die", Neutrum: "das", Plural: "die" },
+    Akkusativ: { Maskulin: "den", Feminin: "die", Neutrum: "das", Plural: "die" },
+    Dativ: { Maskulin: "dem", Feminin: "der", Neutrum: "dem", Plural: "den" },
+    Genitiv: { Maskulin: "des", Feminin: "der", Neutrum: "des", Plural: "der" },
+  };
+  const __INDEF = {
+    Nominativ: { Maskulin: "ein", Feminin: "eine", Neutrum: "ein" },
+    Akkusativ: { Maskulin: "einen", Feminin: "eine", Neutrum: "ein" },
+    Dativ: { Maskulin: "einem", Feminin: "einer", Neutrum: "einem" },
+    Genitiv: { Maskulin: "eines", Feminin: "einer", Neutrum: "eines" },
+  };
+
+  function __expectedArticleForm({ aType, aCase, aGender }) {
+    if (!aType || !aCase || !aGender) return "";
+    if (aType === "definite") {
+      return String(__DEF?.[aCase]?.[aGender] || "");
+    }
+    if (aType === "indefinite") {
+      // indefinite has no plural
+      return String(__INDEF?.[aCase]?.[aGender] || "");
+    }
+    return "";
+  }
+
+  const enforcedArticle = (() => {
+    const aType = __normArticleType(articleType);
+    const aCase = __normCase(articleCase);
+    const aGender = __normGender(articleGender);
+    const aNumber = __normNumber(articleNumber) || (aGender === "Plural" ? "Plural" : "Singular");
+
+    // If number=Plural, gender must be Plural
+    if (aNumber === "Plural" && aGender !== "Plural") return null;
+    // Indefinite articles have no plural
+    if (aType === "indefinite" && aNumber === "Plural") return null;
+
+    const form = __expectedArticleForm({ aType, aCase, aGender });
+    if (!aType || !aCase || !aGender || !form) return null;
+    return { aType, aCase, aGender, aNumber, form };
+  })();
+  // ✅ Debug：確認例句有沒有吃到 articleCase/articleGender/articleType/articleNumber
+  // - 只在 request 真的帶入時回傳（避免污染一般回應）
+  const __hasArticleControl = !!(articleCase || articleGender || articleType || articleNumber);
+  const debugArticleControl = __hasArticleControl
+    ? (() => {
+        const aType = __normArticleType(articleType);
+        const aCase = __normCase(articleCase);
+        const aGender = __normGender(articleGender);
+        const aNumber = __normNumber(articleNumber) || (aGender === "Plural" ? "Plural" : "Singular");
+        const expectedForm = __expectedArticleForm({ aType, aCase, aGender });
+        return {
+          input: { articleType, articleCase, articleGender, articleNumber },
+          normalized: { aType, aCase, aGender, aNumber },
+          expectedForm: expectedForm || "",
+          enforced: enforcedArticle ? { ...enforcedArticle } : null,
+        };
+      })()
+    : null;
+
 
   // ✅ Phase 2：正規化 refs
   const normalizedRefs = normalizeRefs(refs);
@@ -590,6 +709,66 @@ async function generateExamples(params = {}) {
   // ✅ 2026/01/11：名詞大小寫硬規則片段（插入 prompt）
   const nounCapitalizationRuleText = buildNounCapitalizationRuleText(refKeys);
 
+  const enforcedArticleRuleText = enforcedArticle
+    ? `
+
+HARD ARTICLE RULE (MUST FOLLOW):
+- You MUST use the definite/indefinite article form "${enforcedArticle.form}" in the sentence.
+- The sentence MUST be built so that this article corresponds to ${enforcedArticle.aCase} + ${enforcedArticle.aGender} + ${enforcedArticle.aNumber}.
+- Do NOT use a different case for this target article.
+- Ensure the verb/preposition pattern supports the requested case (e.g., Akkusativ/Dativ/Genitiv).
+`
+    : "";
+
+
+  // ✅ Pronomen meaning hint (NO LLM disambiguation)
+  // - Used for hardcoded ambiguous queries like ihr/Sie
+  const pronounHintRuleText = (() => {
+    const k = String(headwordHintKey || "").trim();
+    if (!k) return "";
+
+    const hintMap = {
+      PERSONAL_PRONOUN_2PL: {
+        de: "Use the PERSONAL PRONOUN meaning 'you (plural)'. Build the sentence addressing multiple people.",
+        zh: "翻譯必須是『你們』的意思（第二人稱複數）。",
+        en: "Translation must reflect 'you (plural)'.",
+      },
+      POSSESSIVE_DET_2PL: {
+        de: "Use the POSSESSIVE DETERMINER meaning 'your (plural)'.",
+        zh: "翻譯必須是『你們的』的意思（第二人稱複數所有格）。",
+        en: "Translation must reflect 'your (plural)'.",
+      },
+      FORMAL_YOU: {
+        de: "Use the FORMAL 'you' meaning (Sie/Ihnen/Ihrer). Do NOT use 'she' or 'they'.",
+        zh: "翻譯必須是敬語『您／你們（敬語）』的意思。",
+        en: "Translation must reflect formal 'you'.",
+      },
+      SHE: {
+        de: "Use the meaning 'she' (3rd person singular feminine).",
+        zh: "翻譯必須是『她』。",
+        en: "Translation must reflect 'she'.",
+      },
+      THEY: {
+        de: "Use the meaning 'they' (3rd person plural).",
+        zh: "翻譯必須是『他們／她們』。",
+        en: "Translation must reflect 'they'.",
+      },
+    };
+
+    const row = hintMap[k];
+    if (!row) return "";
+
+    const l1 = String(explainLang || "").toLowerCase();
+    const transRule = l1.startsWith("zh") ? row.zh : row.en;
+
+    return `
+
+HARD PRONOUN MEANING RULE (MUST FOLLOW):
+- ${row.de}
+- ${transRule}
+`;
+  })();
+
   const systemPromptForExamples = `
 You are a German example sentence generator for a language learning app.
 
@@ -603,6 +782,10 @@ Your task:
 - The target learner's explanation language is ${targetLangLabel}.
 
 ${nounCapitalizationRuleText}
+
+${enforcedArticleRuleText}
+
+${pronounHintRuleText}
 
 PHASE 2 REF RULES (IMPORTANT):
 - You will receive a list of reference points ("refs").
@@ -658,6 +841,15 @@ ${optionsSummary}
 Referenzpunkte (refs), die im Satz vorkommen MÜSSEN:
 ${buildRefsBulletText(refKeys)}
 
+${enforcedArticle
+  ? `HARD ARTICLE KONSTRUKTION (MUSS STIMMEN):
+- Verwende im Satz EXAKT den Artikel: "${enforcedArticle.form}"
+- Ziel-Kasus: ${enforcedArticle.aCase}
+- Ziel-Genus/Zahl: ${enforcedArticle.aGender} / ${enforcedArticle.aNumber}
+- Verwende KEINEN anderen Kasus für diesen Ziel-Artikel.
+`
+  : ""}
+
 Anforderungen:
 - Halte dich so gut wie möglich an die oben genannten grammatischen Optionen.
 - Wenn "case" angegeben ist und das Wort ein Nomen ist, setze das Nomen in diesen Kasus.
@@ -676,7 +868,7 @@ Anforderungen:
    * ✅ 2026/01/11：retry prompt（只用一次，避免無限 loop）
    * - 目的：若模型產生 "hund" 但應為 "Hund"，要求修正並重新產生
    */
-  function buildRetryUserPrompt({ basePrompt, violations, nounRefs }) {
+  function buildRetryUserPrompt({ basePrompt, violations, nounRefs, articleViolation }) {
     const vList = Array.isArray(violations) ? violations : [];
     const nounList = Array.isArray(nounRefs) ? nounRefs : [];
 
@@ -696,14 +888,22 @@ Anforderungen:
     return (
       basePrompt +
       "\n\n" +
-      "WICHTIG (RETRY): In der vorherigen Antwort war die Groß-/Kleinschreibung von Nomen falsch.\n" +
-      "Bitte erzeuge den Satz NEU und korrigiere die Orthographie.\n" +
+      "WICHTIG (RETRY): In der vorherigen Antwort gab es Regelverstöße.\n" +
+      "Bitte erzeuge den Satz NEU und korrigiere alle Verstöße.\n" +
       "Regeln:\n" +
       "- Alle deutschen Nomen werden großgeschrieben.\n" +
       "- Für noun-like single-word refs muss die exakte Schreibweise verwendet werden (z.B. \"Hund\" nicht \"hund\").\n" +
+      (articleViolation
+        ? "- HARD ARTICLE: Verwende EXAKT den erwarteten Artikel (siehe unten). Nutze KEINEN anderen Kasus dafür.\n"
+        : "") +
       "- Falls nötig, formuliere den Satz um, aber bleibe natürlich.\n" +
       "\nNoun-like refs (exakte Schreibweise):\n" +
       nText +
+      (articleViolation
+        ? "\n\nArtikel-Verstoß (zu korrigieren):\n" +
+          `- Expected article: \"${articleViolation.expected}\" (case: ${articleViolation.case}, gender: ${articleViolation.gender}, type: ${articleViolation.type})\n` +
+          `- Sentence did NOT contain it as a standalone word.\n`
+        : "") +
       "\n\nVerstöße, die zu korrigieren sind:\n" +
       vText +
       "\n\nGib wieder NUR das JSON zurück."
@@ -861,6 +1061,7 @@ Anforderungen:
           ? parsedWithRefs.senseIndex
           : normSenseIndex,
       options: parsedWithRefs.options || options || {},
+      ...(debugArticleControl ? { debugArticleControl } : {}),
       examples,
       exampleTranslation,
 
@@ -881,6 +1082,27 @@ Anforderungen:
   function shouldRetryForNounCapitalization({ sentence, refKeys }) {
     const check = validateNounCapitalizationForRefs({ sentence, refKeys });
     return check;
+  }
+
+  function shouldRetryForArticleForm({ sentence }) {
+    if (!enforcedArticle) return { ok: true, violation: null };
+    const s = String(sentence || "");
+    const expected = String(enforcedArticle.form || "").trim();
+    if (!expected) return { ok: true, violation: null };
+
+    // Word boundary match, case-insensitive ("Der" at sentence start is ok)
+    const re = new RegExp(`\\b${expected.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}\\b`, "i");
+    const ok = re.test(s);
+    if (ok) return { ok: true, violation: null };
+    return {
+      ok: false,
+      violation: {
+        expected,
+        case: enforcedArticle.aCase,
+        gender: enforcedArticle.aGender,
+        type: enforcedArticle.aType,
+      },
+    };
   }
 
   try {
@@ -937,6 +1159,8 @@ Anforderungen:
       refKeys,
     });
 
+    const retryArticleDecision = shouldRetryForArticleForm({ sentence: firstSentence });
+
     debugRefsRuntime("noun_caps_check", {
       ok: retryDecision.ok,
       nounRefs: retryDecision.nounRefs,
@@ -945,7 +1169,7 @@ Anforderungen:
     });
 
     // 若沒有 violations，直接回傳
-    if (retryDecision.ok) {
+    if (retryDecision.ok && retryArticleDecision.ok) {
       logFinalLLMUsage(usage1);
       return firstResult;
     }
@@ -957,6 +1181,7 @@ Anforderungen:
       basePrompt: userPromptForExamples,
       violations: retryDecision.violations,
       nounRefs: retryDecision.nounRefs,
+      articleViolation: retryArticleDecision.violation,
     });
 
     const retryResp = await callLLMForExamples({
@@ -1004,6 +1229,8 @@ Anforderungen:
       refKeys,
     });
 
+    const retryArticleDecision2 = shouldRetryForArticleForm({ sentence: retrySentence });
+
     debugRefsRuntime("noun_caps_check_retry", {
       ok: retryDecision2.ok,
       nounRefs: retryDecision2.nounRefs,
@@ -1012,17 +1239,19 @@ Anforderungen:
     });
 
     // 在 notes 留一點線索（不影響 UI 顯示邏輯；前端可選擇忽略 notes）
-    if (!retryDecision2.ok) {
+    if (!retryDecision2.ok || !retryArticleDecision2.ok) {
       // 不覆蓋原 notes，只在後面追加（避免破壞既有含義）
       const prevNotes =
         typeof retryResult.notes === "string" ? retryResult.notes : "";
       const add =
-        "noun_caps_retry_failed: model still violates noun capitalization for some refs";
+        !retryDecision2.ok
+          ? "noun_caps_retry_failed: model still violates noun capitalization for some refs"
+          : "article_retry_failed: model still violates requested article form";
       retryResult.notes = prevNotes ? `${prevNotes} | ${add}` : add;
     } else {
       const prevNotes =
         typeof retryResult.notes === "string" ? retryResult.notes : "";
-      const add = "noun_caps_retry_ok";
+      const add = "noun_caps_retry_ok | article_retry_ok";
       retryResult.notes = prevNotes ? `${prevNotes} | ${add}` : add;
     }
 

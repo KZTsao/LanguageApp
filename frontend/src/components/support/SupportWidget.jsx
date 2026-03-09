@@ -44,7 +44,7 @@ export default function SupportWidget({ authUserId, uiLang }) {
 
   const buttonSize = 52;
   const inset = 32;
-  const lift = 26;
+  const lift = -8;
 
   const panelRef = useRef(null);
   const buttonRef = useRef(null);

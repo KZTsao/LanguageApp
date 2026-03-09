@@ -70,6 +70,7 @@
 const express = require("express");
 const { getSupabaseAdmin, getSupabaseAdminInitStatus } = require("../db/supabaseAdmin");
 const { generateImportCandidates } = require("../clients/dictionaryClient");
+const importPresets = require("../data/importPresets");
 
 const router = express.Router();
 
@@ -216,6 +217,17 @@ function shouldFilterHiddenSenses() {
  */
 function shouldFilterHiddenSensesInLibrary() {
   return String(process.env.LIBRARY_FILTER_HIDDEN_IN_LIBRARY || "").trim() === "1";
+}
+
+/**
+ * ✅ 新增（2026-02-23）：是否在分類列表合併「pending import items」
+ * 說明：
+ * - 你已拍板：AI 匯入本質就是 learning task，且必須建立 learning_item_id 並寫入 links。
+ * - 因此：正常情況下不需要再把 user_learning_items 額外插入 payload（會造成重複/錯亂）。
+ * - 僅在「legacy 過渡期」或 debug 時才允許打開。
+ */
+function shouldIncludePendingImportItems() {
+  return String(process.env.LIBRARY_INCLUDE_PENDING_IMPORTS || "").trim() === "1";
 }
 
 /** 功能：安全輸出（避免 log 爆長） */
@@ -562,6 +574,107 @@ function validateWordPayload(body) {
   };
 }
 
+/**
+ * ✅ Root fix（收藏寫入流程）：
+ * 在收藏寫入 user_words 前，若 payload 沒帶 gloss，嘗試從 dict_senses 補齊 gloss + gloss_lang。
+ *
+ * 為什麼需要這段？
+ * - UI 顯示「未知」主要是因為 user_words.headword_gloss 長期為 null
+ * - 讀取時雖可用 dict_senses 覆蓋，但常因 gloss_lang / sense_index 不一致而 miss
+ * - 因此改成「寫入時就把快照補齊」，讓 DB 本身就是完整資料來源
+ */
+function buildGlossLangPriority(rawLang) {
+  const out = [];
+  const push = (x) => {
+    if (!x) return;
+    const s = String(x).trim();
+    if (!s) return;
+    if (!out.includes(s)) out.push(s);
+  };
+
+  const primary = normalizeGlossLang(rawLang);
+  push(primary);
+
+  // 常見 fallback：zh-TW → zh → en
+  if (primary && primary.toLowerCase() === "zh-tw") push("zh");
+  if (primary && primary.toLowerCase().startsWith("zh")) push("zh");
+
+  push("en");
+  push("de");
+  return out;
+}
+
+async function resolveDictSenseSnapshot({ supabaseAdmin, entryId, senseIndex, preferredLangs }) {
+  const EP = "resolveDictSenseSnapshot";
+  try {
+    if (!supabaseAdmin || !entryId) return null;
+    const langs = Array.isArray(preferredLangs) ? preferredLangs.filter(Boolean) : [];
+    if (!langs.length) return null;
+
+    const idx = typeof senseIndex === "number" ? senseIndex : 0;
+
+    // 1) 先嘗試精準命中：同 sense_index + 語言優先
+    {
+      const { data, error } = await supabaseAdmin
+        .from("dict_senses")
+        .select("sense_index, gloss, gloss_lang")
+        .eq("entry_id", entryId)
+        .eq("sense_index", idx)
+        .in("gloss_lang", langs)
+        .limit(50);
+
+      if (error) throw error;
+      const rows = Array.isArray(data) ? data : [];
+      if (rows.length) {
+        // 依語言優先序挑選
+        for (const lang of langs) {
+          const hit = rows.find((r) => String(r?.gloss_lang || "") === lang && r?.gloss);
+          if (hit) return { senseIndex: idx, gloss: hit.gloss, glossLang: hit.gloss_lang || null };
+        }
+        const any = rows.find((r) => r?.gloss);
+        if (any) return { senseIndex: idx, gloss: any.gloss, glossLang: any.gloss_lang || null };
+      }
+    }
+
+    // 2) 精準命中失敗：改抓「所有 senses」，選最小 sense_index，語言仍照優先序
+    {
+      const { data, error } = await supabaseAdmin
+        .from("dict_senses")
+        .select("sense_index, gloss, gloss_lang")
+        .eq("entry_id", entryId)
+        .in("gloss_lang", langs)
+        .order("sense_index", { ascending: true })
+        .limit(200);
+
+      if (error) throw error;
+      const rows = Array.isArray(data) ? data : [];
+      if (!rows.length) return null;
+
+      const minIdx = rows.reduce((m, r) => {
+        const s = typeof r?.sense_index === "number" ? r.sense_index : null;
+        return s == null ? m : m == null ? s : Math.min(m, s);
+      }, null);
+      if (minIdx == null) return null;
+
+      const candidates = rows.filter((r) => r?.sense_index === minIdx && r?.gloss);
+      if (!candidates.length) return null;
+
+      for (const lang of langs) {
+        const hit = candidates.find((r) => String(r?.gloss_lang || "") === lang);
+        if (hit) return { senseIndex: minIdx, gloss: hit.gloss, glossLang: hit.gloss_lang || null };
+      }
+      const any = candidates[0];
+      return { senseIndex: minIdx, gloss: any.gloss, glossLang: any.gloss_lang || null };
+    }
+  } catch (err) {
+    markEndpointError(EP, err);
+    if (shouldDebugPayload()) {
+      console.log("[libraryRoute][resolveDictSenseSnapshot] failed:", String(err?.message || err));
+    }
+    return null;
+  }
+}
+
 /* =========================
  * DB 操作封裝
  * ========================= */
@@ -660,6 +773,8 @@ function toResponsePayload({ rows, limit }) {
 
   return {
     items: visibleSlice.map((r) => ({
+      // ✅ 2026-02-12：回傳 user_word_id（前端可忽略；用於 src/progress join 對齊資料模型）
+      user_word_id: r.id,
       headword: r.headword,
       canonical_pos: r.canonical_pos,
       created_at: r.created_at,
@@ -672,6 +787,13 @@ function toResponsePayload({ rows, limit }) {
       entry_id: typeof r.entry_id === "string" ? r.entry_id : null,
       familiarity: typeof r.familiarity === "number" ? r.familiarity : 0,
       is_hidden: typeof r.is_hidden === "boolean" ? r.is_hidden : false,
+
+      // ✅ 2026-02-13：對齊資料模型（預設欄位）
+      // - 後續會由 attachSrcAndProgressToLibraryItems 覆蓋（若能抓到 links/progress）
+      // - 即使 attach 失敗，也確保前端不會因 undefined 而回退到舊的「用 gloss 判斷」邏輯
+      src: null,
+      learning_item_id: null,
+      hasProgress: false,
     })),
     nextCursor,
     limit,
@@ -684,6 +806,133 @@ function escapeFilterValue(v) {
   const s = String(v ?? "");
   const escaped = s.replace(/"/g, '\\"');
   return `"${escaped}"`;
+}
+
+// =========================================================
+// ✅ 2026-02-12：Favorites 與 Learning 任務顯示對齊資料模型
+// - src / learning_item_id 來自 user_word_category_links
+// - progress 必須用 learning_item_id join user_learning_progress（禁止用 headword join）
+// - 本段實作採「保守 fallback」：若 DB 尚未 migration（欄位不存在），不阻塞既有 API
+// =========================================================
+
+/** 以 user_word_id 清單抓 links（含 src / learning_item_id），欄位缺失時回退到最小 select。 */
+async function safeGetCategoryLinksByUserWordIds({ supabaseAdmin, userId, userWordIds, categoryId = null }) {
+  const ids = Array.isArray(userWordIds) ? userWordIds.filter(Boolean) : [];
+  if (!userId || ids.length === 0) return [];
+
+  // 先嘗試：包含 learning_item_id（若欄位不存在會 throw）
+  try {
+    let q = supabaseAdmin
+      .from("user_word_category_links")
+      .select("user_word_id, src, learning_item_id, created_at")
+      .eq("user_id", userId)
+      .in("user_word_id", ids)
+      .order("created_at", { ascending: false });
+    if (categoryId !== null && categoryId !== undefined) q = q.eq("category_id", categoryId);
+
+    const { data, error } = await q;
+    if (error) throw error;
+    return Array.isArray(data) ? data : [];
+  } catch (e) {
+    // fallback：舊 schema（沒有 learning_item_id）
+    try {
+      let q2 = supabaseAdmin
+        .from("user_word_category_links")
+        .select("user_word_id, src, created_at")
+        .eq("user_id", userId)
+        .in("user_word_id", ids)
+        .order("created_at", { ascending: false });
+      if (categoryId !== null && categoryId !== undefined) q2 = q2.eq("category_id", categoryId);
+
+      const { data: d2, error: e2 } = await q2;
+      if (e2) throw e2;
+      return Array.isArray(d2) ? d2 : [];
+    } catch (e2) {
+      if (shouldDebugPayload()) {
+        console.log(
+          "[libraryRoute][safeGetCategoryLinksByUserWordIds] fallback empty",
+          JSON.stringify({ err: String(e2?.message || e2) })
+        );
+      }
+      return [];
+    }
+  }
+}
+
+/** 以 learning_item_id 清單抓 progress map（hasProgress/seen_count），欄位缺失時回退空 map。 */
+async function safeGetLearningProgressMapByLearningItemIds({ supabaseAdmin, userId, learningItemIds }) {
+  const ids = Array.isArray(learningItemIds)
+    ? learningItemIds
+        .map((x) => (typeof x === "number" ? x : String(x || "").trim()))
+        .filter((x) => x !== "" && x !== null && x !== undefined)
+    : [];
+
+  if (!userId || ids.length === 0) return new Map();
+
+  // ✅ 先嘗試你指定的新 schema：user_id + learning_item_id
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("user_learning_progress")
+      .select("learning_item_id, seen_count")
+      .eq("user_id", userId)
+      .in("learning_item_id", ids);
+
+    if (error) throw error;
+
+    const m = new Map();
+    (data || []).forEach((r) => {
+      const k = r?.learning_item_id;
+      if (k === null || k === undefined || k === "") return;
+      const seen = typeof r?.seen_count === "number" ? r.seen_count : 1;
+      m.set(k, { seen_count: seen });
+    });
+    return m;
+  } catch (e) {
+    // fallback：舊 schema 仍存在（auth_user_id + item_type/item_ref），此任務不應再用 headword join
+    if (shouldDebugPayload()) {
+      console.log(
+        "[libraryRoute][safeGetLearningProgressMapByLearningItemIds] fallback empty",
+        JSON.stringify({ err: String(e?.message || e) })
+      );
+    }
+    return new Map();
+  }
+}
+
+/** 將 links/progress 注入到 payload.items（不改變既有欄位，僅追加 src/learning_item_id/hasProgress）。 */
+function attachSrcAndProgressToLibraryItems({ items, links, progressMap }) {
+  const out = Array.isArray(items) ? items.map((x) => ({ ...(x || {}) })) : [];
+  const linkRows = Array.isArray(links) ? links : [];
+
+  // 若同一 user_word_id 有多個 links（例如 All view），採用 created_at DESC 的第一筆（最接近 UI 行為）
+  const linkByUserWordId = new Map();
+  for (const r of linkRows) {
+    const uwId = r?.user_word_id;
+    if (!uwId) continue;
+    if (!linkByUserWordId.has(uwId)) linkByUserWordId.set(uwId, r);
+  }
+
+  out.forEach((it) => {
+    const uwId = it?.user_word_id;
+    const link = uwId ? linkByUserWordId.get(uwId) : null;
+    const src = typeof link?.src === "string" ? link.src : null;
+    const learningItemId = link?.learning_item_id ?? null;
+
+    it.src = src;
+    it.learning_item_id = learningItemId;
+
+    // hasProgress：必須用 learning_item_id join（禁止 headword join）
+    if (learningItemId !== null && learningItemId !== undefined && progressMap instanceof Map) {
+      it.hasProgress = progressMap.has(learningItemId);
+      // 可選：帶 seen_count（前端可忽略）
+      const p = progressMap.get(learningItemId);
+      if (p && typeof p.seen_count === "number") it.progress_seen_count = p.seen_count;
+    } else {
+      it.hasProgress = false;
+    }
+  });
+
+  return out;
 }
 
 /**
@@ -1739,6 +1988,17 @@ router.get("/favorites/category-status", async (req, res, next) => {
  * - POST /api/library/import/commit：寫入學習本 items/link（同學習本去重）
  * ========================================================= */
 
+/** GET /api/library/import/presets (static, no LLM) */
+router.get("/import/presets", async (req, res) => {
+  markEndpointHit("importPresets");
+  try {
+    return res.json(importPresets);
+  } catch (e) {
+    markEndpointError("importPresets", e);
+    return res.status(500).json({ ok: false, message: "failed" });
+  }
+});
+
 /** POST /api/library/import/generate */
 router.post("/import/generate", async (req, res, next) => {
   markEndpointHit("importGenerate");
@@ -1849,134 +2109,230 @@ router.post("/import/commit", async (req, res, next) => {
       return res.status(400).json({ ok: false, message: "no valid items" });
     }
 
-    // ✅ 1) 先 upsert user_words 取得 user_word_id（去重依賴 user_words 的唯一鍵）
-    const userWordIds = [];
-    for (const it of normalizedItems) {
-      const headword = it.importKey;
+    /**
+     * ✅ 2026-02-23（拍板）：AI 匯入本質就是「學習任務（learning task）」
+     * 目標：
+     * 1) 先建立/去重 user_learning_items（用 user_id+category_id+item_type+import_key 唯一）
+     * 2) 再寫 user_words（字卡快照；⚠️ 不代表已學習）
+     * 3) 再寫 user_word_category_links（src='ai_recommend' 且 learning_item_id 必填）
+     *
+     * ⚠️ 禁止：
+     * - 再寫 src='llm_import'
+     * - learning_item_id=null 靜默寫入（map miss 必須 fail）
+     */
 
-      // canonical_pos：匯入階段不做 analyze，POS 可能未知。
-      // ✅ 不用 canonical_pos 當「匯入註記」，改成：
-      // - word    => "Unbekannt"（後續 analyze 會覆蓋）
-      // - phrase  => "Phrase"
-      // - grammar => "Grammatik"
-      // 這樣同一個 headword 在不同 type 下也不會互相撞 unique key。
-      const canonicalPos = it.itemType === "phrase" ? "Phrase" : it.itemType === "grammar" ? "Grammatik" : "Unbekannt";
+    // 1) upsert learning tasks（必做）
+// ✅ 向後相容：若開發環境 DB 尚未建立 user_learning_items 或 learning_item_id 欄位，
+// 允許降級為 legacy 匯入（仍寫入 user_words + user_word_category_links），避免整體 500 阻塞。
+const learningRows = normalizedItems.map((it) => ({
+  user_id: userId,
+  category_id: targetCategoryId,
+  item_type: it.itemType,
+  import_key: it.importKey,
+  meta: meta || null,
+}));
 
-      const rowId = await upsertUserWord({
-        supabaseAdmin,
-        userId,
+let legacyMode = false;
+let upsertedLearning = null;
+
+try {
+  const { data, error } = await supabaseAdmin
+    .from("user_learning_items")
+    .upsert(learningRows, {
+      onConflict: "user_id,category_id,item_type,import_key",
+    })
+    .select("id,item_type,import_key");
+
+  if (error) throw error;
+  upsertedLearning = data;
+} catch (e) {
+  const msg = String(e?.message || e || "");
+  const isMissingRelation = msg.includes('relation "user_learning_items" does not exist');
+  const isMissingTable = msg.includes("user_learning_items") && msg.includes("does not exist");
+  const isMissingColumn = msg.includes("learning_item_id") && msg.includes("does not exist");
+  // 只在「明顯是 schema 尚未就緒」時降級；其他錯誤仍照舊 throw
+  if (isMissingRelation || isMissingTable || isMissingColumn) {
+    legacyMode = true;
+    upsertedLearning = [];
+    console.warn("[libraryRoute][importCommit] legacyMode=1 (schema missing)", { message: msg });
+  } else {
+    throw e;
+  }
+}
+
+const learningMap = new Map();
+for (const r of Array.isArray(upsertedLearning) ? upsertedLearning : []) {
+  const k = `${String(r?.item_type || "")}::${String(r?.import_key || "")}`;
+  if (r?.id) learningMap.set(k, r.id);
+}
+
+    // 2) write snapshots + links（逐筆，確保 map miss 直接 fail）
+    // ✅ 向後相容（開發環境常見）：user_words / user_word_category_links 欄位可能未同步
+    // - 若遇到「column does not exist」：改用最小欄位 retry
+    // - 其餘錯誤：維持原行為（errors + 500）
+    const isMissingColumnErr = (err, col) => {
+      const msg = String(err?.message || err || "");
+      const hit =
+        msg.includes("does not exist") ||
+        msg.includes("schema cache") ||
+        msg.includes("Could not find the") ||
+        msg.includes("Could not find") ||
+        msg.includes("unknown column");
+      if (!hit) return false;
+      if (!col) return true;
+      return msg.includes(col) || msg.includes("'" + col + "'") || msg.includes('"' + col + '"');
+    };
+
+    const upsertUserWordSnapshot = async ({ headword, canonical_pos }) => {
+      // 優先用完整欄位（新 schema）
+      const fullRow = {
+        user_id: userId,
         headword,
-        canonicalPos,
-        senseIndex: 0,
-        headwordGloss: null,
-        headwordGlossLang: null,
-        entryId: null,
-        familiarity: null,
-        isHidden: null,
-        isStatusUpdateMode: false,
-      });
-
-      if (typeof rowId === "number") userWordIds.push(rowId);
-    }
-
-    const uniqUserWordIds = Array.from(new Set(userWordIds)).filter((x) => typeof x === "number");
-
-    if (!uniqUserWordIds.length) {
-      // 理論上不會到這，但保護性回傳
-      return res.json({ inserted: 0, skippedDuplicates: normalizedItems.length });
-    }
-
-    // ✅ 2) 先查詢既有 links，才能精準回報 skippedDuplicates（upsert 本身難以分辨 insert vs update）
-    const { data: existLinks, error: existErr } = await supabaseAdmin
-      .from("user_word_category_links")
-      .select("user_word_id")
-      .eq("user_id", userId)
-      .eq("category_id", targetCategoryId)
-      .in("user_word_id", uniqUserWordIds);
-
-    if (existErr) throw existErr;
-
-    const existedSet = new Set(
-      (Array.isArray(existLinks) ? existLinks : []).map((r) => r.user_word_id).filter(Boolean)
-    );
-
-    // ✅ 3) 寫入 links（帶 src/memo 若 DB 有欄位；沒有就自動降級不寫）
-    const src = meta && typeof meta.source === "string" ? meta.source : "llm_import";
-    const memoParts = [];
-    if (meta && typeof meta.level === "string" && meta.level.trim()) memoParts.push(`level=${meta.level.trim()}`);
-    if (meta && typeof meta.scenario === "string" && meta.scenario.trim()) memoParts.push(`scenario=${meta.scenario.trim()}`);
-    const memo = memoParts.length ? memoParts.join(" | ") : null;
-
-    // helper：嘗試寫入 src/memo（若 DB 沒欄位，fallback 到既有 upsertUserWordCategoryLink）
-    const tryUpsertLinkWithMeta = async ({ userWordId }) => {
+        canonical_pos,
+        sense_index: 0,
+        headword_gloss: null,
+        headword_gloss_lang: null,
+      };
       try {
-        const payload = {
-          user_id: userId,
-          category_id: targetCategoryId,
-          user_word_id: userWordId,
-          // ✅ 這兩欄位「可能不存在」：存在就寫入，缺欄就 fallback
-          src: src,
-          memo: memo,
-        };
-
-        const { error } = await supabaseAdmin.from("user_word_category_links").upsert(payload, {
-          onConflict: "user_id,category_id,user_word_id",
-        });
-
-        if (error) throw error;
-        return { ok: true };
-      } catch (err) {
-        // fallback：保持既有最小寫入行為（避免 schema 不一致導致整個 commit 失敗）
-        return await upsertUserWordCategoryLink({
-          supabaseAdmin,
-          userId,
-          categoryId: targetCategoryId,
-          userWordId,
-        });
+        const { data: upWord, error: upWordErr } = await supabaseAdmin
+          .from("user_words")
+          .upsert(fullRow, { onConflict: "user_id,headword,canonical_pos,sense_index" })
+          .select("id")
+          .maybeSingle();
+        if (upWordErr) throw upWordErr;
+        return { id: upWord?.id || null, used: "full" };
+      } catch (e) {
+        // 舊 schema：可能沒有 headword_gloss / headword_gloss_lang
+        if (isMissingColumnErr(e, "headword_gloss") || isMissingColumnErr(e, "headword_gloss_lang")) {
+          const slimRow = {
+            user_id: userId,
+            headword,
+            canonical_pos,
+            sense_index: 0,
+          };
+          const { data: upWord2, error: upWordErr2 } = await supabaseAdmin
+            .from("user_words")
+            .upsert(slimRow, { onConflict: "user_id,headword,canonical_pos,sense_index" })
+            .select("id")
+            .maybeSingle();
+          if (upWordErr2) throw upWordErr2;
+          return { id: upWord2?.id || null, used: "slim" };
+        }
+        throw e;
       }
     };
 
+    const upsertCategoryLink = async ({ user_word_id, learning_item_id }) => {
+      // 新 schema：src + memo + learning_item_id
+      const fullLink = {
+        user_id: userId,
+        category_id: targetCategoryId,
+        user_word_id,
+        src: "ai_recommend",
+        ...(legacyMode ? {} : { learning_item_id }),
+        memo: meta ? JSON.stringify({ ...meta, legacy_source: meta?.source || null }) : null,
+      };
+      try {
+        const { error: e1 } = await supabaseAdmin
+          .from("user_word_category_links")
+          .upsert(fullLink, { onConflict: "user_id,category_id,user_word_id" });
+        if (e1) throw e1;
+        return { ok: true, used: "full" };
+      } catch (e) {
+        // 舊 schema：可能沒有 src / memo / learning_item_id
+        if (isMissingColumnErr(e, "learning_item_id") || isMissingColumnErr(e, "src") || isMissingColumnErr(e, "memo")) {
+          legacyMode = true; // ⚠️ 只要 links 欄位缺，就必須降級
+          const slimLink = {
+            user_id: userId,
+            category_id: targetCategoryId,
+            user_word_id,
+          };
+          const { error: e2 } = await supabaseAdmin
+            .from("user_word_category_links")
+            .upsert(slimLink, { onConflict: "user_id,category_id,user_word_id" });
+          if (e2) throw e2;
+          return { ok: true, used: "slim" };
+        }
+        throw e;
+      }
+    };
     let inserted = 0;
     let skippedDuplicates = 0;
+    const errors = [];
 
-    for (const userWordId of uniqUserWordIds) {
-      if (existedSet.has(userWordId)) {
-        skippedDuplicates += 1;
-        continue;
-      }
-      const r = await tryUpsertLinkWithMeta({ userWordId });
-      if (r?.ok) inserted += 1;
-      else skippedDuplicates += 1;
-    }
+    for (const it of normalizedItems) {
+      const key = `${String(it.itemType)}::${String(it.importKey)}`;
+      const learningItemId = learningMap.get(key);
+if (!learningItemId && !legacyMode) {
+  const errPayload = {
+    user_id: userId,
+    category_id: targetCategoryId,
+    item_type: it.itemType,
+    import_key: it.importKey,
+  };
+  console.error("[libraryRoute][importCommit] learning_item_id map miss", errPayload);
+  errors.push({ code: "LEARNING_ITEM_ID_MISSING", ...errPayload });
+  continue;
+}
 
-    /**
-     * ✅ （可選）審計表：user_learning_items
-     * - 你要求 UI 以 user_word_category_links 為準，因此這裡預設不寫
-     * - 若你想保留 import log，可在環境變數開啟：IMPORT_WRITE_AUDIT_TABLE=1
-     */
-    const __shouldWriteAudit = String(process.env.IMPORT_WRITE_AUDIT_TABLE || "").trim() === "1";
-    if (__shouldWriteAudit) {
+      // 2.1 upsert user_words snapshot
+      const pos = it.itemType === "grammar" ? "Grammatik" : it.itemType === "phrase" ? "Phrase" : "Unbekannt";
+      let userWordId = null;
       try {
-        const auditRows = normalizedItems.map((it) => ({
+        const r = await upsertUserWordSnapshot({ headword: it.importKey, canonical_pos: pos });
+        userWordId = r?.id || null;
+      } catch (e) {
+        errors.push({
+          code: "USER_WORD_UPSERT_FAILED",
           user_id: userId,
           category_id: targetCategoryId,
           item_type: it.itemType,
           import_key: it.importKey,
-          meta: meta,
-        }));
-        await supabaseAdmin.from("user_learning_items").upsert(auditRows, {
-          onConflict: "user_id,category_id,item_type,import_key",
-          ignoreDuplicates: true,
+          message: String(e?.message || e),
         });
-      } catch (e) {
-        // ✅ 審計寫入失敗不影響主流程（避免 DB 沒有此表/constraint 直接炸）
-        if (shouldDebugPayload()) {
-          console.log("[libraryRoute][importCommit] audit table write skipped:", String(e?.message || e));
-        }
+        continue;
       }
+      if (!userWordId) {
+        errors.push({
+          code: "USER_WORD_ID_MISSING",
+          user_id: userId,
+          category_id: targetCategoryId,
+          item_type: it.itemType,
+          import_key: it.importKey,
+        });
+        continue;
+      }
+
+      // 2.2 upsert links（新 schema: src/memo/learning_item_id；舊 schema: 僅 user_id/category_id/user_word_id）
+      try {
+        await upsertCategoryLink({ user_word_id: userWordId, learning_item_id: learningItemId });
+      } catch (e) {
+        errors.push({
+          code: "LINK_UPSERT_FAILED",
+          user_id: userId,
+          category_id: targetCategoryId,
+          item_type: it.itemType,
+          import_key: it.importKey,
+          ...(legacyMode ? {} : { learning_item_id: learningItemId }),
+          message: String(e?.message || e),
+        });
+        continue;
+      }
+
+      inserted += 1;
     }
 
-    return res.json({ inserted, skippedDuplicates });
+    // 3) 防呆：任何一筆失敗就直接 fail（避免 learning_item_id=null 汙染模型）
+    if (errors.length) {
+      return res.status(500).json({
+        ok: false,
+        message: "import commit failed",
+        errors,
+      });
+    }
+
+    skippedDuplicates = Math.max(0, normalizedItems.length - inserted);
+    return res.json({ ok: true, inserted, skippedDuplicates });
   } catch (e) {
     markEndpointError("importCommit", e);
     return next(e);
@@ -2011,19 +2367,31 @@ router.get("/", async (req, res, next) => {
 
       // ✅ 權限固定策略：回 200 + items:[]（前端最穩）
       // - 即使使用者拿到別人的 category_id，也因為 links 查詢鎖 user_id=userId 而回空
-      const { data: links, error: linkErr } = await supabaseAdmin
-        .from("user_word_category_links")
-        .select("user_word_id")
-        .eq("user_id", userId)
-        .eq("category_id", categoryId);
-
-      if (linkErr) throw linkErr;
+      // ✅ 2026-02-12：同時抓 src / learning_item_id（若欄位未 migration，會 fallback）
+      let links = [];
+      try {
+        const { data: dL1, error: eL1 } = await supabaseAdmin
+          .from("user_word_category_links")
+          .select("user_word_id, src, learning_item_id, created_at")
+          .eq("user_id", userId)
+          .eq("category_id", categoryId)
+          .order("created_at", { ascending: false });
+        if (eL1) throw eL1;
+        links = Array.isArray(dL1) ? dL1 : [];
+      } catch (e) {
+        const { data: dL0, error: eL0 } = await supabaseAdmin
+          .from("user_word_category_links")
+          .select("user_word_id, src, created_at")
+          .eq("user_id", userId)
+          .eq("category_id", categoryId)
+          .order("created_at", { ascending: false });
+        if (eL0) throw eL0;
+        links = Array.isArray(dL0) ? dL0 : [];
+      }
 
       const userWordIds = Array.isArray(links) ? links.map((r) => r.user_word_id).filter(Boolean) : [];
-      if (!userWordIds.length) {
-        // ✅ 無任何關聯：直接回空（維持 response schema：items/nextCursor/limit）
-        return res.json({ items: [], nextCursor: null, limit });
-      }
+      let payload = { items: [], nextCursor: null, limit };
+      if (userWordIds.length) {
 
       // ✅ 仍維持既有「狀態欄位可選回傳」策略
       const includeStatusCols = shouldSelectSenseStatus();
@@ -2039,7 +2407,7 @@ router.get("/", async (req, res, next) => {
 
       if (eCat) throw eCat;
 
-      let payload = toResponsePayload({ rows: dCat || [], limit });
+      payload = toResponsePayload({ rows: dCat || [], limit });
 
       // ✅ 既有行為：以 dict_senses 覆蓋釋義（DB 權威）
       if (shouldUseDictSenses()) {
@@ -2051,41 +2419,76 @@ router.get("/", async (req, res, next) => {
         payload = { ...payload, items: patchedItems };
       }
 
-      // ✅ Task 4：把「尚未 analyze 的匯入 items」也一併帶回（最小欄位即可顯示 importKey）
-      // - 不影響既有 DB item 結構：只是在 payload.items 前面插入 pending items
+      // ✅ 2026-02-12：依資料模型補上 src / learning_item_id / hasProgress（禁止 headword join）
       try {
-        const { data: pend, error: ePend } = await supabaseAdmin
-          .from("user_learning_items")
-          .select("id, item_type, import_key, created_at")
-          .eq("user_id", userId)
-          .eq("category_id", categoryId)
-          .order("created_at", { ascending: false })
-          .limit(50);
+        const learningItemIds = (links || []).map((r) => r?.learning_item_id).filter((x) => x !== null && x !== undefined);
+        const progressMap = await safeGetLearningProgressMapByLearningItemIds({
+          supabaseAdmin,
+          userId,
+          learningItemIds,
+        });
 
-        if (ePend) throw ePend;
-        const pendingItems = Array.isArray(pend)
-          ? pend.map((x) => ({
-              id: `pending_${x.id}`,
-              headword: x.import_key,
-              canonical_pos: x.item_type || null,
-              created_at: x.created_at,
-              _isPendingImport: true,
-            }))
-          : [];
-
-        if (pendingItems.length) {
-          const seen = new Set((payload.items || []).map((it) => String(it?.headword || "").toLowerCase()).filter(Boolean));
-          const uniqPending = pendingItems.filter((it) => {
-            const k = String(it?.headword || "").toLowerCase();
-            if (!k) return false;
-            if (seen.has(k)) return false;
-            seen.add(k);
-            return true;
-          });
-          payload = { ...payload, items: [...uniqPending, ...(payload.items || [])] };
-        }
+        const patched = attachSrcAndProgressToLibraryItems({
+          items: payload.items,
+          links,
+          progressMap,
+        });
+        payload = { ...payload, items: patched };
       } catch (e) {
-        console.warn("[library][category] pending items merge failed:", e?.message || e);
+        if (shouldDebugPayload()) {
+          console.log(
+            "[libraryRoute][getPaged][category] attach src/progress failed",
+            JSON.stringify({ err: String(e?.message || e) })
+          );
+        }
+      }
+
+      }
+
+      // ✅ 2026-02-23：預設不再合併 pending import items（AI 匯入必須寫 links+learning_item_id）
+      // - 若你仍需 legacy 過渡/偵錯，可設 LIBRARY_INCLUDE_PENDING_IMPORTS=1
+      if (shouldIncludePendingImportItems()) {
+        try {
+          const { data: pend, error: ePend } = await supabaseAdmin
+            .from("user_learning_items")
+            .select("id, item_type, import_key, created_at")
+            .eq("user_id", userId)
+            .eq("category_id", categoryId)
+            .order("created_at", { ascending: false })
+            .limit(50);
+
+          if (ePend) throw ePend;
+          const pendingItems = Array.isArray(pend)
+            ? pend.map((x) => ({
+                id: `pending_${x.id}`,
+                headword: x.import_key,
+                canonical_pos: x.item_type || null,
+                created_at: x.created_at,
+                src: null,
+                learning_item_id: x.id,
+                hasProgress: false,
+                _isPendingImport: true,
+              }))
+            : [];
+
+          if (pendingItems.length) {
+            const seen = new Set(
+              (payload.items || [])
+                .map((it) => String(it?.learning_item_id || it?.headword || "").toLowerCase())
+                .filter(Boolean)
+            );
+            const uniqPending = pendingItems.filter((it) => {
+              const k = String(it?.learning_item_id || it?.headword || "").toLowerCase();
+              if (!k) return false;
+              if (seen.has(k)) return false;
+              seen.add(k);
+              return true;
+            });
+            payload = { ...payload, items: [...uniqPending, ...(payload.items || [])] };
+          }
+        } catch (e) {
+          console.warn("[library][category] pending items merge failed:", e?.message || e);
+        }
       }
 
       return res.json(payload);
@@ -2152,6 +2555,28 @@ router.get("/", async (req, res, next) => {
       payload = { ...payload, items: patchedItems };
     }
 
+    // ✅ 2026-02-12：非 category 篩選也補上 src / learning_item_id / hasProgress（若有 links）
+    try {
+      const userWordIds = (payload.items || []).map((it) => it?.user_word_id).filter(Boolean);
+      const links = await safeGetCategoryLinksByUserWordIds({ supabaseAdmin, userId, userWordIds, categoryId: null });
+      const learningItemIds = (links || []).map((r) => r?.learning_item_id).filter((x) => x !== null && x !== undefined);
+      const progressMap = await safeGetLearningProgressMapByLearningItemIds({ supabaseAdmin, userId, learningItemIds });
+
+      const patched = attachSrcAndProgressToLibraryItems({
+        items: payload.items,
+        links,
+        progressMap,
+      });
+      payload = { ...payload, items: patched };
+    } catch (e) {
+      if (shouldDebugPayload()) {
+        console.log(
+          "[libraryRoute][getPaged] attach src/progress failed",
+          JSON.stringify({ err: String(e?.message || e) })
+        );
+      }
+    }
+
     return res.json(payload);
   } catch (err) {
     markEndpointError(EP, err);
@@ -2209,14 +2634,42 @@ router.post("/", async (req, res, next) => {
       throw e;
     }
 
+    // ============================================================
+    // ✅ Root fix：收藏（star）寫入時確保 gloss/sense 快照完整
+    // - 若本次是「義項狀態更新」請求（hasSenseStatusUpdate=true），不補 gloss（避免覆蓋快照）
+    // - 若是一般收藏，但 payload 沒帶 gloss：嘗試用 dict_senses 補齊
+    // ============================================================
+    let resolvedSenseIndex = typeof v.senseIndex === "number" ? v.senseIndex : 0;
+    let resolvedGloss = v.headwordGloss;
+    let resolvedGlossLang = v.headwordGlossLang;
+
+    if (v.hasSenseStatusUpdate !== true && !resolvedGloss && typeof entryId === "string" && entryId) {
+      const preferredLangs = buildGlossLangPriority(
+        v.headwordGlossLang ?? req.body?.headwordGlossLang ?? req.body?.glossLang ?? req.body?.uiLang ?? null
+      );
+
+      const snap = await resolveDictSenseSnapshot({
+        supabaseAdmin,
+        entryId,
+        senseIndex: resolvedSenseIndex,
+        preferredLangs,
+      });
+
+      if (snap && snap.gloss) {
+        resolvedGloss = snap.gloss;
+        resolvedGlossLang = snap.glossLang || resolvedGlossLang || null;
+        if (typeof snap.senseIndex === "number") resolvedSenseIndex = snap.senseIndex;
+      }
+    }
+
     const userWordId = await upsertUserWord({
       supabaseAdmin,
       userId,
       headword: v.headword,
       canonicalPos: v.canonicalPos,
-      senseIndex: v.senseIndex,
-      headwordGloss: v.headwordGloss,
-      headwordGlossLang: v.headwordGlossLang,
+      senseIndex: resolvedSenseIndex,
+      headwordGloss: resolvedGloss,
+      headwordGlossLang: resolvedGlossLang,
 
       // ✅ 新增（2025-12-30）：可選狀態欄位（義項顆粒度）
       // - 收藏（star）當下：通常不帶 familiarity / isHidden → 不寫入預設值

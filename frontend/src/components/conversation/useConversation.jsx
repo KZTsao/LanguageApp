@@ -26,7 +26,7 @@
  *   - 補上 history（最多前三句）送往後端，避免回覆脫離例句
  */
 
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { apiFetch } from "../../utils/apiClient";
 
 // ==================================================
@@ -46,6 +46,15 @@ const __convErr = (...args) => {
   // eslint-disable-next-line no-console
   console.error(...args);
 };
+
+// ==================================================
+// Real conversation policy
+// - Anonymous mode MUST be real conversation (no sample/demo fallback)
+// - Allow fake conversation ONLY when explicitly enabled for local dev
+//   via: VITE_ENABLE_FAKE_CONVERSATION=1
+// ==================================================
+const __ENABLE_FAKE_CONVERSATION__ =
+  typeof import.meta !== "undefined" && import.meta?.env?.VITE_ENABLE_FAKE_CONVERSATION === "1";
 
 const MOSAIC_LINE = "----------------------------";
 
@@ -95,6 +104,56 @@ const buildFakeConversation = (sentence) => {
  */
 const normalizeTurns = (rawTurns) => {
   if (!Array.isArray(rawTurns)) return [];
+
+  // Translation field is not stable across backends/LLMs.
+  // Support a wide set of common keys while staying backward compatible.
+  function pickTranslation(item) {
+    try {
+      if (!item || typeof item !== "object") return "";
+
+      const candidates = [
+        item.translation,
+        item.trans,
+        item.native,
+        item.nativeText,
+        item.translationText,
+        item.zh,
+        item["zh-TW"],
+        item.zhTW,
+        item.zh_tw,
+        item["zh-CN"],
+        item.zhCN,
+        item.zh_cn,
+        item.tw,
+        item.cn,
+        item.en,
+        item.english,
+      ];
+
+      for (let i = 0; i < candidates.length; i += 1) {
+        const v = candidates[i];
+        if (typeof v === "string" && v.trim()) return v.trim();
+      }
+
+      // Optional structured format: { translations: { 'zh-TW': '...', en: '...' } }
+      const translations = item.translations && typeof item.translations === "object" ? item.translations : null;
+      if (translations) {
+        const t2 =
+          (typeof translations["zh-TW"] === "string" && translations["zh-TW"].trim()) ||
+          (typeof translations.zhTW === "string" && translations.zhTW.trim()) ||
+          (typeof translations.zh_tw === "string" && translations.zh_tw.trim()) ||
+          (typeof translations["zh-CN"] === "string" && translations["zh-CN"].trim()) ||
+          (typeof translations.zhCN === "string" && translations.zhCN.trim()) ||
+          (typeof translations.zh_cn === "string" && translations.zh_cn.trim()) ||
+          (typeof translations.en === "string" && translations.en.trim()) ||
+          (typeof translations.english === "string" && translations.english.trim());
+        if (typeof t2 === "string" && t2.trim()) return t2.trim();
+      }
+    } catch {
+      // ignore
+    }
+    return "";
+  }
   return rawTurns
     .map((item) => {
       if (typeof item === "string") {
@@ -109,12 +168,7 @@ const normalizeTurns = (rawTurns) => {
             : typeof item.german === "string"
             ? item.german.trim()
             : "";
-        const translation =
-          typeof item.translation === "string"
-            ? item.translation.trim()
-            : typeof item.trans === "string"
-            ? item.trans.trim()
-            : "";
+        const translation = pickTranslation(item);
         if (!de) return null;
         return { de, translation };
       }
@@ -162,7 +216,19 @@ function ensureLeadSentenceTurn(turns, sentence, translation) {
   };
 }
 
-export default function useConversation({ mainSentence, mainTranslation, explainLang }) {
+export default function useConversation({
+  mainSentence,
+  mainTranslation,
+  explainLang,
+  /**
+   * storageKey
+   * --------------------------------------------------
+   * 用途：讓「每個字卡」各自保留自己的 conversation（避免切換字卡後看到上一張字卡的對話）
+   * - key 建議用 headword / wordId / lemma 等穩定識別
+   * - 若未提供，fallback 使用 mainSentence
+   */
+  storageKey,
+}) {
   const [conversation, setConversation] = useState(null);
   const [conversationLoading, setConversationLoading] = useState(false);
   const [conversationError, setConversationError] = useState("");
@@ -174,6 +240,63 @@ export default function useConversation({ mainSentence, mainTranslation, explain
    */
   const historyRef = useRef([]);
   const historySentenceKeyRef = useRef("");
+
+  // ==================================================
+  // Per-card conversation store
+  // --------------------------------------------------
+  // 問題：切換字卡後再打開對話，會看到上一張字卡的對話
+  // 解法：用 storageKey 將 conversation / history 分卡保存
+  // ==================================================
+  const __storeRef = useRef({});
+  const __activeKeyRef = useRef("");
+
+  const __resolvedKey = (() => {
+    const k = typeof storageKey === "string" ? storageKey.trim() : "";
+    if (k) return k;
+    const s = typeof mainSentence === "string" ? mainSentence.trim() : "";
+    return s || "__default__";
+  })();
+
+  // key 切換時：先保存舊 key 的狀態，再載入新 key 的狀態
+  useEffect(() => {
+    const nextKey = __resolvedKey;
+    const prevKey = __activeKeyRef.current;
+    if (prevKey === nextKey) return;
+
+    // save prev
+    if (prevKey) {
+      __storeRef.current[prevKey] = {
+        conversation,
+        conversationError,
+        history: Array.isArray(historyRef.current) ? historyRef.current : [],
+        historySentenceKey: historySentenceKeyRef.current || "",
+      };
+    }
+
+    // load next
+    const snapshot = __storeRef.current[nextKey];
+    historyRef.current = Array.isArray(snapshot?.history) ? snapshot.history : [];
+    historySentenceKeyRef.current = snapshot?.historySentenceKey || "";
+    setConversation(snapshot?.conversation ?? null);
+    setConversationError(snapshot?.conversationError || "");
+    setConversationLoading(false);
+
+    __activeKeyRef.current = nextKey;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [__resolvedKey]);
+
+  // conversation 變更時：同步寫回 store（確保關閉 overlay / 翻頁也會被保存）
+  useEffect(() => {
+    const key = __activeKeyRef.current || __resolvedKey;
+    if (!key) return;
+    __storeRef.current[key] = {
+      conversation,
+      conversationError,
+      history: Array.isArray(historyRef.current) ? historyRef.current : [],
+      historySentenceKey: historySentenceKeyRef.current || "",
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversation, conversationError]);
 
   function normalizeHistoryItem(item) {
     if (!item || typeof item !== "object") return null;
@@ -232,7 +355,7 @@ export default function useConversation({ mainSentence, mainTranslation, explain
    * - ✅ 送出 history（最多前三句）
    */
   const fetchConversationFromBackend = useCallback(async () => {
-    if (!mainSentence) return buildFakeConversation(mainSentence);
+    if (!mainSentence) return [];
 
     // ✅ 例句變更時：清空既有 history（避免帶到別的例句）
     const sentenceKey =
@@ -274,12 +397,19 @@ export default function useConversation({ mainSentence, mainTranslation, explain
       });
 
       if (!res.ok) {
-        // ✅ 401：不要 fallback 造假（避免你以為後端/LLM 有進）
-        if (res.status === 401) {
-          setConversationError("401 Unauthorized");
-          return null;
+        // ✅ Anonymous must be real conversation: do NOT fallback to sample.
+        // - 401: token expired / auth mismatch
+        // - 429: anon daily limit reached
+        if (res.status === 429) {
+          setConversationError("匿名對話次數已達上限。");
+          return __ENABLE_FAKE_CONVERSATION__ ? buildFakeConversation(mainSentence) : [];
         }
-        throw new Error(`HTTP ${res.status}`);
+        if (res.status === 401) {
+          setConversationError("授權失效，請重新登入或重新整理。");
+          return __ENABLE_FAKE_CONVERSATION__ ? buildFakeConversation(mainSentence) : [];
+        }
+        setConversationError(`對話請求失敗（HTTP ${res.status}）。`);
+        return __ENABLE_FAKE_CONVERSATION__ ? buildFakeConversation(mainSentence) : [];
       }
 
       const data = await res.json();
@@ -321,10 +451,14 @@ export default function useConversation({ mainSentence, mainTranslation, explain
             ? "data(array)"
             : "none",
           normalizedLen: 0,
-          usedFallback: true,
+          usedFallback: __ENABLE_FAKE_CONVERSATION__,
         });
-        // 非 401 的情況下才 fallback（避免 UI 全掛）
-        turns = buildFakeConversation(mainSentence);
+        if (__ENABLE_FAKE_CONVERSATION__) {
+          turns = buildFakeConversation(mainSentence);
+        } else {
+          setConversationError("對話回傳為空。");
+          turns = [];
+        }
       } else {
         __convLog("[***CONV:TURN]", __convTs(), "normalize", {
           rawSource: Array.isArray(data?.turns)
@@ -348,13 +482,34 @@ export default function useConversation({ mainSentence, mainTranslation, explain
           .slice(0, 240),
       });
 
+      
+      // ✅ Ensure the displayed conversation starts with the seed sentence (mainSentence)
+      // - Reason: backend may generate turns without repeating the seed.
+      // - UX: user expects the conversation to "extend from" the example sentence.
+      const __seedSentence =
+        typeof mainSentence === "string" ? mainSentence.trim() : "";
+      const __seedTranslation =
+        typeof mainTranslation === "string" ? mainTranslation.trim() : "";
+      if (__seedSentence && Array.isArray(turns) && turns.length > 0) {
+        const __firstDe =
+          turns[0] && typeof turns[0].de === "string" ? turns[0].de.trim() : "";
+        if (!__firstDe || __firstDe !== __seedSentence) {
+          turns = [
+            { de: __seedSentence, translation: __seedTranslation || "" },
+            ...turns,
+          ];
+        }
+      }
+
       // ✅ 成功後：更新本地 history（最多保留 6 筆，避免無限增長）
       try {
         const nextHistory = [];
         if (sentenceKey) nextHistory.push({ role: "user", content: sentenceKey });
         for (const t of turns) {
           if (t && typeof t.de === "string" && t.de.trim()) {
-            nextHistory.push({ role: "assistant", content: t.de.trim() });
+            const __de = t.de.trim();
+            if (sentenceKey && __de === sentenceKey) continue; // avoid duplicating seed
+            nextHistory.push({ role: "assistant", content: __de });
           }
         }
         historyRef.current = nextHistory.slice(-6);
@@ -367,8 +522,8 @@ export default function useConversation({ mainSentence, mainTranslation, explain
       __convErr("[***CONV:API]", __convTs(), "error", err);
       // eslint-disable-next-line no-console
       console.error("[conversation] 後端產生錯誤", err);
-      setConversationError("對話產生失敗，改用範例對話。");
-      return buildFakeConversation(mainSentence);
+      setConversationError("對話產生失敗。");
+      return __ENABLE_FAKE_CONVERSATION__ ? buildFakeConversation(mainSentence) : [];
     } finally {
       setConversationLoading(false);
     }
@@ -437,19 +592,14 @@ export default function useConversation({ mainSentence, mainTranslation, explain
 
     const turns = await fetchConversationFromBackend();
 
-    // ✅ 401 / Unauthorized：fetchConversationFromBackend 會回 null
-    if (!turns) {
-      console.log("[20260202 record][useConversation][setConversation-call]", { ts: Date.now(), stack: (new Error()).stack });
-      console.log("[20260203 record][useConversation][setConversation-call]", { ts: Date.now(), stack: (new Error()).stack });
-      setConversation(null);
-      return;
-    }
+    // ✅ Safety：維持 UI 不掛，但不造假對話（除非 dev 明確開啟 fake）
+    const __safeTurns = Array.isArray(turns) ? turns : [];
 
     __convLog("[***CONV:HOOK]", __convTs(), "fetched", {
-      turnsCount: Array.isArray(turns) ? turns.length : 0,
+      turnsCount: Array.isArray(__safeTurns) ? __safeTurns.length : 0,
     });
 
-    const ensured = ensureLeadSentenceTurn(turns, mainSentence, mainTranslation);
+    const ensured = ensureLeadSentenceTurn(__safeTurns, mainSentence, mainTranslation);
     console.log("[20260202 record][useConversation][setConversation-call]", { ts: Date.now(), stack: (new Error()).stack });
     console.log("[20260203 record][useConversation][setConversation-call]", { ts: Date.now(), stack: (new Error()).stack });
     setConversation({
@@ -503,6 +653,11 @@ export default function useConversation({ mainSentence, mainTranslation, explain
     try {
       historyRef.current = [];
       historySentenceKeyRef.current = "";
+      // 同步清掉當前卡片的 snapshot，避免下次又被載回
+      const k = __activeKeyRef.current || __resolvedKey;
+      if (k && __storeRef.current && __storeRef.current[k]) {
+        delete __storeRef.current[k];
+      }
     } catch (e) {
       // ignore
     }
@@ -511,7 +666,7 @@ export default function useConversation({ mainSentence, mainTranslation, explain
     setConversation(null);
     setConversationError("");
     setConversationLoading(false);
-  }, []);
+  }, [__resolvedKey]);
 
   const isOpen =
     conversation && typeof conversation.isOpen === "boolean"

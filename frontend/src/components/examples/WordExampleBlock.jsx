@@ -31,7 +31,7 @@
  */
 
 import React, { useCallback, useState, useMemo, useEffect, useLayoutEffect, useRef } from "react";
-import { callTTS } from "../../utils/ttsClient";
+import { playTTS } from "../../utils/ttsClient";
 
 // ✅ i18n：共用文字統一由 uiText 處理（逐步補齊 key；未補齊則 fallback 到既有 hardcode，避免功能中斷）
 import uiText from "../../uiText";
@@ -67,6 +67,9 @@ export default function WordExampleBlock({
   // ✅ 2026-01-12 Task 1：名詞格/數選取後，往上回拋用（只影響 header 顯示）
   // - WordPosInfo.jsx 會呼叫此 callback（若有提供）
   onEntrySurfaceChange,
+
+  // ✅ 新增：Entry 格位 metadata（用於例句生成強制格/性別/冠詞類型）
+  entryMetaOverride,
 
 
   // 以下保留舊 props，不使用，但不能刪（避免上層報錯）
@@ -741,6 +744,30 @@ export default function WordExampleBlock({
     // - 注意：只影響 /api/dictionary/examples 的 word 欄位；baseForm 仍保留原本 d.baseForm
     exampleHeadword: headwordForExampleTitle,
     headwordOverride: headwordForExampleTitle,
+
+    // ✅ Pronomen meaning hint (ihr/Sie) for example generation
+    headwordHintKeyOverride:
+      entryMetaOverride && typeof entryMetaOverride.headwordHintKey === "string"
+        ? entryMetaOverride.headwordHintKey
+        : undefined,
+
+    // ✅ Artikel 格位控制（不靠 LLM 判斷）
+    articleCaseOverride:
+      entryMetaOverride && typeof entryMetaOverride.artikelCase === "string"
+        ? entryMetaOverride.artikelCase
+        : undefined,
+    articleGenderOverride:
+      entryMetaOverride && typeof entryMetaOverride.artikelGender === "string"
+        ? entryMetaOverride.artikelGender
+        : undefined,
+    articleTypeOverride:
+      entryMetaOverride && typeof entryMetaOverride.artikelType === "string"
+        ? entryMetaOverride.artikelType
+        : undefined,
+    articleNumberOverride:
+      entryMetaOverride && typeof entryMetaOverride.artikelNumber === "string"
+        ? entryMetaOverride.artikelNumber
+        : undefined,
   });
 
   const safeUsedRefs = Array.isArray(usedRefs) ? usedRefs : [];
@@ -1176,11 +1203,9 @@ export default function WordExampleBlock({
   async function handleSpeak(sentence) {
     try {
       if (!sentence) return;
-      const audioBase64 = await callTTS(sentence, "de-DE");
-      const audio = new Audio(audioBase64);
-      audio.play();
-    } catch (err) {
-      console.error("[TTS_PLAY_FAILED]", err);
+      await playTTS(sentence, "de-DE");
+    } catch (e) {
+      console.error("[WordExampleBlock] playTTS failed:", e);
     }
   }
 
@@ -2289,6 +2314,7 @@ setRefsByWordKey((prev) => {
         refreshTooltip={tRefreshTooltip}
         onWordClick={onWordClick}
         explainLang={explainLang}
+        uiLang={uiLang}
         conversationTitle={conversationTitleLabel}
         conversationToggleTooltip={conversationToggleTooltipLabel}
         conversationTurnLabel={conversationTurnLabel}
@@ -2343,6 +2369,26 @@ setRefsByWordKey((prev) => {
 
 
         const __arrow = posInfoCollapsed ? "▶" : "▼";
+
+        // [代名詞] console trace (no logic change)
+        try {
+          if ((d?.partOfSpeech || "").trim() === "Pronomen") {
+            // eslint-disable-next-line no-console
+            console.debug("[代名詞] WordExampleBlock: about to render WordPosInfo", {
+              word: d?.word,
+              baseForm: d?.baseForm,
+              resolvedBaseForm: d?.baseForm || d?.word,
+              partOfSpeech: d?.partOfSpeech,
+              gender: d?.gender,
+              type: d?.type,
+              uiLang,
+              posInfoCollapsed,
+              injectedPlural,
+              hasDictionaryObj: !!d,
+              dictionaryKeys: d && typeof d === "object" ? Object.keys(d).slice(0, 50) : null,
+            });
+          }
+        } catch (e) {}
 
         return (
           <div
@@ -2490,15 +2536,28 @@ setRefsByWordKey((prev) => {
             {!recsCollapsed && (
               <div style={{ padding: "0 12px 12px 12px", display: "flex", flexDirection: "column", gap: 10 }}>
                 {groups.map((g) => (
-                  <div key={g.key}>
-                    <div style={{ fontSize: 12, fontWeight: 700, opacity: 0.85, marginBottom: 6 }}>
-                      {g.label}
-                    </div>
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                      {g.items.map((it, idx) => (
-                        <Chip key={`${g.key}-${idx}`} text={String(it)} />
-                      ))}
-                    </div>
+                  <div
+                    key={g.key}
+                    style={{
+                      display: "flex",
+                      flexWrap: "wrap",
+                      alignItems: "center",
+                      gap: 8,
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontSize: 12,
+                        fontWeight: 700,
+                        opacity: 0.85,
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {g.label}：
+                    </span>
+                    {g.items.map((it, idx) => (
+                      <Chip key={`${g.key}-${idx}`} text={String(it)} />
+                    ))}
                   </div>
                 ))}
               </div>

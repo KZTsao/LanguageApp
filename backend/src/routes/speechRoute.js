@@ -68,7 +68,7 @@ const { SpeechClient } = require("@google-cloud/speech");
 const { logUsage } = require("../utils/usageLogger");
 
 
-const { commitAsrSecondsSafe } = require('../utils/usageIO');
+const { commitAsrSecondsSafe, commitAsrCountSafe } = require('../utils/usageIO');
 // 使用 memory storage（不落地、不保存檔案）
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -108,17 +108,21 @@ function normalizeWords(words) {
 }
 
 router.post("/asr", upload.single("audio"), async (req, res) => {
+  
+  console.log("[COUNT][speechRoute] /asr entry", { hasAuth: !!req.headers?.authorization, visitId: req.headers?.["x-visit-id"] });
+// ✅ Product requirement (current phase):
+  // - Anonymous users must be able to use ASR
+  // - Later we can enforce limits via usage/quota, but auth must not block now
   const authUser = req && req.authUser ? {
     id: req.authUser.id || "",
     email: req.authUser.email || "",
     source: "authMiddleware",
   } : null;
 
-  // 強制登入：理論上不會進到這裡；保險起見仍擋掉
-  if (!authUser || !authUser.id) {
-    console.warn("[speechRoute][asr][usage] req.authUser.id missing -> reject");
-    return res.status(401).json({ ok: false, error: "UNAUTHORIZED" });
-  }
+  const visitId =
+    (req.get && req.get("x-visit-id")) ||
+    (req.headers && (req.headers["x-visit-id"] || req.headers["X-Visit-Id"])) ||
+    "";
 
   const startedAt = Date.now();
 
@@ -199,29 +203,50 @@ router.post("/asr", upload.single("audio"), async (req, res) => {
         lang,
         mimeType,
         encoding: encoding || "",
+        ...(visitId ? { visitId } : {}),
       },
-      // userId/email/ip：若你之後有 auth middleware，可補上
       ip: req.ip || "",
-      userId: authUser.id,
-      email: authUser.email,
+      userId: authUser && authUser.id ? authUser.id : "",
+      email: authUser && authUser.email ? authUser.email : "",
     });
 
     
 
-    // ✅ 2026-01-25：ASR 秒數入帳（daily/monthly 主帳本）
-    // - 不影響主流程：任何錯誤只 warn
-    await commitAsrSecondsSafe({
-      userId: authUser.id,
-      email: authUser.email,
-      ip: req.ip || "",
-      endpoint: "/api/speech/asr",
-      path: req.originalUrl || req.path || "/api/speech/asr",
-      usedSeconds,
-      provider: "google",
-      model: "",
-      requestId: "",
-      source: authUser.source || "",
-    });
+    // ✅ ASR 用量入帳（seconds + count；daily/monthly 主帳本）
+    // - 僅在 ASR 成功回傳前執行
+    // - 不影響主流程：Safe 版本不 throw，任何錯誤只 warn
+    const usageKeyUserId = authUser && authUser.id ? authUser.id : "";
+    const usageKeyVisitId = visitId || "";
+    if (usageKeyUserId || usageKeyVisitId) {
+      commitAsrSecondsSafe({
+        userId: usageKeyUserId,
+        visitId: usageKeyVisitId,
+        email: authUser && authUser.email ? authUser.email : "",
+        ip: req.ip || "",
+        endpoint: "/api/speech/asr",
+        path: req.originalUrl || req.path || "/api/speech/asr",
+        usedSeconds,
+        provider: "google",
+        model: "",
+        requestId: "",
+        source: authUser && authUser.source ? authUser.source : "",
+      });
+
+      // ✅ 每次 ASR 成功 +1
+      commitAsrCountSafe({
+        userId: usageKeyUserId,
+        visitId: usageKeyVisitId,
+        email: authUser && authUser.email ? authUser.email : "",
+        ip: req.ip || "",
+        endpoint: "/api/speech/asr",
+        path: req.originalUrl || req.path || "/api/speech/asr",
+        inc: 1,
+        provider: "google",
+        model: "",
+        requestId: "",
+        source: authUser && authUser.source ? authUser.source : "",
+      });
+    }
 
     return res.json({
       ok: true,

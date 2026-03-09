@@ -5,6 +5,74 @@ const { tokenizeSentence } = require("../core/tokenizer");
 const { analyzeGrammar } = require("./analyzeGrammar");
 
 // =========================
+// usage-note sanitizer (avoid "correct/incorrect" judgement tone)
+// =========================
+function _isPunctuationOnly(s) {
+  return /^[\s\p{P}\p{S}]+$/u.test((s || "").toString());
+}
+function _isTokenLike(s) {
+  const t = (s || "").toString().trim();
+  if (!t) return true;
+  // single token (no spaces) and short => likely token/label, not explanation
+  if (!/\s/.test(t) && t.length <= 4) return true;
+  // "X: Y" token mapping style
+  if (/^\S+\s*:\s*\S+/.test(t)) return true;
+  return false;
+}
+function _simplifyBullet(s) {
+  let t = (s || "").toString().trim();
+  if (!t) return "";
+  // strip leading framing like "This sentence ..."
+  t = t.replace(/^\s*(This\s+sentence|The\s+sentence|In\s+this\s+sentence)\s*(is|uses|shows|has)?\s*/i, "");
+  t = t.replace(/^\s*(這個句子|此句|本句)\s*(是|使用|表示|包含)?\s*/u, "");
+  t = t.replace(/^[:\-–—]+\s*/, "");
+  return t.trim();
+}
+function _isJudgementLine(s) {
+  const t = (s || "").toString().trim();
+  if (!t) return false;
+  // English judgement / grading tone
+  if (/^\s*(Correct|Incorrect|Grammatically\s+correct|The\s+sentence\s+is\s+)/i.test(t)) return true;
+  if (/\b(word\s+order\s+is\s+correct|in\s+the\s+correct\s+form|grammatically\s+correct)\b/i.test(t)) return true;
+  // Chinese judgement tone
+  if (/^\s*(句子完全正確|句子語法正確|此句.*正確|語法正確|不正確)/u.test(t)) return true;
+  return false;
+}
+function _sanitizeUsageList(list) {
+  if (!Array.isArray(list)) return [];
+  const out = [];
+  for (const it of list) {
+    const raw =
+      typeof it === "string"
+        ? it
+        : typeof it?.text === "string"
+          ? it.text
+          : typeof it?.hint === "string"
+            ? it.hint
+            : typeof it?.message === "string"
+              ? it.message
+              : "";
+    let s = _simplifyBullet(raw);
+    if (!s) continue;
+    if (s === ":") continue;
+    if (_isPunctuationOnly(s)) continue;
+    if (_isJudgementLine(s)) continue;
+    // keep explanations; drop token-like fragments
+    if (_isTokenLike(s)) continue;
+    if (out.includes(s)) continue;
+    out.push(s);
+  }
+  return out;
+}
+function _sanitizeUsageText(s) {
+  const t = _simplifyBullet(s);
+  if (!t) return "";
+  if (_isJudgementLine(t)) return "";
+  if (_isPunctuationOnly(t)) return "";
+  return t;
+}
+
+// =========================
 // [normal] trace helper (dev)
 // =========================
 function __nlog(event, payload) {
@@ -34,6 +102,7 @@ const explainLang = options.explainLang || "zh-TW";
   const rawInput = typeof options.rawInput === "string" ? options.rawInput : text;
 
   const input = (text ?? "").toString().trim();
+  try { console.info("[classify][be][analyzeSentence] start", { input, rawInput, explainLang, requestId: options?.requestId || "" }); } catch {}
 
   // debug flags (default off)
   const debugEnabled =
@@ -131,10 +200,12 @@ const explainLang = options.explainLang || "zh-TW";
 
   try {
     // Keep original call signature, but allow analyzeGrammar to optionally accept options
+    const detail = options && typeof options === "object" && typeof options.detail === "string" ? options.detail : "basic";
     grammar = await analyzeGrammar(input, explainLang, {
       // optional hint; safe if analyzeGrammar ignores it
       intent: "sentence_decision",
       wantFallback: true,
+      detail,
     });
   } catch (e) {
     grammarFailed = true;
@@ -150,10 +221,12 @@ const explainLang = options.explainLang || "zh-TW";
     }
   }
 
+  try { console.info("[classify][be][analyzeSentence] analyzeGrammar:done", { isCorrect: !!grammar && grammar.isCorrect === true, errorsCount: Array.isArray(grammar?.errors) ? grammar.errors.length : 0, fallbackCandidate: grammar?.fallbackNormalizedQuery || grammar?.suggestedQuery || grammar?.recommendedQuery || "" }); } catch {}
   const isCorrect = !!grammar && grammar.isCorrect === true;
 
   // -------- A) grammar correct -> sentence meaning 중심 --------
   if (isCorrect) {
+    try { console.info("[classify][be][analyzeSentence] branch", { branch: "grammar_correct" }); } catch {}
     const sentence = {};
 
     // Prefer fields if analyzeGrammar already returns them
@@ -174,12 +247,36 @@ const explainLang = options.explainLang || "zh-TW";
       sentence.breakdown = grammar.structure;
     }
 
-    if (Array.isArray(grammar.points) && grammar.points.length) {
+    // ✅ role-only structure + highlights (preferred by SentenceCard)
+    if (Array.isArray(grammar.structureLabels) && grammar.structureLabels.length) {
+      sentence.structureLabels = grammar.structureLabels;
+    }
+    if (Array.isArray(grammar.structureRoles) && grammar.structureRoles.length) {
+      sentence.structureRoles = grammar.structureRoles;
+    }
+    if (Array.isArray(grammar.highlights) && grammar.highlights.length) {
+      sentence.highlights = grammar.highlights;
+    }
+
+    if (Array.isArray(grammar.keyPoints) && grammar.keyPoints.length) {
+      sentence.notes = grammar.keyPoints;
+    } else if (Array.isArray(grammar.points) && grammar.points.length) {
       sentence.notes = grammar.points;
     } else if (Array.isArray(grammar.notes) && grammar.notes.length) {
       sentence.notes = grammar.notes;
     } else if (Array.isArray(grammar.highlights) && grammar.highlights.length) {
       sentence.notes = grammar.highlights;
+    }
+
+    // ✅ two-stage expand payload (only when requested)
+    const __detail = options && typeof options === "object" && typeof options.detail === "string" ? options.detail : "basic";
+    if (__detail === "expand") {
+      sentence.expand = {
+        template: typeof grammar.template === "string" ? grammar.template : "",
+        variants: Array.isArray(grammar.variants) ? grammar.variants : [],
+        commonMistakes: Array.isArray(grammar.commonMistakes) ? grammar.commonMistakes : [],
+        extraNotes: Array.isArray(grammar.extraNotes) ? grammar.extraNotes : [],
+      };
     }
 
     // Ensure meaning exists (required by spec). If not provided, degrade gracefully.
@@ -193,6 +290,46 @@ const explainLang = options.explainLang || "zh-TW";
           reason: "meaning_missing_from_grammar_output",
         };
       }
+    }
+
+    // ✅ Two-stage (on-demand) expand payload
+    // - Only attach when caller requests detail=expand
+    try {
+      const __detail = options && typeof options === "object" && typeof options.detail === "string" ? options.detail : "basic";
+      if (__detail === "expand") {
+        sentence.expand = {
+          template: typeof grammar.template === "string" ? grammar.template : "",
+          variants: Array.isArray(grammar.variants) ? grammar.variants : [],
+          commonMistakes: Array.isArray(grammar.commonMistakes) ? grammar.commonMistakes : [],
+          extraNotes: Array.isArray(grammar.extraNotes) ? grammar.extraNotes : [],
+        };
+      }
+    } catch {}
+
+    // ✅ sanitize notes for "usage introduction" tone (avoid grading/judgement lines)
+    sentence.notes = _sanitizeUsageList(sentence.notes);
+
+    // ✅ B-mode: map learning payload (if present)
+    if (grammar.learningFocus && typeof grammar.learningFocus === "object") {
+      const title = (typeof grammar.learningFocus.title === "string" ? grammar.learningFocus.title : "").trim();
+      const whyImportant = (typeof grammar.learningFocus.whyImportant === "string" ? grammar.learningFocus.whyImportant : "").trim();
+      if (title || whyImportant) {
+        sentence.learningFocus = { title, whyImportant };
+      }
+    }
+    if (grammar.extendExample && typeof grammar.extendExample === "object") {
+      const de = (typeof grammar.extendExample.de === "string" ? grammar.extendExample.de : "").trim();
+      const zh = (typeof grammar.extendExample.translation === "string" ? grammar.extendExample.translation : "").trim();
+      if (de || zh) {
+        sentence.extendExamples = [{ de, zh, focus: sentence.learningFocus?.title || "" }];
+      }
+    }
+
+    if (sentence.expand && typeof sentence.expand === "object") {
+      sentence.expand.template = _sanitizeUsageText(sentence.expand.template || "");
+      sentence.expand.variants = _sanitizeUsageList(sentence.expand.variants);
+      sentence.expand.commonMistakes = _sanitizeUsageList(sentence.expand.commonMistakes);
+      sentence.expand.extraNotes = _sanitizeUsageList(sentence.expand.extraNotes);
     }
 
     const res = {
@@ -213,6 +350,7 @@ const explainLang = options.explainLang || "zh-TW";
   }
 
   // -------- B/C) grammar incorrect or analysis failed -> errors + fallback --------
+  try { console.info("[classify][be][analyzeSentence] branch", { branch: "grammar_incorrect_or_failed" }); } catch {}
   const errors = Array.isArray(grammar?.errors) ? grammar.errors : [];
 
   const llmSuggested = extractFallbackFromGrammar(grammar);

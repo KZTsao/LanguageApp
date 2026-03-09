@@ -86,6 +86,63 @@ import {
 } from "../../utils/wordCardConfig";
 import FavoriteStar from "../common/FavoriteStar";
 import uiText from "../../uiText";
+import { getAuthAccessToken } from "../../utils/authTokenStore";
+
+// ✅ Shared card shell / header layout
+// - A1：不新增檔案，直接從 WordCard.jsx export 供 SentenceCard/GrammarCard 共用
+// - 保持 WordCard 原有視覺：background/border/radius/padding/margin
+export function WordCardShell({ children, style, ...rest }) {
+  return (
+    <div
+      style={{
+        position: "relative",
+        background: "var(--card-bg)",
+        border: "1px solid var(--border-subtle)",
+        borderRadius: 16,
+        padding: 16,
+        marginBottom: 20,
+        ...(style || {}),
+      }}
+      {...rest}
+    >
+      {children}
+    </div>
+  );
+}
+
+export function WordCardHeaderRow({ children, style, ...rest }) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        ...(style || {}),
+      }}
+      {...rest}
+    >
+      {children}
+    </div>
+  );
+}
+
+export function WordCardHeaderRight({ children, style, ...rest }) {
+  return (
+    <div
+      style={{
+        position: "relative",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "flex-end",
+        gap: 6,
+        ...(style || {}),
+      }}
+      {...rest}
+    >
+      {children}
+    </div>
+  );
+}
 
 function WordCard({
   data,
@@ -203,6 +260,13 @@ function WordCard({
   // - 僅用於「顯示/不顯示」，不負責 auth 管理與寫入
   const reportIssueAuthed = useMemo(() => {
     try {
+      // 1) primary: authTokenStore（由 AuthProvider 單一出口更新）
+      // - 只做 UI gating（顯示/開啟），不在這裡負責登入狀態管理
+      const tokenFromStore =
+        typeof getAuthAccessToken === "function" ? getAuthAccessToken() : "";
+      if (tokenFromStore) return true;
+
+      // 2) fallback: localStorage（舊版或特殊情境）
       if (typeof window === "undefined") return false;
       const ls = window && window.localStorage ? window.localStorage : null;
       if (!ls) return false;
@@ -342,6 +406,9 @@ useEffect(() => {
   const [entryHeaderOverrideByEntryKey, setEntryHeaderOverrideByEntryKey] =
     useState(() => ({}));
 
+  // ✅ 新增：以 entryKey 分流保存格位 metadata（供例句生成控制用；純 UI 暫態）
+  const [entryMetaOverrideByEntryKey, setEntryMetaOverrideByEntryKey] = useState(() => ({}));
+
   // 目前 entry 的 override 值（空字串代表 fallback 到原本 headword）
   const entryHeaderOverride = useMemo(() => {
     try {
@@ -356,6 +423,20 @@ useEffect(() => {
     }
   }, [entryHeaderOverrideByEntryKey, entryKeyForHeaderOverride]);
 
+  // 目前 entry 的 metadata（可為 undefined）
+  const entryMetaOverride = useMemo(() => {
+    try {
+      const m = entryMetaOverrideByEntryKey || {};
+      const v =
+        m && Object.prototype.hasOwnProperty.call(m, entryKeyForHeaderOverride)
+          ? m[entryKeyForHeaderOverride]
+          : undefined;
+      return v && typeof v === "object" ? v : undefined;
+    } catch (e) {
+      return undefined;
+    }
+  }, [entryMetaOverrideByEntryKey, entryKeyForHeaderOverride]);
+
   // 下游回拋：surface 有值 → 覆蓋；null/空字串 → clear（回預設 headword）
   const handleEntrySurfaceChange = (surface, meta) => {
     const s = typeof surface === "string" ? surface.trim() : "";
@@ -368,6 +449,20 @@ useEffect(() => {
         if (
           Object.prototype.hasOwnProperty.call(next, entryKeyForHeaderOverride)
         ) {
+          delete next[entryKeyForHeaderOverride];
+        }
+      }
+      return next;
+    });
+
+    // ✅ metadata：有 surface 才保存；clear 時一併清掉
+    setEntryMetaOverrideByEntryKey((prev) => {
+      const base = prev && typeof prev === "object" ? prev : {};
+      const next = { ...base };
+      if (s && meta && typeof meta === "object") {
+        next[entryKeyForHeaderOverride] = meta;
+      } else {
+        if (Object.prototype.hasOwnProperty.call(next, entryKeyForHeaderOverride)) {
           delete next[entryKeyForHeaderOverride];
         }
       }
@@ -456,6 +551,13 @@ useEffect(() => {
   // ✅ 顯示用 headword：只對名詞（Nomen）優先用原型（baseForm/lemma）
   // 其他詞性（Verb/Adjektiv...）維持 user 輸入的樣子
   const inputText = data.text;
+
+  // ✅ Pronomen hardcoded lookup: hide definitions for sie/ihr (per requirement)
+  const __hideDefForPronomen = (() => {
+    const s = (inputText || "").toString().trim().toLowerCase();
+    return s === "sie" || s === "ihr";
+  })();
+
 
   // ✅ phrase：若後端提供 normalized/canonical/headword，優先作為顯示 headword（不影響 word/sentence）
   const isPhrase = data?.kind === "phrase" || data?.mode === "phrase" || data?.queryMode === "phrase";
@@ -1377,16 +1479,7 @@ const isReflexive =
   } catch (e) {}
 
   return (
-    <div
-      style={{
-        position: "relative",
-        background: "var(--card-bg)",
-        border: "1px solid var(--border-subtle)",
-        borderRadius: 16,
-        padding: 16,
-        marginBottom: 20,
-      }}
-    >
+    <WordCardShell>
       {/* ✅ 2026-01-17：歷史紀錄清除（close icon 置於 WordCard 右上角） */}
       {canClearHistory && typeof onClearHistoryItem === "function" ? (
         <button
@@ -1427,7 +1520,7 @@ const isReflexive =
       ) : null}
 
       {/* Header */}
-      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+      <WordCardHeaderRow>
         <div style={{ flex: 1, minWidth: 0 }}>
           <WordHeader
             article={shouldShowGrammar ? displayArticle : ""}
@@ -1449,15 +1542,7 @@ const isReflexive =
         </div>
 
         {/* ✅ 2026-01-09：Phase X（問題回報入口）— 移到收藏 ⭐ 上方，並用 popover 呈現 */}
-        <div
-          style={{
-            position: "relative",
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "flex-end",
-            gap: 6,
-          }}
-        >
+        <WordCardHeaderRight>
           {/* ✅ 2026-01-13：Task 1（收藏分類下拉搬移）— 下拉放在收藏 ⭐ 上方 */}
           {!!favoriteCategorySelectNode && (
             <div
@@ -1665,8 +1750,8 @@ const isReflexive =
             size={16}
             ariaLabel="-"
           />
-        </div>
-      </div>
+        </WordCardHeaderRight>
+      </WordCardHeaderRow>
 
       {(data.mode === "phrase" ||
         isSeparable ||
@@ -1760,6 +1845,7 @@ const isReflexive =
         </div>
       ) : null}
 
+      {!__hideDefForPronomen && (
       <WordDefinitionBlock
         d={d}
         labelDefinition={labelDefinition}
@@ -1774,6 +1860,7 @@ const isReflexive =
         onOpenReportIssue={handleOpenReportIssue}
         setReportIssueOpen={setReportIssueOpen}
       />
+      )}
 
       <WordExampleBlock
         d={d}
@@ -1795,6 +1882,7 @@ const isReflexive =
         entryHeaderOverride={entryHeaderOverride}
         onEntrySurfaceChange={handleEntrySurfaceChange}
         entryHeaderOverrideEntryKey={entryKeyForHeaderOverride}
+        entryMetaOverride={entryMetaOverride}
         sectionExample={sectionExample}
         sectionExampleTranslation={sectionExampleTranslation}
         exampleTranslation={exampleTranslation}
@@ -1826,7 +1914,7 @@ const isReflexive =
           <div>{d.notes}</div>
         </div>
       )}
-    </div>
+    </WordCardShell>
   );
 }
 

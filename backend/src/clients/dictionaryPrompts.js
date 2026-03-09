@@ -120,49 +120,30 @@ JSON schema:
   }
 }
 
-
-===============================
-RECOMMENDATIONS RULES (IMPORTANT)
-===============================
-
-- You MUST always output the full "recommendations" object with ALL keys:
-  sameWord, synonyms, antonyms, related, wordFamily, roots, collocations
-  (Use empty arrays [] when there are none; do NOT omit keys.)
-
-- For NOUNS (Nomen), prioritize:
-  - related: semantic neighbors / associated nouns (e.g. Tisch → Stuhl, Möbel, Esstisch)
-  - collocations: common short phrases (e.g. am Tisch sitzen, den Tisch decken)
-  Synonyms/antonyms may naturally be empty for many concrete nouns.
-
-- For VERBS, roots/wordFamily can be helpful; collocations may include fixed patterns with prepositions/cases.
-- Do NOT invent unnatural synonyms/antonyms just to fill lists. Prefer fewer but correct items.
-
-
 ===============================
 COMPARISON RULES (CRITICAL)
 ===============================
 
-Goal: COVERAGE-first. Provide comparison forms whenever possible, including irregular and phrase-based forms.
 - Comparison (positive / comparative / superlative) is a LEXEME-level property, NOT a part-of-speech property.
 - Do NOT infer "not comparable" from partOfSpeech. Adverbs MAY be comparable.
-- You SHOULD try to fill comparison even if you are not 100% sure.
+- You MUST make an explicit decision for comparison:
 
-Rules:
-1) If you know (or strongly believe) the comparison forms:
-   - Fill "positive" (usually the base form), and fill "comparative" and/or "superlative" when available.
-   - Irregular and phrase forms are allowed (e.g. "am liebsten").
+  Allowed cases:
+  1) The word is comparable:
+     - Fill at least one of: positive / comparative / superlative.
+     - Do NOT leave all three fields empty.
 
-2) If you are guessing / not fully confident but want to provide coverage:
-   - Still provide your best guess for "comparative" and/or "superlative".
-   - You MUST add a warning in "notes" that clearly marks it as LLM-generated and needs verification.
-     Use this exact pattern somewhere in notes:
-     "⚠️ LLM guess: please verify"
+  2) The word is NOT comparable:
+     - Set ALL three fields to empty strings.
+     - Use this ONLY when you are confident the word truly has no comparison.
 
-3) Only set ALL three fields to empty strings when you are confident the word truly has NO comparison.
-   - If not confident, do NOT leave them all empty; follow rule (2) instead.
+  3) You are unsure whether the word is comparable:
+     - You MUST still fill the "notes" field with a short explanation,
+       e.g. "Comparison unclear for this adverb".
+     - Do NOT silently leave comparison empty without explanation.
 
-- Never silently leave comparison empty.
-- The "notes" field may contain other helpful remarks, but MUST include the warning when rule (2) is used.
+- Never use empty comparison fields as a way to avoid deciding.
+- Prefer correctness over completeness. If unsure, explain in "notes" instead of guessing.
 
 ===============================
 TYPE FIELD RULE (IMPORTANT)
@@ -230,24 +211,55 @@ VALENZ RULES (IMPORTANT)
 SEPARABLE VERB RULES (CRITICAL)
 ===============================
 
-- "separable" is ONLY about separable verb PREFIXES (Trennbare Verben), e.g. "ankommen", "aufstehen".
+- "separable" is ONLY about separable verb PREFIXES (Trennbare Verben), e.g. "aufstehen".
 - DO NOT confuse separable prefixes with:
   - prepositional valency / fixed complements ("valenz"), e.g. "auf etw. antworten", "an jdn. denken".
   - These are NOT separable prefixes. A verb having a fixed preposition does NOT make it separable.
 
 STRICT DECISION RULE:
 - Set "separable": true ONLY when you can justify the split with a natural separable sentence pattern:
-  - Proof pattern: "ich <finite form> <prefix>" (prefix at the end), e.g. "ich komme an", "ich stehe auf".
+  - Proof pattern: "ich <finite form> <prefix>" (prefix at the end), e.g. "ich stehe auf".
 - If you cannot produce such a proof pattern confidently, you MUST set "separable": false.
+
+
+ENFORCEMENT (MANDATORY, SELF-CHECK):
+- If you set "separable": true, you MUST make the output field "example" a valid proof sentence:
+  - It MUST be present tense, first person singular, and end with the separated prefix:
+    "Ich <finite form> <prefix>."  (e.g. "Ich stehe auf.")
+  - The final token (the prefix) MUST be able to appear sentence-final WITHOUT requiring an object/complement.
+    - Forbidden non-proofs (do NOT use these, and do NOT set separable=true for them):
+      - "*Ich denke an." (requires an object: "an dich")
+      - "*Ich antworte auf." (requires an object: "auf die Frage")
+- If you cannot naturally produce such an "Ich ... <prefix>." example, you MUST set "separable": false.
 
 ANTI-PATTERN (FORBIDDEN):
 - Do NOT set separable=true just because the lemma starts with letters like "an/ab/auf/...".
-  - Example: "antworten" starts with "an" but is NOT separable.
-  - Correct: "antworten" → separable=false; valenz may include "auf" (Akk) such as "auf eine Frage antworten".
+  - Example: "antworten" is NOT separable; correct: separable=false; valenz may include "auf" (Akk) such as "auf eine Frage antworten".
+- IMPORTANT: Do NOT misread foreign prefixes like "anti-" as the separable prefix "an-".
+  - Example: "antizipieren" is NOT separable (do NOT invent "*tizipieren" + "an").
 
-CONTRAST EXAMPLES:
-- "ankommen" → separable=true; proof: "ich komme an".
-- "antworten" → separable=false; correct example: "Ich antworte auf deine Frage." (NOT "*ich tworte an*").
+
+===============================
+RECOMMENDATIONS RULES (CRITICAL)
+===============================
+
+General:
+- All recommendation lists MUST contain ONLY German words/lemmas (no translations, no explanations).
+- Do NOT include the headword itself in any recommendation list.
+- If unsure, return an empty list instead of guessing.
+
+Synonyms:
+- "synonyms" MUST be strict meaning-equivalents for the MAIN sense, not loosely related words.
+- Do NOT mix different actions just because they are in a similar context.
+  - Example: "ziehen" (to pull) is NOT synonymous with "drücken" (to push/press).
+- If you cannot confidently give true synonyms, return: "synonyms": [].
+
+Word family / roots:
+- Put derivationally related forms (same stem/root) into "wordFamily" or "roots", NOT into "synonyms".
+- For common verb families built on a shared root (e.g. verbs with the root "-sehen"),
+  include several other common compounds with the same root in "wordFamily"
+  (e.g. ansehen, zusehen, übersehen, nachsehen, vorsehen, absehen), as long as they are valid German lemmas.
+- For such families, include the core root/stem in "roots" (e.g. "sehen").
 
 ===============================
 Language rules for definitions & examples
@@ -374,56 +386,52 @@ Reporting requirements (Phase 2 API extension):
 - Honesty is more important than completeness.
 
 ===============================
-Recommendations rules (Verb only)
+Recommendations rules (ALL parts of speech)
 ===============================
 
-You MUST ALWAYS output the field "recommendations" in the JSON.
+You MUST ALWAYS output the field "recommendations" in the JSON, with ALL keys present.
+If you are unsure, return empty arrays. Do NOT invent obscure words.
 
-Rules:
-- If and only if "partOfSpeech" is "Verb":
-  - Fill "recommendations" with up to 5 items per list.
+Required structure (all keys MUST exist, even if empty):
+{
+  "sameWord": [],
+  "synonyms": [],
+  "antonyms": [],
+  "related": [],
+  "wordFamily": [],
+  "roots": [],
+  "collocations": []
+}
 
-  - Mandatory constraints (apply to synonyms/antonyms/roots):
-    - Do NOT include the base word itself (word OR baseForm).
-    - Do NOT include duplicates (case-insensitive).
-    - Prefer common, modern, everyday verbs; avoid rare or archaic items.
-    - If you are unsure, return empty arrays.
-    - NEVER output the same verb in BOTH synonyms and antonyms.
+General constraints (apply to all lists):
+- Do NOT include the base word itself (word OR baseForm), case-insensitive.
+- Do NOT include duplicates (case-insensitive).
+- Prefer common, modern, everyday words; avoid rare/archaic/slang unless clearly mainstream.
+- For multiword items (especially collocations), keep them short and natural.
 
-  - "synonyms":
-    - ONLY very close-meaning verbs (true near-synonyms).
-    - MUST NOT include verbs that are semantic opposites.
-    - MUST NOT overlap with "antonyms".
-    - If no true synonyms exist, return [].
+Field meaning:
+- "sameWord": same lemma but different casing/orthography variants the learner might confuse (usually empty).
+- "synonyms": close-meaning synonyms (same part of speech). If none, [].
+- "antonyms": clear, commonly accepted opposites. If none, [].
+- "related": semantic neighbors (topic/field associations, hyponyms/hypernyms, common co-occurring concepts). Not strict synonyms.
+- "wordFamily": same root / derivational family across parts of speech (e.g., noun/adjective/verb forms). If unclear, [].
+- "roots": STRICT meaning: derivational family formed by prefixes for verbs OR clear derivational base family for non-verbs if obvious; otherwise [].
+- "collocations": common, everyday collocations/phrases (2–5 words). For nouns, prefer verb–noun or prepositional phrases; for adj/adv, prefer common combinations.
 
-  - "antonyms":
-    - ONLY clear and commonly accepted semantic opposites.
-    - MUST NOT overlap with "synonyms".
-    - If no clear antonym exists, return [].
+Part-of-speech priorities:
+- If partOfSpeech is "Nomen": prioritize "related" and "collocations" (aim 3–6 each if natural).
+- If partOfSpeech is "Adjektiv" or "Adverb": prioritize "collocations" and "related" (aim 3–6 each if natural).
+- If partOfSpeech is "Verb": you may fill synonyms/antonyms/roots/related/collocations as appropriate (avoid separable-prefix mistakes).
 
-  - "roots":
-    - STRICT meaning: derivational verb family members formed by prefixes
-      (same verbal stem + different prefix) — NOT lemma mapping.
-    - MUST be INFINITIVES ONLY.
-    - Examples (allowed):
-      - ziehen → anziehen, ausziehen, umziehen, einziehen
-      - sehen → ansehen, zusehen, übersehen, aussehen
-      - laufen → loslaufen, weglaufen, mitlaufen, ablaufen
-    - NOT allowed (MUST NOT output):
-      - conjugated forms: kann, läuft, zog, siehst
-      - participles: gezogen, gelaufen
-      - bare stems: lauf
-      - the lemma/baseForm itself: ziehen, sehen, laufen
-      - loose semantic associations (related meaning but NOT a prefix-derivation family)
-    - If no clear prefix-derivation family exists, return [].
-
-- For ALL other parts of speech:
-  - Set "recommendations" to:
-    {
-      "synonyms": [],
-      "antonyms": [],
-      "roots": []
-    }
+Minimum requirement (to avoid empty suggestion UI):
+- Unless the entry is a proper name or truly has no safe suggestions, you SHOULD provide at least ONE item across all recommendation lists.
+- If partOfSpeech is "Adjektiv" or "Adverb": you MUST try to provide at least one of:
+  - a very common collocation (e.g., "sehr <word>")
+  - a high-confidence semantic neighbor in "related"
+  If you genuinely cannot, keep arrays empty but explain briefly in "notes".
+- If the word is a compound or clearly has a productive base (e.g., verbs ending with "-sehen" like "aussehen"):
+  - Put close compounds/derived forms into "roots" or "wordFamily" (e.g., "ansehen", "zusehen", "umsehen", "aufsehen"),
+  - Do NOT add unrelated words.
 
 Important:
 - Never include example sentences inside definitions.
@@ -468,62 +476,6 @@ Return ONLY the JSON object, no markdown, no explanation.
  * - 用於避免把 definition_de_translation 誤當成 definition
  * - definition：1～3 個詞的短釋義；多義請回傳 array，且不得用逗號合併
  */
-// Phase A2: Separable verb verification (optional second call)
-// Goal: prevent false positives caused by prefix-heuristics (e.g. anti- vs an-).
-const separableCheckSystemPrompt = `
-You are a strict German grammar verifier.
-
-Task:
-- Decide whether the given German lemma is a separable verb (Trennbares Verb).
-- Return ONLY a single JSON object with this schema (no extra keys, no markdown):
-
-{
-  "separable": boolean,
-  "proofExample": "string (empty unless separable=true)"
-}
-
-STRICT DECISION RULE (HARD):
-- Set "separable": true ONLY if you can produce a NATURAL, native-acceptable proof sentence:
-  "Ich <finite verb> <prefix>."
-  where the prefix is sentence-final and does NOT require an object/complement.
-- If you cannot confidently produce such a proof sentence, you MUST set "separable": false.
-
-Additional hard constraints:
-- DO NOT confuse fixed prepositions (valency) with separable prefixes.
-  - e.g. "an jdn. denken", "auf etw. antworten" are NOT separable.
-- DO NOT confuse foreign prefixes like "anti-" with German separable prefixes like "an-".
-  - If the lemma begins with "anti" (e.g. "antizipieren"), you MUST set separable=false.
-- Never invent a non-existent verb stem (e.g. "*tizipieren"). If a split would imply an implausible/non-existing stem, set separable=false.
-
-If separable=false, set "proofExample" to "".
-If separable=true, set "proofExample" to a correct proof sentence in present tense, first person singular, ending with the separated prefix.
-`;
-
-function buildSeparableCheckUserPrompt({
-  word,
-  partOfSpeech,
-  candidatePrefixes,
-  currentSeparable,
-  currentExample,
-}) {
-  const safePrefixes = Array.isArray(candidatePrefixes) ? candidatePrefixes : [];
-  return `
-German lemma:
-"${word}"
-
-partOfSpeech: "${partOfSpeech}"
-Current output (may be wrong):
-- separable: ${String(!!currentSeparable)}
-- example: ${currentExample ? JSON.stringify(currentExample) : '""'}
-
-Candidate separable prefixes whitelist (string match at start of lemma):
-${JSON.stringify(safePrefixes)}
-
-Decide separable according to STRICT DECISION RULE.
-Return ONLY the JSON object.
-`;
-}
-
 const glossSystemPrompt = `
 You are a precise gloss generator for a German dictionary app.
 
@@ -619,10 +571,6 @@ Return ONLY the JSON object with fields "definition_de", "definition_de_translat
 module.exports = {
   systemPrompt,
   buildUserPrompt,
-  // Phase A2 (optional second call): separable verification
-  separableCheckSystemPrompt,
-  buildSeparableCheckUserPrompt,
-
   // Phase B/C (multi-call for better quality)
   glossSystemPrompt,
   buildGlossUserPrompt,

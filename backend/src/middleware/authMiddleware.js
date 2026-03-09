@@ -15,7 +15,21 @@ const {
  * 驗證失敗 → 回傳 401
  */
 async function authMiddleware(req, res, next) {
-  try {
+  // ✅ TEMP: Allow anonymous access to core APIs (product requirement)
+// Later we can reintroduce limits via usage/quota checks, but auth must not block anonymous now.
+  const __p = String(req.originalUrl || req.url || "");
+  if (
+    __p === "/api/speech/asr" ||
+    __p.startsWith("/api/speech/asr?") ||
+    __p === "/api/dictionary/examples" ||
+    __p.startsWith("/api/dictionary/examples?") ||
+    __p === "/api/dictionary/conversation" ||
+    __p.startsWith("/api/dictionary/conversation?")
+  ) {
+    return next();
+  }
+
+try {
     // 🔍 runtime 觀測：確認 supabase admin 初始化狀態
     console.log(
       "[authMiddleware] supabase init status:",

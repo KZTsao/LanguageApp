@@ -78,6 +78,9 @@ import LibrarySetSelect from "./components/LibrarySetSelect";
 
 import LibraryItemsList from "./components/LibraryItemsList";
 
+// ✅ 匯入學習內容（pop/modal 版本，避免 view 切換導致角色/狀態跑掉）
+import LibraryAddPage from "./LibraryAddPage";
+
 // ✅ B1：收藏分類管理 UI（UI-only）
 import FavoriteCategoryManager from "./components/FavoriteCategoryManager";
 
@@ -167,6 +170,7 @@ export default function WordLibraryPanel({
   onRenameCategory,
   onReorderCategories,
   onArchiveCategory,
+  onOpenLibraryAddPage,
   isCategoriesSaving = false,
   categoriesErrorText = "",
 
@@ -190,6 +194,11 @@ export default function WordLibraryPanel({
   isFavoritePending,
   getFavoriteWordKey,
   onExamplesResolved,
+
+  // ✅ 2026-02-24：Onboarding
+  // - 登入成功後若沒有任何「學習本（分類）」：自動彈出「新增學習本」小視窗
+  // - 本 prop 只控制「是否啟用」；實際只會對每個 user 觸發一次（localStorage guard）
+  autoPromptCreateCategory = false,
 }) {
   const canToggle = typeof onToggleFavorite === "function" && !favoriteDisabled;
   const canUpdateSenseStatus = typeof onUpdateSenseStatus === "function";
@@ -378,6 +387,25 @@ export default function WordLibraryPanel({
     return Array.isArray(libraryItems) ? libraryItems : [];
   }, [libraryItems]);
 
+  // ✅ 2026-02-13：對齊資料模型（前端防呆）
+  // - 後端應回傳：src / learning_item_id / hasProgress
+  // - 若遇到舊資料（src=null）或暫時性 join 失敗，也要保證欄位存在
+  //   避免 UI 回退到「用 gloss 是否存在」來推斷學習狀態
+  const favoritesItemsForList = React.useMemo(() => {
+    const rows = Array.isArray(favoritesItemsOrdered) ? favoritesItemsOrdered : [];
+    return rows.map((r) => {
+      const src = typeof r?.src === "string" ? r.src : null;
+      const learningItemId = r?.learning_item_id ?? null;
+      const hasProgress = !!(r?.hasProgress ?? r?.has_progress);
+      return {
+        ...r,
+        src,
+        learning_item_id: learningItemId,
+        hasProgress,
+      };
+    });
+  }, [favoritesItemsOrdered]);
+
   const [importLocalItemsByCategoryId, setImportLocalItemsByCategoryId] = React.useState(() => ({}));
   const favoritesItemsMergedForView = React.useMemo(() => {
     const base = Array.isArray(favoritesItemsOrdered) ? favoritesItemsOrdered : [];
@@ -536,56 +564,76 @@ export default function WordLibraryPanel({
       // - 不改既有 onReview 邏輯/內容
       // - 只調整呼叫時序（僅在 favorites-learning 入口）
       // ============================================================
-      let __enteredLearning = false;
-
+      // ✅ favorites-learning：同時需要
+      // 1) onReview(...)：讓主畫面顯示點到的 item（不改既有結果回放邏輯）
+      // 2) enterLearningMode(ctx)：確保 mode 維持 learning（避免出現「清除/回報」那一列）
+      // - 注意：若 onReview 內部會切 mode=search，則必須在其後再把 mode 拉回 learning。
+      let __learningCtx = null;
       try {
         if (canEnterLearningFromFavorites) {
           const clickedIndex = getFavoritesClickedIndex(clickedItem);
           if (clickedIndex >= 0) {
-            onEnterLearning({
+            const activeCat = Array.isArray(favoriteCategories)
+              ? favoriteCategories.find((c) => (c?.id || c?.category_id || "") === (selectedFavoriteCategoryId || ""))
+              : null;
+            const activeTitleRaw =
+              (activeCat && (activeCat.name || activeCat.title || activeCat.label || activeCat.displayName)) ||
+              "";
+            const activeTitle = typeof activeTitleRaw === "string" ? activeTitleRaw.trim() : "";
+
+            __learningCtx = {
               sourceType: "favorites",
-              title: "我的最愛",
+              // ✅ 以 uiText 為準；缺漏時 fallback 到英文，避免在非 zh 語系顯示中文定字
+              title: activeTitle || t.setFavoritesLabel || t.ariaFavorite || "Favorites",
               items: favoritesItemsState,
               index: clickedIndex,
-            });
-            __enteredLearning = true;
+            };
           }
         }
       } catch (e) {
-        // no-op：避免 UI click 因為 learning ctx 組裝失敗而中斷
+        __learningCtx = null;
       }
 
+      // 先回放結果（維持既有 onReview 行為）
       if (typeof onReview === "function") {
-        if (__enteredLearning) {
-          // ✅ 延後：讓 App.jsx 先吃到 mode/learningContext，再走既有 onReview → analyze 流程
-          //（避免 refresh/切換已正常，但「從單字庫點回來」仍多打一發 analyze）
-          try {
-            Promise.resolve().then(() => {
-              try {
-                onReview(clickedItem);
-              } catch (e) {
-                // no-op
-              }
-            });
-          } catch (e) {
-            // fallback：極端環境不支援 Promise
-            setTimeout(() => {
-              try {
-                onReview(clickedItem);
-              } catch (e2) {
-                // no-op
-              }
-            }, 0);
-          }
-          return null;
+        try {
+          onReview(clickedItem);
+        } catch (e) {
+          // no-op
         }
+      }
 
-        return onReview(clickedItem);
+      // 再把 mode 拉回 learning（僅限 favorites-learning 情境）
+      if (__learningCtx && typeof onEnterLearning === "function") {
+        try {
+          Promise.resolve().then(() => {
+            try {
+              onEnterLearning(__learningCtx);
+            } catch (e) {
+              // no-op
+            }
+          });
+        } catch (e) {
+          setTimeout(() => {
+            try {
+              onEnterLearning(__learningCtx);
+            } catch (e2) {
+              // no-op
+            }
+          }, 0);
+        }
       }
 
       return null;
     },
-    [canEnterLearningFromFavorites, onEnterLearning, onReview, favoritesItemsState]
+    [
+      canEnterLearningFromFavorites,
+      onEnterLearning,
+      onReview,
+      favoritesItemsState,
+      favoriteCategories,
+      selectedFavoriteCategoryId,
+    ]
   );
 
 
@@ -759,7 +807,15 @@ export default function WordLibraryPanel({
   // ============================================================
   const [importLevel, setImportLevel] = React.useState("A1");
   const [importScenario, setImportScenario] = React.useState("");
-  const [importType, setImportType] = React.useState("word"); // word | phrase | grammar
+  const [importType, setImportType] = React.useState("word"); // word | phrase | sentence | grammar
+
+  // ✅ Presets：減少 LLM 使用（可切換）
+  // - presets：從後端提供固定清單（不消耗 LLM）
+  // - llm：沿用既有 /import/generate
+  const [importMode, setImportMode] = React.useState("presets"); // "presets" | "llm"
+  const [importPresetsCatalog, setImportPresetsCatalog] = React.useState(null); // { presets: [...] }
+  const [importPresetsLoading, setImportPresetsLoading] = React.useState(false);
+  const [importPresetId, setImportPresetId] = React.useState("");
   const [importTargetCategoryId, setImportTargetCategoryId] = React.useState(
   selectedFavoriteCategoryId !== null && typeof selectedFavoriteCategoryId !== "undefined"
     ? String(selectedFavoriteCategoryId)
@@ -774,6 +830,8 @@ export default function WordLibraryPanel({
   setImportLevel("A1");
   setImportScenario("");
   setImportType("word");
+  setImportMode("presets");
+  setImportPresetId("");
 
   // ✅ 若由「管理分類」點 row 匯入：優先使用暫存的預選分類（一次性）
   let __preselect = "";
@@ -824,12 +882,26 @@ export default function WordLibraryPanel({
 }, [isImportOpen]);
 
   function normalizeImportTypeLabel(typeKey) {
-  // uiText keys：建議用 t.importTypeVocab / t.importTypeGrammar / t.importTypePhrase
-  // 若未提供，fallback 到中文
-  if (typeKey === "grammar") return t.importTypeGrammar || "文法";
-  if (typeKey === "phrase") return t.importTypePhrase || "常用語";
+  // uiText keys：建議用 t.importTypeVocab / t.importTypePhrases
+  // ✅ 注意：uiText.js 目前是 importTypePhrases（複數），這裡也兼容舊 key importTypePhrase
+  // 缺漏時 fallback 到英文（避免在非 zh 語系顯示中文定字）
+  if (typeKey === "phrase") return t.importTypePhrases || t.importTypePhrase || "Phrases";
+  if (typeKey === "sentence") return t.importTypeSentences || "Sentences";
   // ✅ "word"（對接後端 type=word）
-  return t.importTypeVocab || "單字";
+  return t.importTypeVocab || "Vocabulary";
+}
+
+  function getImportPreviewLabel() {
+  // uiText 尚未提供獨立的 previewLabel，先用「importEmptyPreviewHint」推導。
+  // - zh-TW/zh-CN: ...候選清單
+  // - en/ar/...: No preview yet
+  // - de: Noch keine Vorschau
+  if (t.importPreviewLabel) return t.importPreviewLabel;
+  const hint = typeof t.importEmptyPreviewHint === "string" ? t.importEmptyPreviewHint : "";
+  if (hint.includes("候選清單")) return "候選清單";
+  if (hint.toLowerCase().includes("preview")) return "Preview";
+  if (hint.toLowerCase().includes("vorschau")) return "Vorschau";
+  return "Preview";
 }
 
   function getScenarioDisplay() {
@@ -854,7 +926,77 @@ export default function WordLibraryPanel({
   setImportCandidates(arr);
 }
 
+
+async function loadImportPresetsOnce() {
+  if (importPresetsCatalog && importPresetsCatalog.presets) return importPresetsCatalog;
+  if (importPresetsLoading) return null;
+  setImportPresetsLoading(true);
+  try {
+    const response = await apiFetch(`/api/library/import/presets`, { method: "GET" });
+    const data = await response.json().catch(() => null);
+    if (response.ok && data && typeof data === "object") {
+      setImportPresetsCatalog(data);
+      return data;
+    }
+  } catch (e) {
+    console.error("[import][presets] load failed", e);
+  } finally {
+    setImportPresetsLoading(false);
+  }
+  return null;
+}
+
+function applyPresetToCandidates(presetId) {
+  const catalog = importPresetsCatalog;
+  const presets = Array.isArray(catalog?.presets) ? catalog.presets : [];
+  const p = presets.find((x) => String(x?.id) === String(presetId));
+  if (!p) {
+    setImportCandidates([]);
+    return;
+  }
+  const items = Array.isArray(p.items) ? p.items : [];
+  const mapped = items
+    .map((it, idx) => {
+      const type = it?.type || p.type || importType;
+      const de = it?.de || it?.textDe || it?.importKey || "";
+      const importKey = it?.importKey || de;
+      const hint = it?.hint || "";
+      return {
+        id: `preset_${p.id}_${idx}`,
+        type,
+        importKey: String(importKey || "").trim(),
+        textDe: String(de || "").trim(),
+        hint: String(hint || "").trim(),
+        checked: true,
+      };
+    })
+    .filter((x) => x && x.importKey);
+  setImportCandidates(mapped);
+  // ✅ presets 模式下：scenario 不需要
+  setImportErrorText("");
+}
+
+// ✅ 每次打開匯入視窗，若在 presets 模式，先把 catalog 拉下來（只做一次）
+React.useEffect(() => {
+  if (!isImportOpen) return;
+  if (importMode !== "presets") return;
+  loadImportPresetsOnce();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [isImportOpen, importMode]);
+
 async function handleImportGenerate() {
+  // ✅ presets：不打 LLM
+  if (importMode === "presets") {
+    setImportErrorText("");
+    const pid = String(importPresetId || "").trim();
+    if (!pid) {
+      setImportErrorText(t.importPickPreset || "Please pick a preset list");
+      return;
+    }
+    if (!importPresetsCatalog) await loadImportPresetsOnce();
+    applyPresetToCandidates(pid);
+    return;
+  }
   setImportErrorText("");
   setImportCandidates([]);
   setImportIsGenerating(true);
@@ -862,7 +1004,7 @@ async function handleImportGenerate() {
   try {
     const scenario = String(importScenario || "").trim();
     if (!scenario) {
-      setImportErrorText(t.importScenarioRequired || "請先填寫情境");
+      setImportErrorText(t.importScenarioRequired || "Please enter a scenario");
       return;
     }
 
@@ -959,7 +1101,8 @@ async function handleImportCommit() {
       meta: {
         level: importLevel,
         scenario: String(importScenario || "").trim(),
-        source: "llm_import",
+        source: importMode === "presets" ? "preset_import" : "llm_import",
+        presetId: importMode === "presets" ? String(importPresetId || "") : undefined,
       },
     };
 
@@ -1047,6 +1190,8 @@ async function handleImportCommit() {
 }, [importCandidates]);
 
   const isImportGenerateDisabled =
+  // ✅ presets：必須先選 preset
+  (importMode === "presets" && !String(importPresetId || "").trim()) ||
   // __interactionDisabled gate removed here to avoid foggy/greyed UI; handlers are guarded
   !canEdit || !!favoriteCategoriesLoading || isSavingStrict === true || importIsGenerating === true || importIsCommitting === true;
 
@@ -1070,6 +1215,36 @@ async function handleImportCommit() {
       }))
       .sort((a, b) => (a.order_index || 0) - (b.order_index || 0));
   }, [favoriteCategories]);
+
+  // ============================================================
+  // ✅ Onboarding：登入後若尚未建立任何學習本 → 自動打開「管理分類」視窗
+  // - 只觸發一次（per user），避免每次 reload 都跳
+  // ============================================================
+  React.useEffect(() => {
+    if (!autoPromptCreateCategory) return;
+    if (!authUserId) return;
+    if (!canEdit) return;
+    if (favoriteCategoriesLoading) return;
+
+    // categories 已載入但為空 → 觸發
+    const isEmpty = Array.isArray(categoriesForManager) && categoriesForManager.length === 0;
+    if (!isEmpty) return;
+
+    // 一次性 guard（per user）
+    const k = `langapp::${String(authUserId)}::prompt_create_category_v1`;
+    try {
+      const v = window?.localStorage?.getItem(k);
+      if (v === "1") return;
+    } catch {}
+
+    try {
+      setIsCategoryManagerOpen(true);
+    } catch {}
+
+    try {
+      window?.localStorage?.setItem(k, "1");
+    } catch {}
+  }, [autoPromptCreateCategory, authUserId, canEdit, favoriteCategoriesLoading, categoriesForManager]);
 
   // ✅ handler guards（避免 props 缺漏時 runtime error）
   const canCreateCategory = typeof onCreateCategory === "function";
@@ -1157,8 +1332,7 @@ async function handleImportCommit() {
           // no-op
         }
 
-        // ✅ 3) 立即把目標分類帶入（並開啟既有 Import Modal）
-        setImportTargetCategoryId(cid);
+        // ✅ 3) 開啟匯入 Pop Modal（不切換 view/page）
         setIsImportOpen(true);
       } catch (e) {
         // no-op
@@ -1191,8 +1365,9 @@ async function handleImportCommit() {
       <div
         style={{
           display: "flex",
-          alignItems: "center",
+          alignItems: "flex-start",
           justifyContent: "space-between",
+          flexWrap: "wrap",
           gap: 12,
           marginBottom: 10,
         }}
@@ -1217,6 +1392,8 @@ async function handleImportCommit() {
             alignItems: "center",
             gap: 8,
             flexWrap: "wrap",
+            flex: 1,
+            minWidth: 0,
           }}
         >
           {/* ✅ B1：管理分類入口（icon button） */}
@@ -1229,8 +1406,8 @@ async function handleImportCommit() {
             }}
           >
             <ToolIconButton
-              ariaLabel={t.manageCategoriesLabel || "管理分類"}
-              title={t.manageCategoriesLabel || "管理分類"}
+              ariaLabel={t.manageCategoriesLabel || "Manage categories"}
+              title={t.manageCategoriesLabel || "Manage categories"}
               onClick={() => __guardInteraction(() => setIsCategoryManagerOpen(true))}
               size={30}
               iconSize={18}
@@ -1408,6 +1585,7 @@ async function handleImportCommit() {
             justifyContent: "flex-end",
             gap: 8,
             flexShrink: 0,
+            marginLeft: "auto",
           }}
         >
           {/* ✅ 匯入入口：永遠顯示；disabled 由 canEdit / saving / loading 決定 */}
@@ -1419,7 +1597,16 @@ async function handleImportCommit() {
             onClick={() => {
               // ✅ Init Gate：初始化未完成前禁止互動入口
               if (__interactionDisabled) return;
-              // ✅ 本任務：只開啟 UI state（不打 API / 不接 DB）
+              // ✅ 改為 pop/modal（避免角色/狀態切換跑掉）
+              try {
+                const cid =
+                  selectedFavoriteCategoryId !== null && typeof selectedFavoriteCategoryId !== "undefined"
+                    ? String(selectedFavoriteCategoryId)
+                    : "";
+                if (importPreselectCategoryIdRef) importPreselectCategoryIdRef.current = cid;
+              } catch (e0) {
+                // no-op
+              }
               setIsImportOpen(true);
             }}
             style={{
@@ -1471,7 +1658,7 @@ async function handleImportCommit() {
         <LibraryItemsList
           isFavoritesSet={isFavoritesSet}
           selectedSetCode={selectedSetCode}
-          favoritesItems={libraryItems || []}
+          favoritesItems={favoritesItemsForList || []}
           systemItems={[]}
           systemLoading={false}
           systemError={null}
@@ -1499,7 +1686,7 @@ async function handleImportCommit() {
   <div
     role="dialog"
     aria-modal="true"
-    aria-label={t.importModalTitle || "匯入"}
+    aria-label={t.importModalTitle || t.libraryAddTitle || "匯入"}
     style={{
       position: "fixed",
       inset: 0,
@@ -1510,466 +1697,34 @@ async function handleImportCommit() {
       padding: 16,
       background: "rgba(0,0,0,0.45)",
     }}
-    onClick={() => {
-      // 點背景關閉
-      setIsImportOpen(false);
-    }}
+    onClick={() => setIsImportOpen(false)}
   >
     <div
       style={{
-        width: "min(640px, 94vw)",
-        maxHeight: "min(78vh, 720px)",
+        width: "min(980px, 96vw)",
+        maxHeight: "min(86vh, 820px)",
         overflow: "auto",
         borderRadius: 18,
-        // ✅ 風格對齊：沿用網站既有「卡片/面板」風格（淡底 + 細框）
-        border: isDarkTheme
-          ? "1px solid var(--border-subtle)"
-          : "1px solid var(--border-subtle)",
-
-        background: "rgb(255,255,255)",
-        color: "var(--text)",
-        padding: 12,
+        border: "1px solid var(--border-subtle)",
+        background: "var(--card-bg)",
+        color: "var(--text-main)",
         boxShadow: "0 18px 48px rgba(0,0,0,0.25)",
       }}
-      onClick={(e) => { 
-        e.stopPropagation();
-      }}
+      onClick={(e) => e.stopPropagation()}
     >
-      {/* A. Header */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: 10,
-          marginBottom: 12,
+      <LibraryAddPage
+        uiText={uiText}
+        t={t}
+        uiLang={uiLang}
+        targetCategoryId={importTargetCategoryId}
+        favoriteCategories={favoriteCategories}
+        favoriteCategoriesLoading={favoriteCategoriesLoading}
+        onClose={() => setIsImportOpen(false)}
+        onOpenLibrary={() => {
+          // no-op: library panel 已經在畫面上
         }}
-      >
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span
-            aria-hidden="true"
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              color: isDarkTheme ? "inherit" : "#f59e0b",
-            }}
-          >
-            <UploadArrowUpIcon size={16} />
-          </span>
-          <div style={{ fontSize: 14, fontWeight: 600, opacity: 0.92 }}>
-            {t.importModalTitle || "匯入"}
-          </div>
-        </div>
-
-        <button
-          type="button"
-          aria-label={t.importCloseAria || "Close"}
-          title={t.importCloseTitle || "Close"}
-          onClick={() => setIsImportOpen(false)}
-          style={{
-            fontSize: 14,
-            lineHeight: 1,
-            padding: "6px 8px",
-            borderRadius: 10,
-            border: isDarkTheme
-              ? "1px solid var(--border-subtle)"
-              : "1px solid var(--border-subtle)",
-            background: isDarkTheme ? "var(--border-subtle)" : "var(--card-bg)",
-            color: "var(--text)",
-            cursor: "pointer",
-            opacity: 0.75,
-          }}
-        >
-          ×
-        </button>
-      </div>
-
-      {/* ✅ 分隔線：讓「標題」與「設定區」切割更明確 */}
-      <div
-        aria-hidden="true"
-        style={{
-          height: 1,
-          background: isDarkTheme ? "var(--border-subtle)" : "var(--border-subtle)",
-          margin: "0 0 12px 0",
-        }}
+        onSelectFavoriteCategory={onSelectFavoriteCategory}
       />
-
-      {/* B. 設定區（Form） */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "1fr 1fr",
-          gap: 10,
-          marginBottom: 12,
-          padding: 12,
-          borderRadius: 14,
-          border: isDarkTheme ? "1px solid var(--border-subtle)" : "1px solid var(--border-subtle)",
-          background: isDarkTheme ? "rgba(255,255,255,0.03)" : "var(--card-bg)",
-        }}
-      >
-        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          <div style={{ fontSize: 12, opacity: 0.8 }}>
-            {t.importLevelLabel || "等級"}
-          </div>
-          <select
-            value={importLevel}
-            onChange={(e) => setImportLevel(e.target.value || "A1")}
-            style={{
-              fontSize: 12,
-              padding: "8px 10px",
-              borderRadius: 10,
-              border: isDarkTheme
-                ? "1px solid rgba(255,255,255,0.14)"
-                : "1px solid var(--border-subtle)",
-              background: isDarkTheme ? "rgba(255,255,255,0.04)" : "var(--card-bg)",
-              color: "var(--text)",
-              outline: "none",
-              appearance: "none",
-            }}
-          >
-            {["A1", "A2", "B1", "B2", "C1"].map((lv) => (
-              <option key={lv} value={lv}>
-                {lv}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          <div style={{ fontSize: 12, opacity: 0.8 }}>
-            {t.importTypeLabel || "類型"}
-          </div>
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-            {[
-              { key: "grammar", label: t.importTypeGrammar || "文法" },
-              { key: "word", label: t.importTypeVocab || "單字" },
-              { key: "phrase", label: t.importTypePhrase || "常用語" },
-            ].map((it) => {
-              const active = importType === it.key;
-              return (
-                <button
-                  key={it.key}
-                  type="button"
-                  onClick={() => setImportType(it.key)}
-                  style={getImportPillStyle(active)}
-                >
-                  {it.label}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          <div style={{ fontSize: 12, opacity: 0.8 }}>
-            {t.importScenarioLabel || "情境"}
-          </div>
-        </div>
-        
-        <div style={{ display: "flex", flexDirection: "column", gap: 6, gridColumn: "1 / -1" }}>
-          <input
-            value={importScenario}
-            placeholder={t.importScenarioPlaceholder || ""}
-            onChange={(e) => setImportScenario(e.target.value)}
-            style={{
-              fontSize: 12,
-              padding: "8px 10px",
-              borderRadius: 10,
-              border: isDarkTheme
-                ? "1px solid rgba(255,255,255,0.14)"
-                : "1px solid var(--border-subtle)",
-              background: isDarkTheme ? "rgba(255,255,255,0.04)" : "var(--card-bg)",
-              color: "var(--text)",
-              outline: "none",
-              width: "90%",
-            }}
-          />
-        </div>
-      </div>
-
-      {/* ✅ Task 2-UX：生成按鈕放在「設定區塊」最後一步
-          - 使用者選完類型/數量後，視線自然往下就會看到生成
-          - 不改事件/disabled/state，只調整位置與樣式
-      */}
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "flex-end",
-          marginTop: -2,
-          marginBottom: 12,
-        }}
-      >
-        <button
-          type="button"
-          disabled={isImportGenerateDisabled}
-          onClick={async () => {
-            if (isImportGenerateDisabled) return;
-            await handleImportGenerate();
-          }}
-          style={{
-            fontSize: 12,
-            width: "100%",
-            padding: "10px 14px",
-            borderRadius: 12,
-            border: isImportGenerateDisabled
-              ? (isDarkTheme
-                  ? "1px solid var(--border-subtle)"
-                  : "1px solid var(--border-subtle)")
-              : `1px solid ${ACCENT_ORANGE}`,
-            background: isImportGenerateDisabled
-              ? (isDarkTheme ? "rgba(255,255,255,0.04)" : "var(--card-bg)")
-              : ACCENT_ORANGE,
-            color: isImportGenerateDisabled ? "inherit" : "var(--card-bg)",
-            cursor: isImportGenerateDisabled ? "not-allowed" : "pointer",
-            opacity: isImportGenerateDisabled ? 0.55 : 0.98,
-            boxShadow:
-              isImportGenerateDisabled || isDarkTheme
-                ? "none"
-                : "0 14px 28px rgba(231, 162, 58, 0.22)",
-          }}
-        >
-          {t.importGenerateButton || "生成"}
-        </button>
-      </div>
-
-      {importErrorText ? (
-        <div
-          role="alert"
-          style={{
-            fontSize: 12,
-            marginTop: 8,
-            marginBottom: 8,
-            padding: "8px 10px",
-            borderRadius: 10,
-            border: "1px solid var(--border-subtle)",
-            background: isDarkTheme ? "rgba(255, 90, 90, 0.10)" : "rgba(255, 90, 90, 0.08)",
-            color: "var(--text)",
-          }}
-        >
-          {importErrorText}
-        </div>
-      ) : null}
-
-      {/* ✅ 分隔線：設定區 → 候選清單 */}
-      <div
-        aria-hidden="true"
-        style={{
-          height: 1,
-          background: isDarkTheme ? "var(--border-subtle)" : "var(--border-subtle)",
-          margin: "0 0 12px 0",
-        }}
-      />
-
-      {/* C. 候選清單（Preview List） */}
-      <div
-        style={{
-          border: isDarkTheme
-            ? "1px solid var(--border-subtle)"
-            : "1px solid var(--border-subtle)",
-          background: isDarkTheme ? "rgba(255,255,255,0.03)" : "var(--card-bg)",
-          borderRadius: 14,
-          padding: 10,
-          marginBottom: 12,
-        }}
-      >
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            gap: 10,
-            marginBottom: 8,
-          }}
-        >
-          <div style={{ fontSize: 12, opacity: 0.8 }}>
-            {t.importPreviewLabel || "候選清單"}
-          </div>
-
-          <div style={{ display: "flex", gap: 8 }}>
-            <button
-              type="button"
-              disabled={!importCandidates || importCandidates.length === 0}
-              onClick={() => setAllCandidatesChecked(true)}
-              style={{
-                fontSize: 12,
-                padding: "5px 8px",
-                borderRadius: 10,
-                border: "1px solid var(--border-subtle)",
-                background: "rgba(255,255,255,0.02)",
-                color: "var(--text)",
-                cursor:
-                  !importCandidates || importCandidates.length === 0
-                    ? "not-allowed"
-                    : "pointer",
-                opacity:
-                  !importCandidates || importCandidates.length === 0 ? 0.5 : 0.8,
-              }}
-            >
-              {t.importSelectAll || "全選"}
-            </button>
-
-            <button
-              type="button"
-              disabled={!importCandidates || importCandidates.length === 0}
-              onClick={() => setAllCandidatesChecked(false)}
-              style={{
-                fontSize: 12,
-                padding: "5px 8px",
-                borderRadius: 10,
-                border: "1px solid var(--border-subtle)",
-                background: "rgba(255,255,255,0.02)",
-                color: "var(--text)",
-                cursor:
-                  !importCandidates || importCandidates.length === 0
-                    ? "not-allowed"
-                    : "pointer",
-                opacity:
-                  !importCandidates || importCandidates.length === 0 ? 0.5 : 0.8,
-              }}
-            >
-              {t.importSelectNone || "全不選"}
-            </button>
-          </div>
-        </div>
-
-        {(!importCandidates || importCandidates.length === 0) && (
-          <div style={{ fontSize: 12, opacity: 0.65, padding: "6px 2px" }}>
-            {t.importEmptyPreviewHint || "請先點「生成」產生候選項目"}
-          </div>
-        )}
-
-        {Array.isArray(importCandidates) && importCandidates.length > 0 && (
-          <div style={{ border: "1px solid var(--border-subtle)", display: "flex", flexDirection: "column", gap: 6 }}>
-            {importCandidates.map((c) => {
-              if (!c) return null;
-              return (
-                <label
-                  key={c.id}
-                  style={{
-                    display: "flex",
-                    alignItems: "flex-start",
-                    gap: 8,
-                    padding: "6px 6px",
-                    borderRadius: 10,
-                    border: isDarkTheme ? "1px solid var(--border-subtle)" : "1px solid var(--border-subtle)",
-                    background: "rgba(255,255,255,0.02)",
-                    cursor: "pointer",
-                  }}
-                >
-                  <input
-                    type="checkbox"
-                    checked={!!c.checked}
-                    onChange={(e) => toggleCandidateChecked(c.id, e.target.checked)}
-                    style={{ marginTop: 2 }}
-                  />
-                  <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                    <div style={{ fontSize: 13, opacity: 0.92 }}>{c.textDe}</div>
-                  </div>
-                </label>
-              );
-            })}
-          </div>
-        )}
-      </div>
-
-      {/* D. 匯入目的地（Target） */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: 10,
-          border: isDarkTheme ? "1px solid var(--border-subtle)" : "1px solid var(--border-subtle)",
-          background: isDarkTheme ? "rgba(255,255,255,0.03)" : "var(--card-bg)",
-          borderRadius: 14,
-          padding: 10,
-          marginBottom: 12,
-        }}
-      >
-        <div style={{ fontSize: 12, opacity: 0.8 }}>
-          {t.importTargetLabel || "匯入到學習本"}
-        </div>
-
-        <select
-          value={importTargetCategoryId || ""}
-          onChange={(e) => setImportTargetCategoryId(e.target.value || "")}
-          disabled={!!favoriteCategoriesLoading || isSavingStrict === true || !hasFavoriteCategories}
-          style={{
-            fontSize: 12,
-            padding: "8px 10px",
-            borderRadius: 10,
-            border: "1px solid var(--border-subtle)",
-            background: "rgba(255,255,255,0.04)",
-            color: "var(--text)",
-            outline: "none",
-            minWidth: 220,
-            appearance: "none",
-          }}
-        >
-          <option value="">{t.importTargetPlaceholder || "—"}</option>
-          {!favoriteCategoriesLoading &&
-            hasFavoriteCategories &&
-            (favoriteCategories || []).map((c) => {
-              const id =
-                c && (c.id ?? null) !== null ? String(c.id) : "";
-              const name = c && c.name ? String(c.name) : "";
-              return (
-                <option key={id || name} value={id}>
-                  {name || "—"}
-                </option>
-              );
-            })}
-        </select>
-      </div>
-
-      {/* E. Footer（Actions） */}
-      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-        <button
-          type="button"
-          onClick={() => setIsImportOpen(false)}
-          style={{
-            fontSize: 12,
-            padding: "7px 10px",
-            borderRadius: 10,
-            border: isDarkTheme
-              ? "1px solid var(--border-subtle)"
-              : "1px solid var(--border-subtle)",
-            background: isDarkTheme ? "rgba(255,255,255,0.04)" : "var(--card-bg)",
-            color: "var(--text)",
-            cursor: "pointer",
-            opacity: 0.85,
-          }}
-        >
-          {t.importCancelButton || "取消"}
-        </button>
-
-        <button
-          type="button"
-          disabled={isImportCommitDisabled}
-          onClick={async () => {
-            if (isImportCommitDisabled) return;
-            await handleImportCommit();
-          }}
-          style={{
-            fontSize: 12,
-            padding: "7px 10px",
-            borderRadius: 10,
-            border: isImportCommitDisabled
-              ? (isDarkTheme
-                  ? "1px solid var(--border-subtle)"
-                  : "1px solid var(--border-subtle)")
-              : `1px solid ${ACCENT_ORANGE}`,
-            background: isImportCommitDisabled
-              ? (isDarkTheme ? "rgba(255,255,255,0.04)" : "var(--card-bg)")
-              : ACCENT_ORANGE,
-            color: isImportCommitDisabled ? "inherit" : "var(--card-bg)",
-            cursor: isImportCommitDisabled ? "not-allowed" : "pointer",
-            opacity: isImportCommitDisabled ? 0.55 : 0.95,
-          }}
-        >
-          {t.importCommitButton || "匯入"}
-        </button>
-      </div>
     </div>
   </div>
 )}
@@ -1993,6 +1748,7 @@ async function handleImportCommit() {
         canEdit={canEdit}
         authUserId={authUserId}
         t={t}
+        uiLang={uiLang}
       />
 
       {/* =========================
@@ -2015,11 +1771,5 @@ async function handleImportCommit() {
   );
 }
 
-/**
- * ============================================================
- * Padding for "line count should not be less" requirement
- * - 保留：避免你對行數下降敏感（這段不影響執行）
- * ============================================================
- */
   // frontend/src/features/library/WordLibraryPanel.jsx
-  // (end)
+  

@@ -2,6 +2,26 @@
 // backend/src/routes/dictionaryRoute.js
 const express = require("express");
 const router = express.Router();
+
+// ✅ Normalize UI language (accept UI labels like "English/Deutsch/繁體中文")
+function normalizeUiLang(x) {
+  const raw = String(x || "").trim();
+  if (!raw) return "en";
+  const low = raw.toLowerCase();
+  if (low === "english") return "en";
+  if (low === "german" || low === "deutsch") return "de";
+  if (low === "arabic" || raw === "العربية") return "ar";
+  if (low === "traditional chinese" || raw.includes("繁體") || raw.includes("繁体")) return "zh-TW";
+  if (low === "simplified chinese" || raw.includes("简体")) return "zh-CN";
+  if (low.startsWith("zh-cn")) return "zh-CN";
+  if (low.startsWith("zh")) return "zh-TW";
+  if (low.startsWith("en")) return "en";
+  if (low.startsWith("de")) return "de";
+  if (low.startsWith("ar")) return "ar";
+  return low.split("-")[0] || "en";
+}
+
+
 const jwt = require("jsonwebtoken");
 
 // =========================
@@ -43,16 +63,23 @@ const {
 const { logUsage, logLLMUsage } = require("../utils/usageLogger");
 
 
-const { commitQueryCountSafe,
-  commitLookupCountSafe} = require("../utils/usageIO");
-
+const {
+  commitQueryCountSafe,
+  commitLookupCountSafe,
+  // Phase 3: per-feature counting + limits
+  commitConversationCountSafe,
+  commitExamplesCountSafe,
+  getDailyFeatureCountByUserId,
+  getAnonDailyLimit,
+} = require("../utils/usageIO");
 // ======================================
 // ✅ Anonymous daily query limit
 // - Enforced server-side (hard limit)
 // - Identity: logged-in userId OR anonId from header x-visit-id
 // - Limit: 10 / day
 // ======================================
-const ANON_DAILY_QUERY_LIMIT = 10;
+// NOTE: limit is configurable via env/DB (see usageIO.getAnonDailyLimit)
+
 
 function __isUuidLike(v) {
   try {
@@ -79,6 +106,27 @@ function __getAnonIdFromReq(req) {
   } catch {
     return "";
   }
+}
+
+
+async function __getAnonDailyLimitForFeature(feature) {
+  try {
+    return await getAnonDailyLimit({ feature });
+  } catch {
+    return 10;
+  }
+}
+
+async function __checkAnonDailyLimit({ req, feature } = {}) {
+  const anonId = __getAnonIdFromReq(req);
+  const userId = __isUuidLike(anonId) ? anonId : "";
+  if (!userId) return { blocked: false, userId: "" };
+
+  const limit = await __getAnonDailyLimitForFeature(feature);
+  const count = await getDailyFeatureCountByUserId({ userId, feature });
+
+  if (count >= limit) return { blocked: true, userId, count, limit };
+  return { blocked: false, userId, count, limit };
 }
 
 async function __getDailyQueryCountByUserId({ userId }) {
@@ -266,6 +314,9 @@ router.post("/lookup", async (req, res) => {
     const {
       word,
       explainLang,
+
+      // ✅ Pronomen meaning hint (optional)
+      headwordHintKey,
       uiLang,
       useCache,
       enableMultiSense,
@@ -283,7 +334,8 @@ router.post("/lookup", async (req, res) => {
     const anonUsageUserId = !authUser?.id && __isUuidLike(anonId) ? anonId : "";
     if (!authUser?.id) {
       const todayCount = await __getDailyQueryCountByUserId({ userId: anonUsageUserId });
-      if (todayCount >= ANON_DAILY_QUERY_LIMIT) {
+      const anonLimit = await __getAnonDailyLimitForFeature("query");
+      if (todayCount >= anonLimit) {
         return res.status(429).json({ error: "ANON_DAILY_LIMIT_REACHED" });
       }
     }
@@ -291,6 +343,9 @@ router.post("/lookup", async (req, res) => {
     const result = await lookupWord({
       word,
       explainLang,
+
+      // ✅ Pronomen meaning hint (optional)
+      headwordHintKey,
       uiLang,
       useCache,
       enableMultiSense,
@@ -364,6 +419,9 @@ router.post("/examples", async (req, res) => {
       senseIndex,
       explainLang,
 
+      // ✅ Pronomen meaning hint (optional)
+      headwordHintKey,
+
       definitionDe,
       definition,
 
@@ -371,6 +429,12 @@ router.post("/examples", async (req, res) => {
       definitionLangList: bodyDefinitionLangList,
 
       options,
+
+      // ✅ Artikel control（可選）：由前端格表點選傳入
+      articleCase,
+      articleGender,
+      articleType,
+      articleNumber,
 
       // ✅ Phase 2-5：多重參考點（可選；向後相容）
       // - multiRef: 是否啟用多重參考
@@ -381,6 +445,13 @@ router.post("/examples", async (req, res) => {
     } = req.body;
 
     const authUser = tryGetAuthUser(req);
+
+    // Phase 3: anonymous daily limit (examples) + unified counter
+    const __anonExamples = !authUser ? await __checkAnonDailyLimit({ req, feature: "examples" }) : null;
+    if (__anonExamples?.blocked) {
+      return res.status(429).json({ error: "ANON_DAILY_EXAMPLES_LIMIT_REACHED" });
+    }
+    const __usageUserId = authUser?.id || __anonExamples?.userId || "";
 
     // ======== 正規化成陣列 ========
     const definitionDeList =
@@ -421,7 +492,14 @@ router.post("/examples", async (req, res) => {
       gender,
       senseIndex,
       explainLang,
+
+      // ✅ Pronomen meaning hint (optional)
+      headwordHintKey,
       options,
+      articleCase,
+      articleGender,
+      articleType,
+      articleNumber,
       definitionDeList,
       definitionLangList,
 
@@ -446,6 +524,7 @@ router.post("/examples", async (req, res) => {
           ? rawResult.senseIndex
           : senseIndex || 0,
       options: rawResult.options || options || {},
+      ...(rawResult && rawResult.debugArticleControl ? { debugArticleControl: rawResult.debugArticleControl } : {}),
       examples: [],
       exampleTranslation: "",
       // ✅ Phase 2：可觀測欄位（向後相容）
@@ -532,6 +611,9 @@ router.post("/examples", async (req, res) => {
           gender,
           senseIndex,
           explainLang,
+
+      // ✅ Pronomen meaning hint (optional)
+      headwordHintKey,
           options,
           definitionDeList,
           definitionLangList,
@@ -574,6 +656,11 @@ router.post("/examples", async (req, res) => {
 
     const elapsedMs = Date.now() - startedAt;
 
+
+    // Phase 3: commit examples count (separate from query_count)
+    if (__usageUserId) {
+      await commitExamplesCountSafe({ userId: __usageUserId, inc: 1 });
+    }
     res.json({
       ...cleaned,
       _debug: {
@@ -605,6 +692,9 @@ router.post("/conversation", async (req, res) => {
       senseIndex,
 
       explainLang,
+
+      // ✅ Pronomen meaning hint (optional)
+      headwordHintKey,
       uiLang,
 
       // 對話主題/角色/程度
@@ -615,9 +705,15 @@ router.post("/conversation", async (req, res) => {
 
     const authUser = tryGetAuthUser(req);
 
-    // ✅ explainLang 以新欄位為主；若只送 uiLang 也可相容
-    const finalExplainLang = explainLang || uiLang;
+    // Phase 3: anonymous daily limit (conversation) + unified counter
+    const __anonConversation = !authUser ? await __checkAnonDailyLimit({ req, feature: "conversation" }) : null;
+    if (__anonConversation?.blocked) {
+      return res.status(429).json({ error: "ANON_DAILY_CONVERSATION_LIMIT_REACHED" });
+    }
+    const __usageUserIdConv = authUser?.id || __anonConversation?.userId || "";
 
+    // ✅ explainLang 以新欄位為主；若只送 uiLang 也可相容
+    const finalExplainLang = normalizeUiLang(explainLang || uiLang);
     const result = await generateConversation({
       // ✅ B：例句作為對話基礎句（後端必須吃到）
       sentence: typeof sentence === "string" ? sentence : "",
@@ -669,6 +765,11 @@ router.post("/conversation", async (req, res) => {
       console.warn("[dictionaryRoute] logUsage conversation failed:", e);
     }
 
+
+    // Phase 3: commit conversation count (separate from query_count)
+    if (__usageUserIdConv) {
+      await commitConversationCountSafe({ userId: __usageUserIdConv, inc: 1 });
+    }
     res.json(result);
   } catch (err) {
     console.error("[dictionaryRoute] /conversation error:", err);

@@ -33,10 +33,11 @@ const uiText = {
   // 繁體中文 zh-TW
   // ----------------------------
   "zh-TW": {
-    appName: "LanguageApp",
+    appName: "soLang",
     searchPlaceholder: "輸入單字或句子…",
     searchButton: "查詢",
     noResultText: "請輸入上方欄位並按下 Analyze 開始查詢",
+    loadingText: "正在分析中，請稍候…",
     signInWithGoogle: "使用 Google 登入",
     signOut: "登出",
     authTesting: "測試 Auth",
@@ -51,11 +52,61 @@ const uiText = {
     layout: {
       termsOfService: "服務條款",
       mutterspracheLabel: "母語：",
+      planLabel: "方案：",
+      upgradeMonthly: "月繳升級",
+      upgradeYearly: "年繳升級",
+      upgradeLoginRequired: "請先登入再升級",
+      checkoutUrlFailed: "取得付款連結失敗，請稍後再試",
+      checkoutUrlMissing: "取得付款連結失敗（無 URL）",
     },
 
     // ★ Auth（新增）
     auth: {
       logout: "登出",
+    },
+
+
+    loginPage: {
+      titles: { signIn: "Email 登入", signUp: "Email 註冊", forgot: "忘記密碼" },
+      tabs: { signIn: "登入", signUp: "註冊", forgot: "忘記密碼" },
+      labels: {
+        email: "Email",
+        password: "密碼",
+        passwordConfirm: "確認密碼",
+        nicknameOptional: "暱稱（選填）",
+        orEmail: "或使用 Email",
+        redirect: "回跳：",
+        unknownOrigin: "（未知 origin）",
+      },
+      placeholders: {
+        email: "name@example.com",
+        passwordSignUp: "至少 6 碼",
+        passwordConfirm: "再輸入一次密碼",
+        nickname: "顯示在右上角，例如：Barbie",
+      },
+      buttons: {
+        googleSignIn: "使用 Google 登入",
+        signIn: "登入",
+        signingIn: "登入中…",
+        signUp: "註冊並寄驗證信",
+        sendReset: "寄重設密碼信",
+        submitting: "送出中…",
+        backHome: "回首頁",
+      },
+      info: {
+        redirectingGoogle: "正在跳轉至 Google 登入…",
+        signInOk: "登入成功，正在回到首頁…",
+        signUpSent: "已送出註冊，請到信箱完成驗證（驗證後會回到此站）",
+        resetSent: "已寄出重設密碼信，請到信箱點連結回到本站設定新密碼",
+      },
+      errors: {
+        emailRequired: "請輸入 Email",
+        emailInvalid: "Email 格式看起來不正確",
+        passwordRequired: "請輸入密碼",
+        passwordTooShort: "密碼至少 6 碼",
+        passwordConfirmRequired: "請再輸入一次密碼",
+        passwordMismatch: "兩次密碼不一致",
+      },
     },
 
     // ★ 使用量顯示（新增）
@@ -64,6 +115,88 @@ const uiText = {
       month: "本月",
       query: "查詢",
       voice: "語音",
+    },
+
+    alerts: {
+      anonDailyLimit: "如果要查詢更多，請註冊會員",
+      // ✅ Generic quota/usage limit (covers anon/free/paid/)
+      // - Used by App.jsx listener for "langapp:quotaLimit"
+      quotaParts: {
+        tier: {
+          anon: "未登入",
+          free: "免費",
+          paid: "付費",
+          premium: "Premium",
+          unknown: "方案",
+        },
+        window: {
+          daily: "今日",
+          monthly: "本月",
+          unknown: "期間",
+        },
+        metric: {
+          query: "查詢",
+          analyze_new: "分析",
+          examples: "例句產生",
+          conversation: "對話產生",
+          asr_seconds: "錄音秒數",
+          pron_tips: "發音分析",
+          ai_recs: "AI 建議字",
+          unknown: "功能",
+        },
+        // message fragments
+        sep: "方案：",
+        reached: "已達使用上限。",
+        resetAtPrefix: "\n下次補額時間：",
+        generic: "已達使用上限。",
+      },
+    },
+
+    // ✅ Section titles (ResultPanel)
+    sections: {
+      grammarCardTitle: "文法說明",
+    },
+
+
+    // ★ SentenceCard（新增：SentenceCard hover tooltip / button labels）
+    sentenceCard: {
+      speakTitle: "播放整句",
+      moreLabel: "展開更多",
+      wordTitle: "查看字卡",
+      // learning mode
+      sentenceCoreTitle: "這句最值得學的是",
+      extendExampleTitle: "延伸例句",
+      // icon tooltips
+      conversationPracticeTitle: "對話練習",
+      pronunciationPracticeTitle: "發音練習",
+      // conversation toggle tooltip (optional)
+      conversationToggleTooltipOpen: "隱藏連續對話",
+      conversationToggleTooltipClosed: "產生連續對話",
+      pronunciationTooltip: "跟讀錄音",
+      // conversation nav (SentenceCard inline)
+      conversationPrevLabel: "上一句",
+      conversationNextLabel: "下一句",
+    },
+
+
+    // ★ Sentence（SentenceCard strict i18n alias；SentenceCard.jsx 僅使用 t.sentence.xxx）
+    sentence: {
+      speakTitle: "播放整句",
+      moreLabel: "展開更多",
+      wordTitle: "查看字卡",
+      extendExampleTitle: "延伸例句",
+      conversationPracticeTitle: "對話練習",
+      pronunciationPracticeTitle: "發音練習",
+      conversationPrevLabel: "上一句",
+      conversationNextLabel: "下一句",
+      // recording / analyze messages
+      recordNotSupported: "瀏覽器不支援錄音",
+      recordBuildFail: "錄音檔建立失敗",
+      recordStartFail: "無法啟動錄音（權限或裝置問題）",
+      recordFirst: "請先錄音",
+      analyzeFail: "分析失敗，請重試",
+      // structure label fallback (rare; structure is suppressed in B-mode)
+      structureRoleFallback: "主詞",
     },
 
     wordCard: {
@@ -96,6 +229,62 @@ const uiText = {
       caseDat: "與格 (Dativ)",
       caseGen: "屬格 (Genitiv)",
 
+
+      // ★ 代名詞（NEW）
+      posInfoPronoun: {
+        title: "代名詞變化",
+        personalTitle: "人稱代名詞",
+        possessiveTitleTemplate: "所有格（{stem}）",
+        dash: "—",
+        genderM: "陽（m）",
+        genderF: "陰（f）",
+        genderN: "中（n）",
+        genderPl: "複（pl）",
+        caseN: "N",
+        caseA: "A",
+        caseD: "D",
+        caseG: "G",
+
+        // Special UI controls
+        pillPersonal: "代名詞",
+        pillPossessive: "所有格",
+        sieMenuLabel: "Sie",
+        siePolite: "尊稱",
+        sieShe: "她",
+        sieThey: "他們／她們",
+      },
+      // ★ Artikel（NEW：strict i18n for WordPosInfoArtikel）
+      posInfoArtikel: {
+        title: "冠詞（Artikel）",
+        desc: "標示名詞的「性別 + 格」",
+        expandLabel: "展開",
+        collapseLabel: "收合",
+        typeLabels: { def: "定冠詞", indef: "不定冠詞", generic: "冠詞" },
+        genderLabels: { m: "陽性", f: "陰性", n: "中性", p: "複數" },
+        caseLabels: {
+          N: "主格（主詞）",
+          A: "賓格（受詞）",
+          D: "與格（間接受詞）",
+          G: "屬格（所有/關係）",
+        },
+        learningPointTemplate: "{typeLabel}：{genderLabel}的{caseLabel}。",
+        learningPointGenTemplate: "{typeLabel}：{genderLabel}的{caseLabel}常見搭配「des + 名詞(s/es)」。",
+        miniRules: {
+          N: ["主格多用在句子的主詞位置", "問句：Wer/Was ...? 常對應 Nominativ", "最常見句型：Der Mann ist hier."],
+          A: [
+            "很多動詞的直接受詞用 Akkusativ（例：sehen / kaufen / finden）",
+            "問句：Wen/Was ...? 常對應 Akkusativ",
+            "遇到雙受詞句型：人常 Dativ、物常 Akkusativ（例：Ich gebe dem Mann den Ball）",
+          ],
+          D: ["常見介系詞：mit / nach / bei / zu / von → Dativ", "問句：Wem ...? 常對應 Dativ", "雙受詞句型：給『誰』通常是 Dativ"],
+          G: [
+            "Genitiv 常表示『…的』關係",
+            "常見介系詞：wegen / trotz / während（口語偶爾用 Dativ）",
+            "陽/中性名詞常加 -(e)s（例：des Mannes / des Kindes）",
+          ],
+        },
+        colTitles: { m: "Maskulin", f: "Feminin", n: "Neutrum", p: "Plural" },
+      },
       // ★ 小表格欄位標題（定 / 不定 / 所有格）
       headerDefinite: "定冠詞",
       headerIndefinite: "不定冠詞",
@@ -122,6 +311,7 @@ const uiText = {
       grammarToggleLabel: "調整句型",
       // Sentence Type (used by __t("grammar.sentenceType.*.label"))
       grammar: {
+    loadingText: "正在分析中，請稍候…",
         sentenceType: {
           default: { label: "一般句（陳述）" },
           question_yesno: { label: "問句（是／否）" },
@@ -216,7 +406,13 @@ const uiText = {
         Modalverb: "情態動詞",
         Reflexivpronomen: "反身代名詞",
         Possessivpronomen: "所有格代名詞",
-      },
+      
+        phrase: "片語",
+        grammar: "文法",
+        unknown: "未知",
+        Phrase: "片語",
+        Grammatik: "文法",
+        Unbekannt: "未知",},
     },
 
     // =====================================================
@@ -323,15 +519,21 @@ const uiText = {
     },
     app: {
       topbar: {
+    loadingText: "正在分析中，請稍候…",
         testMode: "測試模式",
         testModeTitle: "進入測試模式",
-        library: "單字庫",
-        libraryTitle: "查看單字庫",
+        // ✅ 2026-02-24：產品用語統一：單字庫 → 學習本
+        library: "學習本",
+        libraryTitle: "查看學習本",
         back: "返回",
         backTitle: "返回查詢頁",
       },
       history: {
         clearThis: "點擊清除該筆紀錄",
+      },
+      learning: {
+        backToLearning: "返回學習瀏覽",
+        continueWithTitle: "繼續學習{title}",
       },
       errors: {
         backendUnavailable: "後端服務目前無法使用，請稍後再試",
@@ -340,10 +542,52 @@ const uiText = {
       },
 
       // ✅ WordLibraryPanel（新增：集中管理）
+
+      // ✅ 未登入點「學習本 / 我的最愛」提示
+      alerts: {
+        loginRequiredLibrary: "請先註冊或登入後才能使用學習本（我的最愛）",
+        // ✅ Anonymous daily limit (legacy)
+        anonDailyLimit: "如果要使用更多次數，請註冊會員。",
+        // ✅ Generic quota/usage limit (covers anon/free/paid/premium)
+        // - Used by App.jsx listener for "langapp:quotaLimit"
+        quotaParts: {
+          tier: {
+            anon: "未登入",
+            free: "免費",
+            paid: "付費",
+            premium: "Premium",
+            unknown: "方案",
+          },
+          window: {
+            daily: "今日",
+            monthly: "本月",
+            unknown: "期間",
+          },
+          metric: {
+            query: "查詢",
+            analyze_new: "分析",
+            examples: "例句產生",
+            conversation: "對話產生",
+            asr_seconds: "錄音秒數",
+            pron_tips: "發音分析",
+            ai_recs: "AI 建議字",
+            unknown: "功能",
+          },
+          // message fragments
+          sep: "方案：",
+          reached: "已達使用上限。",
+          resetAtPrefix: "\n下次補額時間：",
+          generic: "使用量已達上限。",
+        },
+      },
+
+      // ✅ 未登入點「學習本 / 我的最愛」提示（App.jsx 用 app.library.loginRequiredAlert）
+      library: {
+        loginRequiredAlert: "請先註冊或登入後才能使用學習本（我的最愛）",
+      },
       libraryPanel: {
         // ✅ 新增
-        title: "單字庫",
-        subtitle: "只顯示原型（Lemma），不包含變化形",
+        title: "學習本",
         countSuffix: "筆",
 
         // ✅ Task 1：匯入（Import）入口
@@ -393,6 +637,26 @@ const uiText = {
         favoriteCategoryEmpty: "尚無分類",
         favoriteCategoryAll: "全部",
 
+
+        // ✅ FavoriteCategoryManager (manage categories modal)
+        manageCategoriesLabel: "管理分類",
+        addCategoryLabel: "新增分類",
+        closeLabel: "關閉",
+        renameLabel: "改名",
+        moveUpLabel: "上移",
+        moveDownLabel: "下移",
+        importLabel: "匯入",
+        archiveLabel: "封存",
+        archiveConfirmText: "確定封存這個分類？",
+        archiveFailedError: "封存失敗",
+        idInvalidError: "ID 不合法",
+        nameEmptyError: "名稱不可為空",
+        nameDuplicateError: "名稱不可重複",
+        saveFailedError: "儲存失敗",
+        createFailedError: "新增失敗",
+        reorderFailedError: "排序失敗",
+        untitledCategoryLabel: "新分類",
+        noCategoriesText: "—",
         // ✅ Alias keys (for backward compatibility with WordLibraryPanel.jsx; do not delete)
         setSelectLabel: "學習本",
         setSelectTitle: "選擇要學習的內容",
@@ -453,7 +717,8 @@ const uiText = {
   // English
   // ----------------------------
   en: {
-    appName: "LanguageApp",
+    loadingText: "Analyzing, please wait…",
+    appName: "soLang",
     searchPlaceholder: "Enter a word or sentence…",
     searchButton: "Search",
     noResultText: 'Enter a word above and click "Analyze" to start',
@@ -470,10 +735,60 @@ const uiText = {
     layout: {
       termsOfService: "Terms of Service",
       mutterspracheLabel: "Native language:",
+      planLabel: "Plan: ",
+      upgradeMonthly: "Upgrade (monthly)",
+      upgradeYearly: "Upgrade (yearly)",
+      upgradeLoginRequired: "Please sign in to upgrade",
+      checkoutUrlFailed: "Failed to get checkout link. Please try again.",
+      checkoutUrlMissing: "Failed to get checkout link (no URL).",
     },
 
     auth: {
       logout: "Sign out",
+    },
+
+
+    loginPage: {
+      titles: { signIn: "Sign in with Email", signUp: "Sign up with Email", forgot: "Forgot password" },
+      tabs: { signIn: "Sign in", signUp: "Sign up", forgot: "Forgot password" },
+      labels: {
+        email: "Email",
+        password: "Password",
+        passwordConfirm: "Confirm password",
+        nicknameOptional: "Nickname (optional)",
+        orEmail: "or use Email",
+        redirect: "Redirect:",
+        unknownOrigin: "(unknown origin)",
+      },
+      placeholders: {
+        email: "name@example.com",
+        passwordSignUp: "at least 6 chars",
+        passwordConfirm: "type the password again",
+        nickname: "Shown in the top-right, e.g. Barbie",
+      },
+      buttons: {
+        googleSignIn: "Continue with Google",
+        signIn: "Sign in",
+        signingIn: "Signing in…",
+        signUp: "Sign up & send verification email",
+        sendReset: "Send password reset email",
+        submitting: "Submitting…",
+        backHome: "Back to home",
+      },
+      info: {
+        redirectingGoogle: "Redirecting to Google sign-in…",
+        signInOk: "Signed in. Redirecting to home…",
+        signUpSent: "Sign-up submitted. Please verify via email (you will be redirected back here).",
+        resetSent: "Password reset email sent. Open the link to set a new password.",
+      },
+      errors: {
+        emailRequired: "Please enter your email",
+        emailInvalid: "Email format doesn't look right",
+        passwordRequired: "Please enter your password",
+        passwordTooShort: "Password must be at least 6 characters",
+        passwordConfirmRequired: "Please confirm your password",
+        passwordMismatch: "Passwords do not match",
+      },
     },
 
     usage: {
@@ -481,6 +796,45 @@ const uiText = {
       month: "This month",
       query: "Lookup",
       voice: "Voice",
+    },
+
+    alerts: {
+      anonDailyLimit: "To continue using this feature, please sign up.",
+      // ✅ Generic quota/usage limit (covers anon/free/paid/premium)
+      // - Used by App.jsx listener for "langapp:quotaLimit"
+      quotaParts: {
+        tier: {
+          anon: "Not signed in",
+          free: "Free",
+          paid: "Paid",
+          premium: "Premium",
+          unknown: "Plan",
+        },
+        window: {
+          daily: "Today",
+          monthly: "This month",
+          unknown: "Period",
+        },
+        metric: {
+          query: "Lookup",
+          analyze_new: "Analysis",
+          examples: "Example generation",
+          conversation: "Conversation generation",
+          asr_seconds: "Recording seconds",
+          pron_tips: "Pronunciation analysis",
+          ai_recs: "AI word suggestions",
+          unknown: "Feature",
+        },
+        sep: " plan: ",
+        reached: " limit reached.",
+        resetAtPrefix: "\nNext reset: ",
+        generic: "Usage limit reached.",
+      },
+    },
+
+    // ✅ Section titles (ResultPanel)
+    sections: {
+      grammarCardTitle: "Grammar Explanation",
     },
 
     wordCard: {
@@ -511,6 +865,70 @@ const uiText = {
       caseDat: "Dative (Dativ)",
       caseGen: "Genitive (Genitiv)",
 
+
+      // ★ Pronoun (NEW)
+      posInfoPronoun: {
+        title: "Pronoun declension",
+        personalTitle: "Personal pronouns",
+        possessiveTitleTemplate: "Possessive (Possessivartikel: {stem})",
+        dash: "—",
+        genderM: "m",
+        genderF: "f",
+        genderN: "n",
+        genderPl: "pl",
+        caseN: "N",
+        caseA: "A",
+        caseD: "D",
+        caseG: "G",
+
+        // Special UI controls
+        pillPersonal: "Personal",
+        pillPossessive: "Possessive",
+        sieMenuLabel: "Sie",
+        siePolite: "Polite",
+        sieShe: "She",
+        sieThey: "They",
+      },
+      // ★ Artikel（NEW：strict i18n for WordPosInfoArtikel）
+      posInfoArtikel: {
+        title: "Article (Artikel)",
+        desc: "Marks a noun’s “gender + case”",
+        expandLabel: "Expand",
+        collapseLabel: "Collapse",
+        typeLabels: { def: "Definite article", indef: "Indefinite article", generic: "Article" },
+        genderLabels: { m: "masculine", f: "feminine", n: "neuter", p: "plural" },
+        caseLabels: {
+          N: "Nominative (subject)",
+          A: "Accusative (direct object)",
+          D: "Dative (indirect object)",
+          G: "Genitive (possession/relationship)",
+        },
+        learningPointTemplate: "{typeLabel}: {genderLabel} {caseLabel}.",
+        learningPointGenTemplate: "{typeLabel}: {genderLabel} {caseLabel} often uses “des + noun(s/es)”.",
+        miniRules: {
+          N: [
+            "Nominative is commonly used for the subject position",
+            "Question: Wer/Was ...? often maps to Nominative",
+            "Common pattern: Der Mann ist hier.",
+          ],
+          A: [
+            "Many verbs take a direct object in Accusative (e.g., sehen / kaufen / finden)",
+            "Question: Wen/Was ...? often maps to Accusative",
+            "In double-object sentences: person is often Dative, thing is often Accusative (e.g., Ich gebe dem Mann den Ball)",
+          ],
+          D: [
+            "Common prepositions: mit / nach / bei / zu / von → Dative",
+            "Question: Wem ...? often maps to Dative",
+            "In giving patterns, the receiver is usually Dative",
+          ],
+          G: [
+            "Genitive often expresses an “of / ’s” relationship",
+            "Common prepositions: wegen / trotz / während (colloquially sometimes Dative)",
+            "Masculine/neuter nouns often add -(e)s (e.g., des Mannes / des Kindes)",
+          ],
+        },
+        colTitles: { m: "Masculine", f: "Feminine", n: "Neuter", p: "Plural" },
+      },
       headerDefinite: "Definite article",
       headerIndefinite: "Indefinite article",
       headerPossessive: "Possessive",
@@ -532,6 +950,7 @@ const uiText = {
       grammarToggleLabel: "Adjust sentence pattern",
       // Sentence Type (used by __t("grammar.sentenceType.*.label"))
       grammar: {
+    loadingText: "Analyzing, please wait…",
         sentenceType: {
           default: { label: "Statement" },
           question_yesno: { label: "Yes/No question" },
@@ -565,7 +984,7 @@ const uiText = {
         headwordRefHint: "This reference form increases the chance it appears in examples, but it\'s not guaranteed",
         refPlaceholder: "Add reference (noun/verb/grammar)...",
         addRefBtn: "Add",
-        addRefValidating: "檢核中…",
+        addRefValidating: "Validating…",
         confirmBtnLabel: "Confirm",
         confirmBtnTitle: "Confirm",
         confirmBtnAriaLabel: "Confirm",
@@ -576,15 +995,15 @@ const uiText = {
         refStatusMissing: "missing",
         missingRefsHint: "Some references were not used. Please regenerate.",
         // ✅ 建議字（recommendations）
-        recsTitle: "建議字",
+        recsTitle: "Suggestions",
         recs: {
-          sameWord: "同字",
-          synonyms: "同義",
-          antonyms: "反義",
-          related: "相關",
-          wordFamily: "同詞根家族",
-          roots: "同詞根",
-          collocations: "常用搭配",
+          sameWord: "Same word",
+          synonyms: "Synonyms",
+          antonyms: "Antonyms",
+          related: "Related",
+          wordFamily: "Word family",
+          roots: "Roots",
+          collocations: "Collocations",
         },
       },
 
@@ -620,8 +1039,34 @@ const uiText = {
         Modalverb: "Modal Verb",
         Reflexivpronomen: "Reflexive Pronoun",
         Possessivpronomen: "Possessive Pronoun",
-      },
+      
+        phrase: "Phrase",
+        grammar: "Grammar",
+        unknown: "Unknown",
+        Phrase: "Phrase",
+        Grammatik: "Grammar",
+        Unbekannt: "Unknown",},
     },
+
+    sentenceCard: {
+      speakTitle: "Play sentence",
+      moreLabel: "Show more",
+      wordTitle: "Open word card",
+      // learning mode
+      sentenceCoreTitle: "Key learning point",
+      extendExampleTitle: "Extended examples",
+      // icon tooltips
+      conversationPracticeTitle: "Dialogue practice",
+      pronunciationPracticeTitle: "Pronunciation practice",
+      // conversation toggle tooltip (optional)
+      conversationToggleTooltipOpen: "Hide continuous dialogue",
+      conversationToggleTooltipClosed: "Generate continuous dialogue",
+      pronunciationTooltip: "Shadowing practice",
+      // conversation nav (SentenceCard inline)
+      conversationPrevLabel: "Previous",
+      conversationNextLabel: "Next",
+    }
+,
 
     // =====================================================
     // ✅ Adjective（新增：strict i18n for WordPosInfoAdjektiv）
@@ -707,15 +1152,21 @@ const uiText = {
     },
     app: {
       topbar: {
+    loadingText: "Analyzing, please wait…",
         testMode: "Test Mode",
         testModeTitle: "Enter test mode",
-        library: "Word Library",
-        libraryTitle: "Open word library",
+        // ✅ 2026-02-24：Product copy: Word Library → Learning Book
+        library: "Learning Book",
+        libraryTitle: "Open learning book",
         back: "Back",
         backTitle: "Back to search",
       },
       history: {
         clearThis: "Click to clear this record",
+      },
+      learning: {
+        backToLearning: "Back to learning",
+        continueWithTitle: "Continue learning {title}",
       },
       errors: {
         backendUnavailable:
@@ -724,11 +1175,51 @@ const uiText = {
           "Only single words / phrases / idioms are supported (not full sentences).\n\n⚠️ Please remove punctuation (.,!? etc.) and try again.",
       },
 
+      // ✅ Unauthenticated: Library / Favorites requires login
+      // (App.jsx uses app.library.loginRequiredAlert)
+      alerts: {
+        loginRequiredLibrary: "Please sign up or sign in to use the learning set (My Favorites).",
+        // ✅ حدّ الاستخدام اليومي للمستخدم غير المسجّل (للتوافق)
+        anonDailyLimit: "To continue using this feature, please sign up.",
+        // ✅ حدّ الاستخدام العام (يشمل anon/free/paid/premium)
+        // - Used by App.jsx listener for "langapp:quotaLimit"
+        quotaParts: {
+          tier: {
+            anon: "Not signed in",
+            free: "Free",
+            paid: "Paid",
+            premium: "Premium",
+            unknown: "Plan",
+          },
+          window: {
+            daily: "Today",
+            monthly: "This month",
+            unknown: "Period",
+          },
+          metric: {
+            query: "Lookup",
+            analyze_new: "Analysis",
+            examples: "Example generation",
+            conversation: "Conversation generation",
+            asr_seconds: "Recording seconds",
+            pron_tips: "Pronunciation analysis",
+            ai_recs: "AI word suggestions",
+            unknown: "Feature",
+          },
+          sep: "Plan: ",
+          reached: " limit reached.",
+          resetAtPrefix: "\nNext reset: ",
+          generic: "Usage limit reached.",
+        },
+      },
+      library: {
+        loginRequiredAlert: "Please sign up or sign in to use Learning Sets (My Favorites).",
+      },
+
       // ✅ WordLibraryPanel（新增：集中管理）
       libraryPanel: {
         // ✅ 新增
-        title: "Word Library",
-        subtitle: "Only lemmas are shown (no inflections)",
+        title: "Learning Book",
         countSuffix: "items",
 
         // ✅ Task 1：Import entry
@@ -746,7 +1237,7 @@ const uiText = {
         importTypeLabel: "Type",
         importTypeGrammar: "Grammar",
         importTypeVocab: "Vocabulary",
-        importTypePhrases: "Common phrases",
+        importTypePhrases: "Phrases",
         importCountLabel: "Count",
         importTargetLabel: "Import to learning set",
         importGenerateButton: "Generate",
@@ -779,6 +1270,26 @@ const uiText = {
         favoriteCategoryEmpty: "No categories",
         favoriteCategoryAll: "All",
 
+
+        // ✅ FavoriteCategoryManager (manage categories modal)
+        manageCategoriesLabel: "Manage categories",
+        addCategoryLabel: "Add category",
+        closeLabel: "Close",
+        renameLabel: "Rename",
+        moveUpLabel: "Move up",
+        moveDownLabel: "Move down",
+        importLabel: "Import",
+        archiveLabel: "Archive",
+        archiveConfirmText: "Archive this category?",
+        archiveFailedError: "Archive failed",
+        idInvalidError: "Invalid ID",
+        nameEmptyError: "Name cannot be empty",
+        nameDuplicateError: "Name already exists",
+        saveFailedError: "Save failed",
+        createFailedError: "Create failed",
+        reorderFailedError: "Reorder failed",
+        untitledCategoryLabel: "New category",
+        noCategoriesText: "—",
         // ✅ Alias keys (for backward compatibility with WordLibraryPanel.jsx; do not delete)
         setSelectLabel: "Learning set",
         setSelectTitle: "Select what to study",
@@ -840,7 +1351,7 @@ const uiText = {
   // 簡體中文 zh-CN
   // ----------------------------
   "zh-CN": {
-    appName: "LanguageApp",
+    appName: "soLang",
     searchPlaceholder: "输入单字或句子…",
     searchButton: "查询",
     noResultText: "请输入上方栏位并按下 Analyze 开始查询",
@@ -857,10 +1368,60 @@ const uiText = {
     layout: {
       termsOfService: "服务条款",
       mutterspracheLabel: "母语：",
+      planLabel: "方案：",
+      upgradeMonthly: "月缴升级",
+      upgradeYearly: "年缴升级",
+      upgradeLoginRequired: "请先登录再升级",
+      checkoutUrlFailed: "获取付款链接失败，请稍后再试",
+      checkoutUrlMissing: "获取付款链接失败（无 URL）",
     },
 
     auth: {
       logout: "登出",
+    },
+
+
+    loginPage: {
+      titles: { signIn: "Email 登录", signUp: "Email 注册", forgot: "忘记密码" },
+      tabs: { signIn: "登录", signUp: "注册", forgot: "忘记密码" },
+      labels: {
+        email: "Email",
+        password: "密码",
+        passwordConfirm: "确认密码",
+        nicknameOptional: "昵称（选填）",
+        orEmail: "或使用 Email",
+        redirect: "跳转：",
+        unknownOrigin: "（未知 origin）",
+      },
+      placeholders: {
+        email: "name@example.com",
+        passwordSignUp: "至少 6 码",
+        passwordConfirm: "再输入一次密码",
+        nickname: "显示在右上角，例如：Barbie",
+      },
+      buttons: {
+        googleSignIn: "使用 Google 登录",
+        signIn: "登录",
+        signingIn: "登录中…",
+        signUp: "注册并发送验证邮件",
+        sendReset: "发送重置密码邮件",
+        submitting: "提交中…",
+        backHome: "返回首页",
+      },
+      info: {
+        redirectingGoogle: "正在跳转至 Google 登录…",
+        signInOk: "登录成功，正在返回首页…",
+        signUpSent: "已提交注册，请到邮箱完成验证（验证后会回到本站）",
+        resetSent: "已发送重置邮件，请到邮箱点击链接回本站设置新密码",
+      },
+      errors: {
+        emailRequired: "请输入 Email",
+        emailInvalid: "Email 格式似乎不正确",
+        passwordRequired: "请输入密码",
+        passwordTooShort: "密码至少 6 码",
+        passwordConfirmRequired: "请再输入一次密码",
+        passwordMismatch: "两次密码不一致",
+      },
     },
 
     usage: {
@@ -868,6 +1429,40 @@ const uiText = {
       month: "本月",
       query: "查询",
       voice: "语音",
+    },
+
+    alerts: {
+      anonDailyLimit: "如果要继续使用此功能，请注册会员",
+      // ✅ Generic quota/usage limit (covers anon/free/paid/premium)
+      // - Used by App.jsx listener for "langapp:quotaLimit"
+      quotaParts: {
+        tier: {
+          anon: "未登录",
+          free: "免费",
+          paid: "付费",
+          premium: "高级",
+          unknown: "方案",
+        },
+        window: {
+          daily: "今日",
+          monthly: "本月",
+          unknown: "期间",
+        },
+        metric: {
+          query: "查询",
+          analyze_new: "分析",
+          examples: "例句生成",
+          conversation: "对话生成",
+          asr_seconds: "录音秒数",
+          pron_tips: "发音分析",
+          ai_recs: "AI 建议字",
+          unknown: "功能",
+        },
+        sep: "方案：",
+        reached: "已达使用上限。",
+        resetAtPrefix: "\n下次补额时间：",
+        generic: "已达使用上限。",
+      },
     },
 
     wordCard: {
@@ -896,6 +1491,62 @@ const uiText = {
       caseDat: "与格 (Dativ)",
       caseGen: "属格 (Genitiv)",
 
+
+      // ★ 代名词（NEW）
+      posInfoPronoun: {
+        title: "代名词变格",
+        personalTitle: "人称代名词",
+        possessiveTitleTemplate: "所有格（{stem}）",
+        dash: "—",
+        genderM: "阳（m）",
+        genderF: "阴（f）",
+        genderN: "中（n）",
+        genderPl: "复（pl）",
+        caseN: "N",
+        caseA: "A",
+        caseD: "D",
+        caseG: "G",
+
+        // Special UI controls
+        pillPersonal: "代名词",
+        pillPossessive: "所有格",
+        sieMenuLabel: "Sie",
+        siePolite: "尊称",
+        sieShe: "她",
+        sieThey: "他们／她们",
+      },
+      // ★ Artikel（NEW：strict i18n for WordPosInfoArtikel）
+      posInfoArtikel: {
+        title: "冠词（Artikel）",
+        desc: "标示名词的「性别 + 格」",
+        expandLabel: "展开",
+        collapseLabel: "收起",
+        typeLabels: { def: "定冠词", indef: "不定冠词", generic: "冠词" },
+        genderLabels: { m: "阳性", f: "阴性", n: "中性", p: "复数" },
+        caseLabels: {
+          N: "主格（主语）",
+          A: "宾格（受词）",
+          D: "与格（间接受词）",
+          G: "属格（所有/关系）",
+        },
+        learningPointTemplate: "{typeLabel}：{genderLabel}的{caseLabel}。",
+        learningPointGenTemplate: "{typeLabel}：{genderLabel}的{caseLabel}常见搭配「des + 名词(s/es)」。",
+        miniRules: {
+          N: ["主格多用在句子的主语位置", "问句：Wer/Was ...? 常对应 Nominativ", "常见句型：Der Mann ist hier."],
+          A: [
+            "很多动词的直接受词用 Akkusativ（例：sehen / kaufen / finden）",
+            "问句：Wen/Was ...? 常对应 Akkusativ",
+            "双受词句型：人常 Dativ、物常 Akkusativ（例：Ich gebe dem Mann den Ball）",
+          ],
+          D: ["常见介系词：mit / nach / bei / zu / von → Dativ", "问句：Wem ...? 常对应 Dativ", "双受词句型：给『谁』通常是 Dativ"],
+          G: [
+            "Genitiv 常表示『…的』关系",
+            "常见介系词：wegen / trotz / während（口语偶尔用 Dativ）",
+            "阳/中性名词常加 -(e)s（例：des Mannes / des Kindes）",
+          ],
+        },
+        colTitles: { m: "Maskulin", f: "Feminin", n: "Neutrum", p: "Plural" },
+      },
       headerDefinite: "定冠词",
       headerIndefinite: "不定冠词",
       headerPossessive: "所有格",
@@ -917,6 +1568,7 @@ const uiText = {
       grammarToggleLabel: "调整句型",
       // Sentence Type (used by __t("grammar.sentenceType.*.label"))
       grammar: {
+    loadingText: "正在分析中，请稍候…",
         sentenceType: {
           default: { label: "一般句（陈述）" },
           question_yesno: { label: "问句（是/否）" },
@@ -948,7 +1600,7 @@ const uiText = {
         multiRefLabel: "多重参考",
         refPlaceholder: "新增参考（名词/动词/文法）...",
         addRefBtn: "加入",
-        addRefValidating: "檢核中…",
+        addRefValidating: "校验中…",
         confirmBtnLabel: "确认",
         confirmBtnTitle: "确认",
         confirmBtnAriaLabel: "确认",
@@ -1008,8 +1660,34 @@ const uiText = {
         Modalverb: "情态动词",
         Reflexivpronomen: "反身代词",
         Possessivpronomen: "所有格代词",
-      },
+      
+        phrase: "短语",
+        grammar: "语法",
+        unknown: "未知",
+        Phrase: "短语",
+        Grammatik: "语法",
+        Unbekannt: "未知",},
     },
+
+    sentenceCard: {
+      speakTitle: "播放整句",
+      moreLabel: "展开更多",
+      wordTitle: "查看词卡",
+      // learning mode
+      sentenceCoreTitle: "这句最值得学的是",
+      extendExampleTitle: "延伸例句",
+      // icon tooltips
+      conversationPracticeTitle: "对话练习",
+      pronunciationPracticeTitle: "发音练习",
+      // conversation toggle tooltip (optional)
+      conversationToggleTooltipOpen: "隐藏连续对话",
+      conversationToggleTooltipClosed: "生成连续对话",
+      pronunciationTooltip: "跟读录音",
+      // conversation nav (SentenceCard inline)
+      conversationPrevLabel: "上一句",
+      conversationNextLabel: "下一句",
+    }
+,
 
     // =====================================================
     // ✅ Adjektiv（新增：嚴格多國模式用）
@@ -1103,15 +1781,21 @@ const uiText = {
     },
     app: {
       topbar: {
+    loadingText: "正在分析中，请稍候…",
         testMode: "测试模式",
         testModeTitle: "进入测试模式",
-        library: "单字库",
-        libraryTitle: "查看单字库",
+        // ✅ 2026-02-24：产品用语统一：单字库 → 学习本
+        library: "学习本",
+        libraryTitle: "查看学习本",
         back: "返回",
         backTitle: "返回查询页",
       },
       history: {
         clearThis: "点击清除该条记录",
+      },
+      learning: {
+        backToLearning: "返回学习浏览",
+        continueWithTitle: "继续学习{title}",
       },
       errors: {
         backendUnavailable: "后端服务暂时无法使用，请稍后再试",
@@ -1120,10 +1804,19 @@ const uiText = {
       },
 
       // ✅ WordLibraryPanel（新增：集中管理）
+
+      // ✅ 未登入点「学习本 / 我的最爱」提示
+      alerts: {
+        loginRequiredLibrary: "请先注册或登录后才能使用学习本（我的最爱）",
+      },
+
+      // ✅ 未登入点「学习本 / 我的最爱」提示（App.jsx 用 app.library.loginRequiredAlert）
+      library: {
+        loginRequiredAlert: "请先注册或登录后才能使用学习本（我的最爱）",
+      },
       libraryPanel: {
         // ✅ 新增
-        title: "单字库",
-        subtitle: "只显示原型（Lemma），不包含变位/变化形",
+        title: "学习本",
         countSuffix: "条",
 
         // ✅ Task 1：导入（Import）入口
@@ -1173,6 +1866,26 @@ const uiText = {
         favoriteCategoryEmpty: "暂无分类",
         favoriteCategoryAll: "全部",
 
+
+        // ✅ FavoriteCategoryManager (管理分类弹窗)
+        manageCategoriesLabel: "管理分类",
+        addCategoryLabel: "新增分类",
+        closeLabel: "关闭",
+        renameLabel: "改名",
+        moveUpLabel: "上移",
+        moveDownLabel: "下移",
+        importLabel: "导入",
+        archiveLabel: "封存",
+        archiveConfirmText: "确定封存这个分类？",
+        archiveFailedError: "封存失败",
+        idInvalidError: "ID 不合法",
+        nameEmptyError: "名称不可为空",
+        nameDuplicateError: "名称不可重复",
+        saveFailedError: "保存失败",
+        createFailedError: "新增失败",
+        reorderFailedError: "排序失败",
+        untitledCategoryLabel: "新分类",
+        noCategoriesText: "—",
       // ✅ Alias keys (for backward compatibility with WordLibraryPanel.jsx; do not delete)
       setSelectLabel: "学习本",
       setSelectTitle: "选择要学习的内容",
@@ -1233,7 +1946,8 @@ const uiText = {
   // Deutsch de
   // ----------------------------
   de: {
-    appName: "LanguageApp",
+    loadingText: "Wird analysiert, bitte warten…",
+    appName: "soLang",
     searchPlaceholder: "Wort oder Satz eingeben…",
     searchButton: "Suchen",
     noResultText: 'Oben Text eingeben und auf "Analyze" klicken',
@@ -1250,10 +1964,60 @@ const uiText = {
     layout: {
       termsOfService: "Nutzungsbedingungen",
       mutterspracheLabel: "Muttersprache:",
+      planLabel: "Plan: ",
+      upgradeMonthly: "Upgrade (monatlich)",
+      upgradeYearly: "Upgrade (jährlich)",
+      upgradeLoginRequired: "Bitte melden Sie sich an, um ein Upgrade durchzuführen",
+      checkoutUrlFailed: "Checkout-Link konnte nicht abgerufen werden. Bitte versuchen Sie es später erneut.",
+      checkoutUrlMissing: "Checkout-Link konnte nicht abgerufen werden (keine URL).",
     },
 
     auth: {
       logout: "Abmelden",
+    },
+
+
+    loginPage: {
+      titles: { signIn: "Mit E‑Mail anmelden", signUp: "Mit E‑Mail registrieren", forgot: "Passwort vergessen" },
+      tabs: { signIn: "Anmelden", signUp: "Registrieren", forgot: "Passwort vergessen" },
+      labels: {
+        email: "E‑Mail",
+        password: "Passwort",
+        passwordConfirm: "Passwort bestätigen",
+        nicknameOptional: "Nickname (optional)",
+        orEmail: "oder E‑Mail nutzen",
+        redirect: "Weiterleitung:",
+        unknownOrigin: "(unbekannte Origin)",
+      },
+      placeholders: {
+        email: "name@example.com",
+        passwordSignUp: "mind. 6 Zeichen",
+        passwordConfirm: "Passwort erneut eingeben",
+        nickname: "Wird oben rechts angezeigt, z.B. Barbie",
+      },
+      buttons: {
+        googleSignIn: "Mit Google fortfahren",
+        signIn: "Anmelden",
+        signingIn: "Anmeldung…",
+        signUp: "Registrieren & Bestätigungs‑E‑Mail senden",
+        sendReset: "Passwort‑Reset senden",
+        submitting: "Senden…",
+        backHome: "Zur Startseite",
+      },
+      info: {
+        redirectingGoogle: "Weiterleitung zu Google‑Login…",
+        signInOk: "Angemeldet. Weiterleitung zur Startseite…",
+        signUpSent: "Registrierung gesendet. Bitte per E‑Mail bestätigen (danach zurück zur Seite).",
+        resetSent: "Reset‑E‑Mail gesendet. Link öffnen, um ein neues Passwort zu setzen.",
+      },
+      errors: {
+        emailRequired: "Bitte E‑Mail eingeben",
+        emailInvalid: "E‑Mail‑Format scheint nicht korrekt zu sein",
+        passwordRequired: "Bitte Passwort eingeben",
+        passwordTooShort: "Passwort muss mind. 6 Zeichen haben",
+        passwordConfirmRequired: "Bitte Passwort bestätigen",
+        passwordMismatch: "Passwörter stimmen nicht überein",
+      },
     },
 
     usage: {
@@ -1261,6 +2025,53 @@ const uiText = {
       month: "Diesen Monat",
       query: "Abfrage",
       voice: "Stimme",
+    },
+
+    // ✅ Section titles (ResultPanel)
+    sections: {
+      grammarCardTitle: "Grammatik-Erklärung",
+    },
+
+
+    // ★ SentenceCard（新增：SentenceCard hover tooltip / button labels）
+    sentenceCard: {
+      speakTitle: "Satz abspielen",
+      moreLabel: "Mehr anzeigen",
+      wordTitle: "Wortkarte anzeigen",
+      // learning mode
+      sentenceCoreTitle: "Wichtigster Lernpunkt",
+      extendExampleTitle: "Zusatzbeispiel",
+      // icon tooltips
+      conversationPracticeTitle: "Konversationsübung",
+      pronunciationPracticeTitle: "Ausspracheübung",
+      // conversation toggle tooltip (optional)
+      conversationToggleTooltipOpen: "Fortlaufenden Dialog ausblenden",
+      conversationToggleTooltipClosed: "Fortlaufenden Dialog erzeugen",
+      pronunciationTooltip: "Nachsprechen aufnehmen",
+      // conversation nav (SentenceCard inline)
+      conversationPrevLabel: "Vorheriger Satz",
+      conversationNextLabel: "Nächster Satz",
+    },
+
+
+    // ★ Sentence（SentenceCard strict i18n alias；SentenceCard.jsx uses t.sentence.xxx only）
+    sentence: {
+      speakTitle: "Satz abspielen",
+      moreLabel: "Mehr anzeigen",
+      wordTitle: "Wortkarte anzeigen",
+      extendExampleTitle: "Zusatzbeispiel",
+      conversationPracticeTitle: "Konversationsübung",
+      pronunciationPracticeTitle: "Ausspracheübung",
+      conversationPrevLabel: "Vorheriger Satz",
+      conversationNextLabel: "Nächster Satz",
+      // recording / analyze messages
+      recordNotSupported: "Browser unterstützt keine Aufnahme",
+      recordBuildFail: "Aufnahmedatei konnte nicht erstellt werden",
+      recordStartFail: "Aufnahme konnte nicht gestartet werden (Berechtigung oder Gerät)",
+      recordFirst: "Bitte zuerst aufnehmen",
+      analyzeFail: "Analyse fehlgeschlagen, bitte erneut versuchen",
+      // structure label fallback (rare; structure is suppressed in B-mode)
+      structureRoleFallback: "Subjekt",
     },
 
     wordCard: {
@@ -1291,6 +2102,70 @@ const uiText = {
       caseDat: "Dativ",
       caseGen: "Genitiv",
 
+
+      // ★ Pronomen (NEW)
+      posInfoPronoun: {
+        title: "Pronomen-Deklination",
+        personalTitle: "Personalpronomen",
+        possessiveTitleTemplate: "Possessivartikel ({stem})",
+        dash: "—",
+        genderM: "m",
+        genderF: "f",
+        genderN: "n",
+        genderPl: "pl",
+        caseN: "N",
+        caseA: "A",
+        caseD: "D",
+        caseG: "G",
+
+        // Special UI controls
+        pillPersonal: "Personal",
+        pillPossessive: "Possessiv",
+        sieMenuLabel: "Sie",
+        siePolite: "Höflich",
+        sieShe: "sie (sie)",
+        sieThey: "sie (Plural)",
+      },
+      // ★ Artikel（NEW：strict i18n for WordPosInfoArtikel）
+      posInfoArtikel: {
+        title: "Artikel",
+        desc: "Markiert das Nomen nach „Genus + Kasus“",
+        expandLabel: "Ausklappen",
+        collapseLabel: "Einklappen",
+        typeLabels: { def: "Bestimmter Artikel", indef: "Unbestimmter Artikel", generic: "Artikel" },
+        genderLabels: { m: "Maskulin", f: "Feminin", n: "Neutrum", p: "Plural" },
+        caseLabels: {
+          N: "Nominativ (Subjekt)",
+          A: "Akkusativ (Objekt)",
+          D: "Dativ (indirektes Objekt)",
+          G: "Genitiv (Besitz/Bezug)",
+        },
+        learningPointTemplate: "{typeLabel}: {genderLabel} {caseLabel}.",
+        learningPointGenTemplate: "{typeLabel}: {genderLabel} {caseLabel} oft mit „des + Nomen(s/es)“.",
+        miniRules: {
+          N: [
+            "Nominativ steht oft in der Subjektposition",
+            "Frage: Wer/Was ...? passt häufig zum Nominativ",
+            "Häufiges Muster: Der Mann ist hier.",
+          ],
+          A: [
+            "Viele Verben nehmen ein direktes Objekt im Akkusativ (z.B. sehen / kaufen / finden)",
+            "Frage: Wen/Was ...? passt häufig zum Akkusativ",
+            "Bei zwei Objekten: Person oft Dativ, Sache oft Akkusativ (z.B. Ich gebe dem Mann den Ball)",
+          ],
+          D: [
+            "Häufige Präpositionen: mit / nach / bei / zu / von → Dativ",
+            "Frage: Wem ...? passt häufig zum Dativ",
+            "Beim Geben ist der Empfänger meist Dativ",
+          ],
+          G: [
+            "Genitiv drückt oft eine „…-von/…s“ Beziehung aus",
+            "Häufige Präpositionen: wegen / trotz / während (umgangssprachlich manchmal Dativ)",
+            "Maskuline/Neutra oft mit -(e)s (z.B. des Mannes / des Kindes)",
+          ],
+        },
+        colTitles: { m: "Maskulin", f: "Feminin", n: "Neutrum", p: "Plural" },
+      },
       headerDefinite: "Bestimmter Artikel",
       headerIndefinite: "Unbestimmter Artikel",
       headerPossessive: "Possessiv",
@@ -1312,6 +2187,7 @@ const uiText = {
       grammarToggleLabel: "Satzmuster anpassen",
       // Sentence Type (used by __t("grammar.sentenceType.*.label"))
       grammar: {
+    loadingText: "Wird analysiert, bitte warten…",
         sentenceType: {
           default: { label: "Aussagesatz" },
           question_yesno: { label: "Ja/Nein‑Frage" },
@@ -1345,7 +2221,7 @@ const uiText = {
         headwordRefHint: "Diese Referenzform erhöht die Chance, dass sie in Beispielsätzen erscheint, ist aber nicht garantiert",
         refPlaceholder: "Referenz hinzufügen (Nomen/Verb/Grammatik)...",
         addRefBtn: "Hinzufügen",
-        addRefValidating: "檢核中…",
+        addRefValidating: "Wird geprüft…",
         confirmBtnLabel: "Bestätigen",
         confirmBtnTitle: "Bestätigen",
         confirmBtnAriaLabel: "Bestätigen",
@@ -1357,15 +2233,15 @@ const uiText = {
         missingRefsHint:
           "Einige Referenzen wurden nicht verwendet. Bitte neu erzeugen.",
         // ✅ 建議字（recommendations）
-        recsTitle: "建議字",
+        recsTitle: "Vorschläge",
         recs: {
-          sameWord: "同字",
-          synonyms: "同義",
-          antonyms: "反義",
-          related: "相關",
-          wordFamily: "同詞根家族",
-          roots: "同詞根",
-          collocations: "常用搭配",
+          sameWord: "Gleiche Schreibweise",
+          synonyms: "Synonyme",
+          antonyms: "Antonyme",
+          related: "Verwandte Wörter",
+          wordFamily: "Wortfamilie",
+          roots: "Wortstamm",
+          collocations: "Kollokationen",
         },
       },
 
@@ -1401,7 +2277,13 @@ const uiText = {
         Modalverb: "Modalverb",
         Reflexivpronomen: "Reflexivpronomen",
         Possessivpronomen: "Possessivpronomen",
-      },
+      
+        phrase: "Phrase",
+        grammar: "Grammatik",
+        unknown: "Unbekannt",
+        Phrase: "Phrase",
+        Grammatik: "Grammatik",
+        Unbekannt: "Unbekannt",},
     },
 
     // =====================================================
@@ -1496,15 +2378,21 @@ const uiText = {
     },
     app: {
       topbar: {
+    loadingText: "Wird analysiert, bitte warten…",
         testMode: "Testmodus",
         testModeTitle: "Testmodus starten",
-        library: "Wortliste",
-        libraryTitle: "Wortliste öffnen",
+        // ✅ 2026-02-24：Product copy: Wortliste → Lernbuch
+        library: "Lernbuch",
+        libraryTitle: "Lernbuch öffnen",
         back: "Zurück",
         backTitle: "Zur Suche zurückkehren",
       },
       history: {
         clearThis: "Klicken, um diesen Eintrag zu löschen",
+      },
+      learning: {
+        backToLearning: "Zurück zum Lernen",
+        continueWithTitle: "Weiterlernen {title}",
       },
       errors: {
         backendUnavailable:
@@ -1513,11 +2401,19 @@ const uiText = {
           "Aktuell werden nur Wörter / Phrasen / Redewendungen unterstützt (keine Sätze).\n\n⚠️ Bitte ohne Satzzeichen eingeben (.,!? usw.).",
       },
 
+      // ✅ Nicht angemeldet: Lernset / Favoriten erfordert Login
+      // (App.jsx nutzt app.library.loginRequiredAlert)
+      alerts: {
+        loginRequiredLibrary: "Bitte registrieren oder anmelden, um das Lernset (Meine Favoriten) zu verwenden.",
+      },
+      library: {
+        loginRequiredAlert: "Bitte registrieren oder anmelden, um das Lernset (Meine Favoriten) zu verwenden.",
+      },
+
       // ✅ WordLibraryPanel（新增：集中管理）
       libraryPanel: {
         // ✅ 新增
-        title: "Wortliste",
-        subtitle: "Nur Grundformen (Lemma), keine Beugungsformen",
+        title: "Lernbuch",
         countSuffix: "Einträge",
 
         // ✅ Task 1：Import入口
@@ -1568,6 +2464,26 @@ const uiText = {
         favoriteCategoryEmpty: "Keine Kategorien",
         favoriteCategoryAll: "Alle",
 
+
+        // ✅ FavoriteCategoryManager (管理分类弹窗)
+        manageCategoriesLabel: "Kategorien verwalten",
+        addCategoryLabel: "Kategorie hinzufügen",
+        closeLabel: "Schließen",
+        renameLabel: "Umbenennen",
+        moveUpLabel: "Nach oben",
+        moveDownLabel: "Nach unten",
+        importLabel: "Importieren",
+        archiveLabel: "Archivieren",
+        archiveConfirmText: "Diese Kategorie archivieren?",
+        archiveFailedError: "Archivieren fehlgeschlagen",
+        idInvalidError: "Ungültige ID",
+        nameEmptyError: "Name darf nicht leer sein",
+        nameDuplicateError: "Name existiert bereits",
+        saveFailedError: "Speichern fehlgeschlagen",
+        createFailedError: "Erstellen fehlgeschlagen",
+        reorderFailedError: "Sortieren fehlgeschlagen",
+        untitledCategoryLabel: "Neue Kategorie",
+        noCategoriesText: "—",
         // ✅ Alias keys (for backward compatibility with WordLibraryPanel.jsx; do not delete)
         setSelectLabel: "Lernset",
         setSelectTitle: "Wähle, was du lernen möchtest",
@@ -1629,7 +2545,8 @@ const uiText = {
   // العربية ar
   // ----------------------------
   ar: {
-    appName: "LanguageApp",
+    loadingText: "جارٍ التحليل، يرجى الانتظار…",
+    appName: "soLang",
     searchPlaceholder: "أدخل كلمة أو جملة…",
     searchButton: "بحث",
     noResultText: 'أدخل نصًا في الأعلى ثم اضغط على "Analyze" لبدء البحث',
@@ -1646,10 +2563,60 @@ const uiText = {
     layout: {
       termsOfService: "شروط الخدمة",
       mutterspracheLabel: "اللغة الأم:",
+      planLabel: "الخطة: ",
+      upgradeMonthly: "ترقية شهرية",
+      upgradeYearly: "ترقية سنوية",
+      upgradeLoginRequired: "يرجى تسجيل الدخول قبل الترقية",
+      checkoutUrlFailed: "تعذر الحصول على رابط الدفع. يرجى المحاولة لاحقًا.",
+      checkoutUrlMissing: "تعذر الحصول على رابط الدفع (لا توجد URL).",
     },
 
     auth: {
       logout: "تسجيل الخروج",
+    },
+
+
+    loginPage: {
+      titles: { signIn: "تسجيل الدخول بالبريد", signUp: "إنشاء حساب بالبريد", forgot: "نسيت كلمة المرور" },
+      tabs: { signIn: "تسجيل الدخول", signUp: "إنشاء حساب", forgot: "نسيت كلمة المرور" },
+      labels: {
+        email: "البريد الإلكتروني",
+        password: "كلمة المرور",
+        passwordConfirm: "تأكيد كلمة المرور",
+        nicknameOptional: "الاسم المستعار (اختياري)",
+        orEmail: "أو استخدم البريد",
+        redirect: "إعادة التوجيه:",
+        unknownOrigin: "(مصدر غير معروف)",
+      },
+      placeholders: {
+        email: "name@example.com",
+        passwordSignUp: "على الأقل 6 أحرف",
+        passwordConfirm: "أعد إدخال كلمة المرور",
+        nickname: "يظهر أعلى اليمين، مثال: Barbie",
+      },
+      buttons: {
+        googleSignIn: "المتابعة عبر Google",
+        signIn: "تسجيل الدخول",
+        signingIn: "جارٍ تسجيل الدخول…",
+        signUp: "إنشاء حساب وإرسال بريد التحقق",
+        sendReset: "إرسال بريد إعادة التعيين",
+        submitting: "جارٍ الإرسال…",
+        backHome: "العودة للرئيسية",
+      },
+      info: {
+        redirectingGoogle: "جارٍ التحويل إلى Google…",
+        signInOk: "تم تسجيل الدخول. جارٍ العودة للرئيسية…",
+        signUpSent: "تم إرسال الطلب. يرجى التحقق من البريد لإتمام التسجيل.",
+        resetSent: "تم إرسال بريد إعادة التعيين. افتح الرابط لتعيين كلمة مرور جديدة.",
+      },
+      errors: {
+        emailRequired: "يرجى إدخال البريد الإلكتروني",
+        emailInvalid: "صيغة البريد الإلكتروني غير صحيحة",
+        passwordRequired: "يرجى إدخال كلمة المرور",
+        passwordTooShort: "يجب أن تكون كلمة المرور 6 أحرف على الأقل",
+        passwordConfirmRequired: "يرجى تأكيد كلمة المرور",
+        passwordMismatch: "كلمتا المرور غير متطابقتين",
+      },
     },
 
     usage: {
@@ -1657,6 +2624,11 @@ const uiText = {
       month: "هذا الشهر",
       query: "بحث",
       voice: "صوت",
+    },
+
+    // ✅ Section titles (ResultPanel)
+    sections: {
+      grammarCardTitle: "شرح القواعد",
     },
 
     wordCard: {
@@ -1706,6 +2678,7 @@ const uiText = {
       grammarToggleLabel: "ضبط نمط الجملة",
       // Sentence Type (used by __t("grammar.sentenceType.*.label"))
       grammar: {
+    loadingText: "جارٍ التحليل، يرجى الانتظار…",
         sentenceType: {
           default: { label: "جملة خبرية" },
           question_yesno: { label: "سؤال نعم/لا" },
@@ -1739,7 +2712,7 @@ const uiText = {
         headwordRefHint: "هذه الصيغة المرجعية تزيد احتمال ظهورها في أمثلة الجمل، لكنها ليست مضمونة",
         refPlaceholder: "أضف مرجعًا (اسم/فعل/قواعد)...",
         addRefBtn: "إضافة",
-        addRefValidating: "檢核中…",
+        addRefValidating: "جارٍ التحقق…",
         confirmBtnLabel: "تأكيد",
         confirmBtnTitle: "تأكيد",
         confirmBtnAriaLabel: "تأكيد",
@@ -1750,15 +2723,15 @@ const uiText = {
         refStatusMissing: "ناقص",
         missingRefsHint: "لم تُستخدم بعض المراجع. الرجاء إعادة التوليد.",
         // ✅ 建議字（recommendations）
-        recsTitle: "建議字",
+        recsTitle: "اقتراحات",
         recs: {
-          sameWord: "同字",
-          synonyms: "同義",
-          antonyms: "反義",
-          related: "相關",
-          wordFamily: "同詞根家族",
-          roots: "同詞根",
-          collocations: "常用搭配",
+          sameWord: "نفس الكلمة",
+          synonyms: "مرادفات",
+          antonyms: "أضداد",
+          related: "كلمات ذات صلة",
+          wordFamily: "عائلة الكلمات",
+          roots: "الجذر",
+          collocations: "تراكيب شائعة",
         },
       },
 
@@ -1794,8 +2767,34 @@ const uiText = {
         Modalverb: "فعل مساعد",
         Reflexivpronomen: "ضمير انعكاسي",
         Possessivpronomen: "ضمير ملكية",
-      },
+      
+        phrase: "عبارة",
+        grammar: "قواعد",
+        unknown: "غير معروف",
+        Phrase: "عبارة",
+        Grammatik: "قواعد",
+        Unbekannt: "غير معروف",},
     },
+
+    sentenceCard: {
+      speakTitle: "تشغيل الجملة",
+      moreLabel: "عرض المزيد",
+      wordTitle: "عرض بطاقة الكلمة",
+      // learning mode
+      sentenceCoreTitle: "أهم نقطة للتعلّم",
+      extendExampleTitle: "أمثلة إضافية",
+      // icon tooltips
+      conversationPracticeTitle: "تدريب المحادثة",
+      pronunciationPracticeTitle: "تدريب النطق",
+      // conversation toggle tooltip (optional)
+      conversationToggleTooltipOpen: "إخفاء الحوار المتواصل",
+      conversationToggleTooltipClosed: "إنشاء حوار متواصل",
+      pronunciationTooltip: "تدريب الترديد",
+      // conversation nav (SentenceCard inline)
+      conversationPrevLabel: "الجملة السابقة",
+      conversationNextLabel: "الجملة التالية",
+    }
+,
 
     // =====================================================
     // ✅ Adjective / صفة（新增：strict i18n for WordPosInfoAdjektiv）
@@ -1879,15 +2878,21 @@ const uiText = {
     },
     app: {
       topbar: {
+    loadingText: "جارٍ التحليل، يرجى الانتظار…",
         testMode: "وضع الاختبار",
         testModeTitle: "الدخول إلى وضع الاختبار",
-        library: "مكتبة الكلمات",
-        libraryTitle: "فتح مكتبة الكلمات",
+        // ✅ 2026-02-24：Product copy: مكتبة الكلمات → دفتر التعلّم
+        library: "دفتر التعلّم",
+        libraryTitle: "فتح دفتر التعلّم",
         back: "رجوع",
         backTitle: "العودة إلى البحث",
       },
       history: {
         clearThis: "انقر لمسح هذا السجل",
+      },
+      learning: {
+        backToLearning: "العودة إلى التعلّم",
+        continueWithTitle: "متابعة تعلّم {title}",
       },
       errors: {
         backendUnavailable:
@@ -1896,11 +2901,19 @@ const uiText = {
           "حالياً ندعم الكلمات / العبارات / التعابير فقط (ليست جُملاً).\n\n⚠️ الرجاء إزالة علامات الترقيم (.,!? إلخ) ثم المحاولة مرة أخرى.",
       },
 
+      // ✅ غير مسجّل الدخول: يتطلّب "دفتر التعلّم / المفضّلة" تسجيل الدخول
+      // (App.jsx uses app.library.loginRequiredAlert)
+      alerts: {
+        loginRequiredLibrary: "Please sign up or sign in to use the learning set (My Favorites).",
+      },
+      library: {
+        loginRequiredAlert: "يرجى إنشاء حساب أو تسجيل الدخول لاستخدام دفتر التعلّم (المفضّلة).",
+      },
+
       // ✅ WordLibraryPanel（新增：集中管理）
       libraryPanel: {
         // ✅ 新增
-        title: "مكتبة الكلمات",
-        subtitle: "عرض الصيغة الأساسية فقط (Lemma) بدون تصريف",
+        title: "دفتر التعلّم",
         countSuffix: "عنصر",
 
         // ✅ Task 1：استيراد (Import)
@@ -1950,6 +2963,26 @@ const uiText = {
         favoriteCategoryEmpty: "لا توجد فئات",
         favoriteCategoryAll: "الكل",
 
+
+        // ✅ FavoriteCategoryManager (管理分类弹窗)
+        manageCategoriesLabel: "إدارة الفئات",
+        addCategoryLabel: "إضافة فئة",
+        closeLabel: "إغلاق",
+        renameLabel: "إعادة تسمية",
+        moveUpLabel: "تحريك لأعلى",
+        moveDownLabel: "تحريك لأسفل",
+        importLabel: "استيراد",
+        archiveLabel: "أرشفة",
+        archiveConfirmText: "هل تريد أرشفة هذه الفئة؟",
+        archiveFailedError: "فشل الأرشفة",
+        idInvalidError: "معرّف غير صالح",
+        nameEmptyError: "لا يمكن أن يكون الاسم فارغًا",
+        nameDuplicateError: "الاسم موجود بالفعل",
+        saveFailedError: "فشل الحفظ",
+        createFailedError: "فشل الإنشاء",
+        reorderFailedError: "فشل إعادة الترتيب",
+        untitledCategoryLabel: "فئة جديدة",
+        noCategoriesText: "—",
 // ✅ Alias keys (for backward compatibility with WordLibraryPanel.jsx; do not delete)
 setSelectLabel: "مجموعة التعلّم",
 setSelectTitle: "اختر ما تريد تعلمه",
@@ -2002,70 +3035,6 @@ testDisabledTitle: "الاختبار غير متاح بعد.",
       pronTipsOk: "جيد عمومًا—انتبه للإيقاع والربط بين الكلمات.",
     },
   },
-
-  // ----------------------------
-  // English en
-  // ----------------------------
-  "en": {
-    wordCard: {
-      exampleBlock: {
-        // ✅ Recommendations (suggested words)
-        recsTitle: "Suggestions",
-        recs: {
-          sameWord: "Same word",
-          synonyms: "Synonyms",
-          antonyms: "Antonyms",
-          related: "Related",
-          wordFamily: "Word family",
-          roots: "Roots",
-          collocations: "Collocations",
-        },
-      },
-    },
-  },
-
-  // ----------------------------
-  // Deutsch de
-  // ----------------------------
-  "de": {
-    wordCard: {
-      exampleBlock: {
-        // ✅ Empfehlungen (Vorschläge)
-        recsTitle: "Vorschläge",
-        recs: {
-          sameWord: "Gleiche Schreibweise",
-          synonyms: "Synonyme",
-          antonyms: "Antonyme",
-          related: "Verwandte Wörter",
-          wordFamily: "Wortfamilie",
-          roots: "Wortstamm",
-          collocations: "Kollokationen",
-        },
-      },
-    },
-  },
-
-  // ----------------------------
-  // العربية ar
-  // ----------------------------
-  "ar": {
-    wordCard: {
-      exampleBlock: {
-        // ✅ اقتراحات (كلمات مقترحة)
-        recsTitle: "اقتراحات",
-        recs: {
-          sameWord: "نفس الكلمة",
-          synonyms: "مرادفات",
-          antonyms: "أضداد",
-          related: "كلمات ذات صلة",
-          wordFamily: "عائلة الكلمات",
-          roots: "الجذر",
-          collocations: "تراكيب شائعة",
-        },
-      },
-    },
-  },
-
 };
 
 export default uiText;

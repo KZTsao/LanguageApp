@@ -1,5 +1,6 @@
 // frontend/src/features/library/components/FavoriteCategoryManager.jsx
 import React from "react";
+import uiText from "../../../uiText";
 
 /**
  * FavoriteCategoryManager.jsx
@@ -293,6 +294,7 @@ export default function FavoriteCategoryManager({
   isSaving,
   errorText,
   t,
+  uiLang,
 
   // ✅ Task C：權限 gate（未登入不可編輯分類；但不等於 saving）
   // - canEdit：上游可直接傳 boolean
@@ -302,6 +304,55 @@ export default function FavoriteCategoryManager({
 }) {
   // ✅ inject UI-only CSS
   useInjectStyleOnce("fcm-style-v1", FAVORITE_CATEGORY_MANAGER_CSS);
+
+  // ✅ i18n (fallback like WordPosInfo.jsx)
+  let currentLang = "zh-TW";
+  // NOTE: uiLang 可能是 "en-US"/"de-DE"/"zh-Hant-TW" 等；uiText key 多半是 "en"/"de"/"zh-TW"
+  const __rawLang = typeof uiLang === "string" ? uiLang.trim() : "";
+  const __normLangCandidates = (() => {
+    if (!__rawLang) return [];
+    const s = __rawLang.replace("_", "-");
+    const lower = s.toLowerCase();
+    const parts = lower.split("-").filter(Boolean);
+
+    // zh 特例：盡量落到既有 key（zh-TW / zh-CN）
+    if (parts[0] === "zh") {
+      const hasTW = parts.includes("tw");
+      const hasCN = parts.includes("cn");
+      const hasHK = parts.includes("hk");
+      if (hasTW) return ["zh-TW", "zh-tw", "zh"];
+      if (hasHK) return ["zh-HK", "zh-hk", "zh"];
+      if (hasCN) return ["zh-CN", "zh-cn", "zh"];
+      return ["zh", "zh-TW"];
+    }
+
+    const base = parts[0];
+    return [__rawLang, s, lower, base];
+  })();
+
+  for (const cand of __normLangCandidates) {
+    if (cand && uiText?.[cand]) {
+      currentLang = cand;
+      break;
+    }
+  }
+
+  const safeText = uiText[currentLang]?.app?.libraryPanel || uiText[currentLang]?.libraryPanel || {};
+
+  const __getTValue = (key) => {
+    if (!t) return undefined;
+    if (typeof t === "function") return t(key);
+    if (typeof t === "object") return t[key];
+    return undefined;
+  };
+
+  const __ui = (key, fallback) => {
+    const v = __getTValue(key);
+    const vv = v !== undefined && v !== null && v !== "" ? v : safeText[key];
+    if (vv !== undefined && vv !== null && vv !== "") return vv;
+    return fallback;
+  };
+
 
   const list = Array.isArray(categories) ? categories : [];
   const canCreate = typeof onCreate === "function";
@@ -464,11 +515,11 @@ export default function FavoriteCategoryManager({
 
     const nextName = normalizeName(draftName);
     if (!nextName) {
-      setLocalErrorText((t && t.nameEmptyError) || "名稱不可為空");
+      setLocalErrorText(__ui("nameEmptyError", "名稱不可為空"));
       return;
     }
     if (hasDuplicateName(nextName, editingId)) {
-      setLocalErrorText((t && t.nameDuplicateError) || "名稱不可重複");
+      setLocalErrorText(__ui("nameDuplicateError", "名稱不可重複"));
       return;
     }
 
@@ -481,7 +532,7 @@ export default function FavoriteCategoryManager({
 
     const idNum = Number(editingId);
     if (!Number.isFinite(idNum)) {
-      setLocalErrorText((t && t.idInvalidError) || "ID 不合法");
+      setLocalErrorText(__ui("idInvalidError", "ID 不合法"));
       return;
     }
 
@@ -492,7 +543,7 @@ export default function FavoriteCategoryManager({
     }
     // 失敗：保留編輯狀態讓使用者可再改
     setLocalErrorText(
-      (res && res.errorText) || (t && t.saveFailedError) || "儲存失敗"
+      (res && res.errorText) || __ui("saveFailedError", "儲存失敗")
     );
   }
 
@@ -501,7 +552,7 @@ export default function FavoriteCategoryManager({
     if (disabledAll) return;
     if (!canEditEffective) return;
 
-    const baseName = (t && t.untitledCategoryLabel) || "新分類";
+    const baseName = __ui("untitledCategoryLabel", "新分類");
     const name = getUniqueUntitledCategoryName(baseName);
     try {
       console.log(`[categoryUI] create name=${JSON.stringify(name)}`);
@@ -510,7 +561,7 @@ export default function FavoriteCategoryManager({
     const res = await onCreate(name);
     if (!res || !res.ok) {
       setLocalErrorText(
-        (res && res.errorText) || (t && t.createFailedError) || "新增失敗"
+        (res && res.errorText) || __ui("createFailedError", "新增失敗")
       );
       return;
     }
@@ -546,14 +597,14 @@ export default function FavoriteCategoryManager({
       .filter((n) => Number.isFinite(n));
     // 若有非數字 id（理論上 DB-backed 不會），就不送 reorder
     if (ids.length !== arr.length) {
-      setLocalErrorText((t && t.idInvalidError) || "ID 不合法");
+      setLocalErrorText(__ui("idInvalidError", "ID 不合法"));
       return;
     }
 
     const res = await onReorder(ids);
     if (!res || !res.ok) {
       setLocalErrorText(
-        (res && res.errorText) || (t && t.reorderFailedError) || "排序失敗"
+        (res && res.errorText) || __ui("reorderFailedError", "排序失敗")
       );
       return;
     }
@@ -566,12 +617,12 @@ export default function FavoriteCategoryManager({
     if (!canEditEffective) return;
     const idNum = Number(id);
     if (!Number.isFinite(idNum)) {
-      setLocalErrorText((t && t.idInvalidError) || "ID 不合法");
+      setLocalErrorText(__ui("idInvalidError", "ID 不合法"));
       return;
     }
     const ok =
       typeof window !== "undefined"
-        ? window.confirm((t && t.archiveConfirmText) || "確定封存這個分類？")
+        ? window.confirm(__ui("archiveConfirmText", "確定封存這個分類？"))
         : true;
     if (!ok) return;
 
@@ -582,7 +633,7 @@ export default function FavoriteCategoryManager({
     const res = await onArchive(idNum);
     if (!res || !res.ok) {
       setLocalErrorText(
-        (res && res.errorText) || (t && t.archiveFailedError) || "封存失敗"
+        (res && res.errorText) || __ui("archiveFailedError", "封存失敗")
       );
       return;
     }
@@ -595,7 +646,7 @@ export default function FavoriteCategoryManager({
     <div
       role="dialog"
       aria-modal="true"
-      aria-label={(t && t.manageCategoriesLabel) || "管理分類"}
+      aria-label={__ui("manageCategoriesLabel", "管理分類")}
       className="fcm-overlay"
       onMouseDown={(e) => {
         // 點背景關閉（但點卡片內不關閉）
@@ -612,14 +663,14 @@ export default function FavoriteCategoryManager({
             <span aria-hidden="true" className="fcm-titleIcon">
               <SlidersIcon size={18} />
             </span>
-            <span>{(t && t.manageCategoriesLabel) || "管理分類"}</span>
+            <span>{__ui("manageCategoriesLabel", "管理分類")}</span>
           </div>
 
           {/* ✅ close：icon button（hit area >= 36px） */}
           <span className="fcm-toolBtnSlot">
             <ToolIconButton
-              ariaLabel={(t && t.closeLabel) || "關閉"}
-              title={(t && t.closeLabel) || "關閉"}
+              ariaLabel={__ui("closeLabel", "關閉")}
+              title={__ui("closeLabel", "關閉")}
               onClick={() => typeof onClose === "function" && onClose()}
               size={36}
               iconSize={18}
@@ -634,7 +685,7 @@ export default function FavoriteCategoryManager({
           <button
             type="button"
             aria-label={(t && t.closeLabel) || "關閉"}
-            title={(t && t.closeLabel) || "關閉"}
+            title={__ui("closeLabel", "關閉")}
             onClick={() => typeof onClose === "function" && onClose()}
             style={{
               fontSize: 12,
@@ -657,8 +708,8 @@ export default function FavoriteCategoryManager({
           {/* ✅ add：icon button（對齊主 UI 的工具按鈕節奏） */}
           <span className="fcm-toolBtnSlot">
             <ToolIconButton
-              ariaLabel={(t && t.addCategoryLabel) || "新增分類"}
-              title={(t && t.addCategoryLabel) || "新增分類"}
+              ariaLabel={__ui("addCategoryLabel", "新增分類")}
+              title={__ui("addCategoryLabel", "新增分類")}
               onClick={addCategory}
               disabled={disabledAll || !canCreate}
               size={36}
@@ -673,7 +724,7 @@ export default function FavoriteCategoryManager({
           <button
             type="button"
             aria-label={(t && t.addCategoryLabel) || "新增分類"}
-            title={(t && t.addCategoryLabel) || "新增分類"}
+            title={__ui("addCategoryLabel", "新增分類")}
             onClick={addCategory}
             style={{
               fontSize: 12,
@@ -714,8 +765,8 @@ export default function FavoriteCategoryManager({
                     <button
                       type="button"
                       onClick={() => beginEdit(c)}
-                      aria-label={(t && t.renameLabel) || "改名"}
-                      title={(t && t.renameLabel) || "改名"}
+                      aria-label={__ui("renameLabel", "改名")}
+                      title={__ui("renameLabel", "改名")}
                       className="fcm-nameBtn"
                     >
                       {name || "—"}
@@ -746,7 +797,7 @@ export default function FavoriteCategoryManager({
                           // blur = 保存（若驗證不過就留在編輯狀態）
                           commitEdit();
                         }}
-                        aria-label={(t && t.renameLabel) || "改名"}
+                        aria-label={__ui("renameLabel", "改名")}
                         className="fcm-input"
                         disabled={disabledAll}
                       />
@@ -764,8 +815,8 @@ export default function FavoriteCategoryManager({
                 {/* Up (icon) */}
                 <span className="fcm-toolBtnSlot">
                   <ToolIconButton
-                    ariaLabel={(t && t.moveUpLabel) || "上移"}
-                    title={(t && t.moveUpLabel) || "上移"}
+                    ariaLabel={__ui("moveUpLabel", "上移")}
+                    title={__ui("moveUpLabel", "上移")}
                     disabled={disabledAll || !canReorder || disableUp}
                     onClick={() => move(idx, idx - 1)}
                     size={36}
@@ -778,8 +829,8 @@ export default function FavoriteCategoryManager({
                 {/* Down (icon) */}
                 <span className="fcm-toolBtnSlot">
                   <ToolIconButton
-                    ariaLabel={(t && t.moveDownLabel) || "下移"}
-                    title={(t && t.moveDownLabel) || "下移"}
+                    ariaLabel={__ui("moveDownLabel", "下移")}
+                    title={__ui("moveDownLabel", "下移")}
                     disabled={disabledAll || !canReorder || disableDown}
                     onClick={() => move(idx, idx + 1)}
                     size={36}
@@ -793,8 +844,8 @@ export default function FavoriteCategoryManager({
                 {/* Import (per-category) */}
                 <button
                   type="button"
-                  aria-label={(t && t.importLabel) || "匯入"}
-                  title={(t && t.importLabel) || "匯入"}
+                  aria-label={__ui("importLabel", "匯入")}
+                  title={__ui("importLabel", "匯入")}
                   onClick={() => {
                     if (typeof onImportCategory === "function") {
                       onImportCategory({ id, name });
@@ -813,14 +864,14 @@ export default function FavoriteCategoryManager({
                     userSelect: "none",
                   }}
                 >
-                  {(t && t.importLabel) || "匯入"}
+                  {__ui("importLabel", "匯入")}
                 </button>
 
                 {/* Archive (text button; no new icon dependency) */}
                 <button
                   type="button"
-                  aria-label={(t && t.archiveLabel) || "封存"}
-                  title={(t && t.archiveLabel) || "封存"}
+                  aria-label={__ui("archiveLabel", "封存")}
+                  title={__ui("archiveLabel", "封存")}
                   onClick={() => archiveCategory(id)}
                   disabled={disabledAll || !canArchive}
                   style={{
@@ -835,7 +886,7 @@ export default function FavoriteCategoryManager({
                     userSelect: "none",
                   }}
                 >
-                  {(t && t.archiveLabel) || "封存"}
+                  {__ui("archiveLabel", "封存")}
                 </button>
 
                 {/* =========================
@@ -844,7 +895,7 @@ export default function FavoriteCategoryManager({
                 <button
                   type="button"
                   aria-label={(t && t.moveUpLabel) || "上移"}
-                  title={(t && t.moveUpLabel) || "上移"}
+                  title={__ui("moveUpLabel", "上移")}
                   disabled={disableUp}
                   onClick={() => move(idx, idx - 1)}
                   style={{
@@ -865,7 +916,7 @@ export default function FavoriteCategoryManager({
                 <button
                   type="button"
                   aria-label={(t && t.moveDownLabel) || "下移"}
-                  title={(t && t.moveDownLabel) || "下移"}
+                  title={__ui("moveDownLabel", "下移")}
                   disabled={disableDown}
                   onClick={() => move(idx, idx + 1)}
                   style={{
@@ -889,7 +940,7 @@ export default function FavoriteCategoryManager({
 
           {list.length === 0 && (
             <div className="fcm-empty">
-              {(t && t.noCategoriesText) || "—"}
+              {__ui("noCategoriesText", "—")}
             </div>
           )}
         </div>

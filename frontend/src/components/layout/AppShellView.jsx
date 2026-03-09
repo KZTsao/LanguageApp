@@ -5,6 +5,7 @@ import LayoutShell from "./LayoutShell";
 import SearchBox from "../search/SearchBox";
 import ResultPanel from "../result/ResultPanel";
 import WordLibraryPanel from "../../features/library/WordLibraryPanel";
+import LibraryAddPage from "../../features/library/LibraryAddPage";
 import TestModePanel from "../../features/testMode/TestModePanel";
 import LoginHeader from "../LoginHeader";
 // ✅ 2026-01-24：Support Widget（即時客服）掛載（僅 UI 掛載，不介入既有流程）
@@ -161,6 +162,11 @@ export default function AppShellView({
   onEnterLearning,
   onOpenLibrary,
 
+  // ✅ /library/add
+  libraryAddTargetCategoryId,
+  onOpenLibraryAddPage,
+  onCloseLibraryAddPage,
+
   // result panel
   result,
   showRaw,
@@ -175,6 +181,7 @@ export default function AppShellView({
   onPrev,
   onNext,
   onWordClick,
+  onExpandSentence,
 
   // ✅ 2026-01-19：Task A（ResultPanel 導覽列雙路）
   // - App 端 setNavContext(...) 後，必須一路透傳到 ResultPanel
@@ -186,6 +193,8 @@ export default function AppShellView({
   canClearHistory,
   onClearHistoryItem,
   clearHistoryLabel,
+  onResumeLearning,
+  resumeLearningLabel,
   onSelectPosKey,
   onExamplesResolved,
   examplesAutoRefreshEnabled,
@@ -216,6 +225,33 @@ export default function AppShellView({
   onArchiveCategory,
 }) {
   return (
+    <>
+    {/* ===== [DEBUG] MODE BADGE (toggle: localStorage.SO_DEBUG_BADGE) ===== */}
+    {typeof window !== "undefined" && localStorage.getItem("SO_DEBUG_BADGE") && (
+      <div
+        style={{
+          position: "fixed",
+          top: 8,
+          right: 8,
+          zIndex: 9999,
+          padding: "6px 8px",
+          background: "#111",
+          color: "#0f0",
+          fontSize: 12,
+          borderRadius: 6,
+          fontFamily: "monospace",
+          lineHeight: 1.35,
+          maxWidth: 320,
+          wordBreak: "break-word",
+        }}
+      >
+        <div>mode: {mode}</div>
+        <div>view: {view}</div>
+        <div>historyIndex: {historyIndex}</div>
+        <div>title: {learningContext?.title || "-"}</div>
+      </div>
+    )}
+    {/* ===== END [DEBUG] BADGE ===== */}
     <LayoutShell
       uiLang={uiLang}
       onUiLangChange={setUiLang}
@@ -281,6 +317,19 @@ export default function AppShellView({
           testMetaLoading={testMetaLoading}
           setTestMetaLoading={setTestMetaLoading}
         />
+      ) : view === "libraryAdd" ? (
+        <LibraryAddPage
+          uiText={currentUiText}
+          t={t}
+          uiLang={uiLang}
+          targetCategoryId={libraryAddTargetCategoryId}
+          favoriteCategories={favoriteCategories}
+          favoriteCategoriesLoading={favoriteCategoriesLoading}
+          onClose={onCloseLibraryAddPage}
+          // best-effort: after import commit, open library modal
+          onOpenLibrary={onOpenLibrary}
+          onSelectFavoriteCategory={onSelectFavoriteCategory}
+        />
       ) : (
         <>
           <SearchBox
@@ -323,6 +372,7 @@ export default function AppShellView({
             onPrev={onPrev}
             onNext={onNext}
             onWordClick={onWordClick}
+            onExpandSentence={onExpandSentence}
             // ✅ 任務 3：新增收藏時可選分類（ResultPanel 下拉）
             favoriteCategories={favoriteCategories}
             favoriteCategoriesLoading={favoriteCategoriesLoading}
@@ -332,6 +382,8 @@ export default function AppShellView({
             canClearHistory={canClearHistory}
             onClearHistoryItem={onClearHistoryItem}
             clearHistoryLabel={clearHistoryLabel}
+            onResumeLearning={onResumeLearning}
+            resumeLearningLabel={resumeLearningLabel}
             // ✅ 詞性切換：由 ResultPanel → App
             onSelectPosKey={onSelectPosKey}
             onSelectPosKeyFromApp={onSelectPosKey}
@@ -394,39 +446,6 @@ export default function AppShellView({
                       gap: 10,
                     }}
                   >
-                    {/* ✅ 2026-01-04：隨堂考入口（從單字庫彈窗直接進入測試模式） */}
-                    <button
-                      type="button"
-                      onClick={() => {
-                        try {
-                          console.log("[library->test] enter test mode");
-                        } catch {}
-
-                        closeLibraryModal();
-                        setView("test");
-                      }}
-                      style={{
-                        height: 28,
-                        padding: "0 10px",
-                        borderRadius: 10,
-                        border: "1px solid var(--accent)",
-                        background: "transparent",
-                        color: "var(--accent)",
-                        boxShadow: "0 0 0 1px rgba(0,0,0,0.04) inset",
-                        cursor: "pointer",
-                        fontSize: 12,
-                        fontWeight: 800,
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 6,
-                      }}
-                      title="測驗（隨堂考）"
-                      aria-label="測驗（隨堂考）"
-                    >
-                      <span aria-hidden="true">🧪</span>
-                      <span>測驗</span>
-                    </button>
-
                     <div style={{ fontSize: 14, fontWeight: 800 }}>
                       {t("app.topbar.library")}
                     </div>
@@ -467,6 +486,8 @@ export default function AppShellView({
                     favoriteCategoriesLoading={favoriteCategoriesLoading}
                     selectedFavoriteCategoryId={selectedFavoriteCategoryId}
                     onSelectFavoriteCategory={onSelectFavoriteCategory}
+                    // ✅ /library/add（學習本匯入頁）
+                    onOpenLibraryAddPage={onOpenLibraryAddPage}
                     // ✅ 2026-01-16：B(UI) pending/key 接線（Library list 星號）
                     isFavoritePending={isFavoritePending}
                     getFavoriteWordKey={getFavoriteWordKey}
@@ -484,6 +505,8 @@ export default function AppShellView({
                     onEnterLearning={onEnterLearning}
                     onExamplesResolved={onExamplesResolved}
                     examplesAutoRefreshEnabled={examplesAutoRefreshEnabled}
+                    // ✅ 2026-02-24：登入成功後若無任何學習本 → 自動彈出新增小視窗
+                    autoPromptCreateCategory={true}
                   />
                 </div>
               </div>
@@ -496,6 +519,7 @@ export default function AppShellView({
           <SupportWidget authUserId={authUserId} uiLang={uiLang} />
 
     </LayoutShell>
+    </>
   );
 }
 // frontend/src/components/layout/AppShellView.jsx

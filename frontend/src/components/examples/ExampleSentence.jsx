@@ -4,7 +4,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import usePronunciationRecorder from "./usePronunciationRecorder";
 import { supabase } from "../../utils/supabaseClient";
 
-import { apiFetch } from "../../utils/apiClient";
+import { apiFetch, getVisitId } from "../../utils/apiClient";
 import { getAuthAccessToken } from "../../utils/authTokenStore";
 // ✅ Phase B-1: Coverage-once (record once -> ASR -> colorize tokens -> LLM feedback)
 import CoverageOnceSentence from "./coverage/CoverageOnceSentence";
@@ -12,6 +12,15 @@ import { buildCoverageColoredTokens } from "./coverage/coverageOnce";
 import SpeakAnalyzePanel from "../speech/SpeakAnalyzePanel";
 import SpeakButton from "../common/SpeakButton";
 import { EyeIconOpen, EyeIconClosed } from "../common/EyeIcons";
+
+// ==============================================
+// ✅ SpeakAnalyzePanel latest-state isolation (per sentence)
+// - Requirement: each sentence keeps its own latest ASR/analysis result
+// - No history; only latest snapshot per sentenceKey
+// - In-memory only (MVP), resets on page refresh
+// ==============================================
+const __LATEST_SPEAK_STATE_BY_KEY = new Map();
+
 
 // ----------------------------------------------------------------------------
 // NOTE
@@ -267,6 +276,7 @@ export default function ExampleSentence({
   refreshTooltip,
   onWordClick,
   onSpeak,
+  uiLang,
   onToggleConversation,
   conversationToggleTooltip,
 
@@ -328,6 +338,13 @@ export default function ExampleSentence({
   pronunciationDisabled,
   pronunciationButtonLabel,
 }) {
+
+  // ============================================================
+  // ✅ 2026-03-02：Conversation display rule
+  // - Conversation MUST NOT be rendered inside ResultPanel/WordCard.
+  // - Conversation practice happens ONLY inside SpeakAnalyzePanel (recording window).
+  // ============================================================
+  const __SHOW_CONVERSATION_IN_CARD = false;
   // =========================
   // 初始化狀態（Production 排查）
   // =========================
@@ -339,6 +356,54 @@ export default function ExampleSentence({
     }),
     []
   );
+
+  // ✅ Click outside the conversation nav (and the toggle icon) to close conversation
+  // - Prevents conversation mode from hijacking navigation; user can dismiss by clicking anywhere else.
+  const conversationNavRef = useRef(null);
+  const conversationToggleRef = useRef(null);
+
+  useEffect(() => {
+    if (!conversationActive || !__SHOW_CONVERSATION_IN_CARD) return;
+    if (typeof document === "undefined") return;
+
+    function __isInside(e) {
+      const nav = conversationNavRef.current;
+      const tog = conversationToggleRef.current;
+      if (!nav && !tog) return false;
+      const path = typeof e?.composedPath === "function" ? e.composedPath() : null;
+      if (Array.isArray(path) && path.length) {
+        if (nav && path.includes(nav)) return true;
+        if (tog && path.includes(tog)) return true;
+      }
+      const t = e && e.target ? e.target : null;
+      if (t) {
+        if (nav && nav.contains(t)) return true;
+        if (tog && tog.contains(t)) return true;
+        // ✅ recording button should NOT be treated as outside click
+        try {
+          if (typeof t.closest === "function" && t.closest('[data-ref="examplePronunciationButton"]')) return true;
+        } catch (e2) {}
+        // ✅ SpeakAnalyzePanel (and any keep-conversation scope) should NOT be treated as outside click
+        try {
+          if (typeof t.closest === "function" && t.closest('[data-keep-conversation="1"]')) return true;
+        } catch (e2) {}
+      }
+      return false;
+    }
+
+    function onDocPointerDown(e) {
+      try {
+        if (__isInside(e)) return;
+        // click outside → close
+        if (typeof onToggleConversation === "function") onToggleConversation();
+      } catch (err) {
+        // ignore
+      }
+    }
+
+    document.addEventListener("pointerdown", onDocPointerDown, true);
+    return () => document.removeEventListener("pointerdown", onDocPointerDown, true);
+  }, [conversationActive, onToggleConversation]);
 
   const effectiveHeadword = useMemo(() => {
     const hw = (headwordOverride || headword || "").toString().trim();
@@ -366,7 +431,7 @@ export default function ExampleSentence({
   // - Ignore when typing in input/textarea/contenteditable
   // =========================
   useEffect(() => {
-    if (!conversationActive) return;
+    if (!conversationActive || !__SHOW_CONVERSATION_IN_CARD) return;
 
     function isEditableTarget(t) {
       try {
@@ -637,28 +702,51 @@ const toggleShowTranslation = () => setShowTranslation((v) => !v);
     typeof conversationPage.de === "string" &&
     conversationPage.de.trim() !== "";
 
-  const __currentSentenceDe = __hasConvTurn
+  // ✅ Only SpeakAnalyzePanel can show/use conversation turns.
+  // - Card display MUST NOT switch into conversation turns.
+  const __hasConvTurnForCard = __SHOW_CONVERSATION_IN_CARD && __hasConvTurn;
+
+  const __displaySentenceDe = __hasConvTurnForCard
     ? conversationPage.de
     : typeof displayedSentence === "string" && displayedSentence.trim()
       ? displayedSentence
       : (mainSentence || "");
 
-  const __currentSentenceTranslation = __hasConvTurn
+  // Recording/ASR follows conversation turn when conversation is active.
+  const __recordSentenceDe = __hasConvTurn
+    ? conversationPage.de
+    : typeof displayedSentence === "string" && displayedSentence.trim()
+      ? displayedSentence
+      : (mainSentence || "");
+
+  const __displayTranslationText = __hasConvTurnForCard
     ? (typeof displayedTranslation === "string"
         ? displayedTranslation
         : (typeof conversationPage.translation === "string" ? conversationPage.translation : ""))
     : (exampleTranslation || "");
 
+  // ✅ SpeakAnalyzePanel must follow conversation turns even when card does NOT show conversation.
+  const __panelTargetText = __hasConvTurn
+    ? (conversationPage.de || "")
+    : (typeof displayedSentence === "string" && displayedSentence.trim() ? displayedSentence : (mainSentence || ""));
+
+  const __panelTranslationText = __hasConvTurn
+    ? (typeof conversationPage.translation === "string" && conversationPage.translation.trim()
+        ? conversationPage.translation
+        : (typeof displayedTranslation === "string" ? displayedTranslation : ""))
+    : (exampleTranslation || "");
+
   // ✅ Recording/ASR must follow current sentence (example OR conversation turn)
-  const __recordSentence = (__currentSentenceDe || "").toString();
-  const __effectiveDisplayedSentence = (__currentSentenceDe || "").toString();
+  const __recordSentence = (__recordSentenceDe || "").toString();
+  const __effectiveDisplayedSentence = (__displaySentenceDe || "").toString();
 
 
 const onPlayTarget =
   onSpeak && typeof onSpeak === "function"
     ? () => {
         try {
-          onSpeak(__recordSentence || "");
+          // ✅ Important: return Promise (if any) so SpeakAnalyzePanel can await
+          return onSpeak(__recordSentence || "");
         } catch (e) {}
       }
     : undefined;
@@ -742,7 +830,7 @@ const onPlayTarget =
   //   (including at boundaries: first page + left / last page + right)
   // =========================
   useEffect(() => {
-    if (!conversationActive) return;
+    if (!conversationActive || !__SHOW_CONVERSATION_IN_CARD) return;
     if (typeof window === "undefined") return;
 
     function __isEditable(el) {
@@ -851,6 +939,69 @@ try { __setSpeakPanelTranscript(v.transcript || ""); } catch (e) {}
     try { __setSpeakPanelMessage(v.message || ""); } catch (e) {}
   };
 
+
+  // ==============================================
+  // ✅ Per-sentence latest SpeakAnalyzePanel state (no history)
+  // - Keyed by sentence text (and conversation index when active)
+  // - Fix: switching sentences should restore each sentence's own latest result
+  // ==============================================
+  const __speakStateKey = useMemo(() => {
+    const base = String(__effectiveDisplayedSentence || __recordSentence || mainSentence || "").trim();
+    if (!base) return "";
+    if (conversationActive) return `conv:${Number.isFinite(conversationIndex) ? conversationIndex : 0}:${base}`;
+    return `sent:${base}`;
+  }, [__effectiveDisplayedSentence, __recordSentence, mainSentence, conversationActive, conversationIndex]);
+
+  // Save snapshot when leaving current sentenceKey (cleanup), and restore when entering a new key
+  useEffect(() => {
+    // restore
+    try {
+      if (__speakStateKey) {
+        const snap = __LATEST_SPEAK_STATE_BY_KEY.get(__speakStateKey) || null;
+        if (snap) {
+          __applySpeakState(snap);
+        } else {
+          __applySpeakState({
+            hasAudio: false,
+            analyzeState: "idle",
+            tokens: null,
+            transcript: "",
+            message: "",
+            audioBlob: null,
+            replayUrl: "",
+            replayMeta: { durationMs: 0, mimeType: "", error: "" },
+          });
+        }
+      }
+    } catch (e) {}
+
+    // cleanup saves latest (only latest, overwrites)
+    return () => {
+      try {
+        if (__speakStateKey) {
+          __LATEST_SPEAK_STATE_BY_KEY.set(__speakStateKey, __snapshotSpeakState());
+        }
+      } catch (e) {}
+    };
+    // IMPORTANT: only run on key switch
+  }, [__speakStateKey]);
+
+  // Persist latest snapshot on any speak-related change
+  useEffect(() => {
+    try {
+      if (!__speakStateKey) return;
+      __LATEST_SPEAK_STATE_BY_KEY.set(__speakStateKey, __snapshotSpeakState());
+    } catch (e) {}
+  }, [
+    __speakStateKey,
+    __speakPanelHasAudio,
+    __speakPanelAnalyzeState,
+    __speakPanelTokens,
+    __speakPanelTranscript,
+    __speakPanelMessage,
+    pronReplayUrl,
+    pronReplayMeta,
+  ]);
   useEffect(() => {
     const key = (__recordSentence || "").toString().trim();
     if (!__speakPanelOpen || !key) return;
@@ -1659,9 +1810,12 @@ const __effectivePronReplayMeta = __USE_PRONUNCIATION_RECORDER_HOOK
     const __token =
       typeof getAuthAccessToken === "function" ? getAuthAccessToken() : "";
 
-    const resp = await fetch(`${API_BASE}/api/speech/asr`, {
+    const resp = await apiFetch("/api/speech/asr", {
       method: "POST",
-      headers: __token ? { Authorization: `Bearer ${__token}` } : {},
+      headers: {
+        ...(__token ? { Authorization: `Bearer ${__token}` } : {}),
+        ...(typeof getVisitId === "function" && getVisitId() ? { "x-visit-id": getVisitId() } : {}),
+      },
       body: fd,
     });
     const data = await resp.json().catch(() => null);
@@ -1729,7 +1883,7 @@ const __effectivePronReplayMeta = __USE_PRONUNCIATION_RECORDER_HOOK
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        uiLang: "zh-TW",
+        uiLang: uiLang || "",
         targetText: payload && payload.refText ? payload.refText : "",
         transcript: payload && payload.transcript ? payload.transcript : "",
         tokens: [], // coverage-once passes missing/low lists separately; tips endpoint doesn't need them
@@ -1931,8 +2085,8 @@ const handlePronunciationReplay = () => {
   // - MUST stay consistent with recording/ASR reference.
   // - Use the same "current sentence" computed above.
   const __convActive = !!conversationActive;
-  const __displaySentence = __currentSentenceDe;
-  const __displayTranslation = __currentSentenceTranslation;
+  const __displaySentence = __displaySentenceDe;
+  const __displayTranslation = __displayTranslationText;
 
   const renderSentence = () => {
     if (!__displaySentence) return null;
@@ -2042,53 +2196,7 @@ const handlePronunciationReplay = () => {
         );
       })()}
 
-      {/* ✅ Toggle row：toggle + confirm */}
-      <div
-        data-ref="examplePolysemyToggleRow"
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "flex-start",
-          gap: 8,
-          flexWrap: "wrap",
-          marginBottom: 6,
-        }}
-      >
-        <button
-          type="button"
-          onClick={onToggleMultiRef}
-          aria-pressed={effectiveMultiRefEnabled ? "true" : "false"}
-          title={multiRefToggleLabel || ""}
-          style={{
-            ...getMultiRefToggleStyle(!!effectiveMultiRefEnabled),
-          }}
-        >
-          <span>{multiRefToggleLabel}</span>
-          <span style={getMultiRefToggleDotStyle(!!effectiveMultiRefEnabled)} />
-        </button>
-
-        {/* ✅ 2026-01-10：把「確認」移到 toggle 右側（同一列） */}
-        {showRefConfirmInline && (
-          <div
-            data-ref="exampleConfirmInline"
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 8,
-
-              // ✅ 2026-01-10: 讓 refConfirm 內的「新增 popup」可以定位在按鈕旁邊
-              // - WordExampleBlock 內的 popup 使用 position:absolute; top/right
-              // - 若外層沒有 position:relative，popup 會以整頁（或其他祖先）定位，造成「點了沒反應」其實是跑到看不到的地方
-              // - 這裡只加定位與 overflow，不改任何邏輯
-              position: "relative",
-              overflow: "visible",
-              zIndex: 5,
-            }}
-          >
-            {refConfirm}
-          </div>
-        )}
-      </div>
+      
 
       {/* ✅ Row 1：標題 + headword + refControls（同一列） */}
       <div
@@ -2267,8 +2375,27 @@ const handlePronunciationReplay = () => {
 
         {hasExamples && onToggleConversation && (
           <button
+            ref={conversationToggleRef}
             type="button"
-            onClick={onToggleConversation}
+            onClick={() => {
+              // ✅ Conversation must live inside SpeakAnalyzePanel
+              try {
+                if (typeof onToggleConversation === "function") onToggleConversation();
+              } catch (e) {
+                // ignore
+              }
+              try {
+                __speakPanelAudioBlobRef.current = null;
+                __setSpeakPanelHasAudio(false);
+                __setSpeakPanelAnalyzeState("idle");
+                __setSpeakPanelTokens(null);
+                __setSpeakPanelTranscript("");
+                __setSpeakPanelMessage("");
+                __setSpeakPanelOpen(true);
+              } catch (e) {
+                // ignore
+              }
+            }}
             title={conversationToggleTooltip}
             className="icon-button sound-button"
             style={{
@@ -2377,79 +2504,7 @@ const handlePronunciationReplay = () => {
         )}
 
         
-        {conversationActive && (
-          <div
-            data-ref="conversationNav"
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 8,
-              marginLeft: 4,
-              // orange theme (no container/background)
-              color: "#f97316",
-            }}
-          >
-            <button
-              type="button"
-              onClick={onConversationPrev}
-              disabled={!onConversationPrev || !conversationCanPrev}
-              title={conversationCanPrev ? "上一句" : ""}
-              aria-label="conversation-prev"
-              className="icon-button sound-button"
-              style={{
-                border: "none",
-                background: "transparent",
-                padding: 0,
-                display: "flex",
-                alignItems: "center",
-                cursor: !onConversationPrev || !conversationCanPrev ? "not-allowed" : "pointer",
-                opacity: !onConversationPrev || !conversationCanPrev ? 0.35 : 0.95,
-              }}
-            >
-              {/* left chevron */}
-              <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
-                <path
-                  d="M15 18l-6-6 6-6"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.6"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
-            </button>
-
-            <button
-              type="button"
-              onClick={onConversationNext}
-              disabled={!onConversationNext || !conversationCanNext}
-              title={conversationCanNext ? "下一句" : ""}
-              aria-label="conversation-next"
-              className="icon-button sound-button"
-              style={{
-                border: "none",
-                background: "transparent",
-                padding: 0,
-                display: "flex",
-                alignItems: "center",
-                cursor: !onConversationNext || !conversationCanNext ? "not-allowed" : "pointer",
-                opacity: !onConversationNext || !conversationCanNext ? 0.35 : 0.95,
-              }}
-            >
-              {/* right chevron */}
-              <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true">
-                <path
-                  d="M9 6l6 6-6 6"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.6"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
-            </button>
-          </div>
-        )}
+        {/* ✅ Conversation nav removed: dialog paging happens inside SpeakAnalyzePanel */}
 
 
 {/* ✅ 2026-01-22: Pronunciation status (UI-only, small hint) */}
@@ -2489,7 +2544,7 @@ const handlePronunciationReplay = () => {
           </span>
         )}
 
-        {(loading || conversationLoading) && (
+        {loading && (
           <span
             style={{
               fontSize: 12,
@@ -2500,19 +2555,8 @@ const handlePronunciationReplay = () => {
             產生中…
           </span>
         )}
-
-        {(conversationError || conversationError === "") && conversationError && (
-          <span style={{ fontSize: 12, marginLeft: 8, color: "#dc2626" }}>
-            {conversationError}
-          </span>
-        )}
       </div>
 
-      {conversationActive && conversationError ? (
-        <div style={{ marginTop: -2, marginBottom: 8, fontSize: 12, color: "#dc2626" }}>
-          {conversationError}
-        </div>
-      ) : null}
 
       {/* 主例句（德文）＋ 眼睛切換 */}
       {hasExamples && (
@@ -2543,11 +2587,7 @@ const handlePronunciationReplay = () => {
           >
 
             {showGerman ? (
-              isConversationOverlayOpen && conversationOverlay ? (
-                conversationOverlay
-              ) : (
-                renderSentence()
-              )
+              renderSentence()
             ) : (
               renderSentenceMosaic()
             )}
@@ -2644,8 +2684,9 @@ const handlePronunciationReplay = () => {
       {/* ✅ 2026-01-24: SpeakAnalyzePanel (record/replay/analyze in one place) */}
       {__speakPanelOpen && (
         <SpeakAnalyzePanel
-          targetText={__effectiveDisplayedSentence || ""}
-          translationText={__currentSentenceTranslation || ""}
+          targetText={__panelTargetText || ""}
+          translationText={__panelTranslationText || ""}
+          uiLang={uiLang}
           // ✅ Conversation paging (for dialog practice)
           conversationActive={!!conversationActive}
           conversationIndex={Number.isFinite(conversationIndex) ? conversationIndex : 0}
@@ -2667,7 +2708,17 @@ const handlePronunciationReplay = () => {
           tokens={__speakPanelTokens || []}
           transcript={__speakPanelTranscript || ""}
           message={__speakPanelMessage || ""}
-          onClose={() => { __setSpeakPanelOpen(false); }}
+          onClose={() => {
+            __setSpeakPanelOpen(false);
+            // ✅ Closing recording window must NOT leave conversation visible in card.
+            try {
+              if (!!conversationActive && typeof onToggleConversation === "function") {
+                onToggleConversation(); // toggle isOpen -> false
+              }
+            } catch (e) {
+              // ignore
+            }
+          }}
           onToggleRecord={() => { try { handlePronunciationToggle(); } catch (e) {} }}
           onReplay={() => { try { handlePronunciationReplay(); } catch (e) {} }}
           onAnalyzeOnce={async () => {
@@ -2684,7 +2735,7 @@ const handlePronunciationReplay = () => {
               const __token = (typeof getAuthAccessToken === "function") ? getAuthAccessToken() : "";
               const __headers = __token ? { Authorization: `Bearer ${__token}` } : {};
 
-              const resp = await fetch(`${API_BASE}/api/speech/asr`, {
+              const resp = await apiFetch("/api/speech/asr", {
                 method: "POST",
                 headers: {
                   ...(__headers || {}),

@@ -282,6 +282,7 @@ async function callLLMJsonOrNull(opts) {
 
 router.post("/normalize", async (req, res) => {
   
+  try { console.log("[classify][be][queryNormalize] enter", { text: req?.body?.text, rawText: req?.body?.rawText, intent: req?.body?.intent }); } catch (_) {}
   const original = sanitizeText(req.body?.text);
   if (!original) {
     return res.json({

@@ -1,4 +1,4 @@
-// frontend/src/components/result/ConversationBox.jsx
+// frontend/src/components/conversation/ConversationBox.jsx
 /**
  * 文件說明：
  * - ConversationBox：顯示「連續對話」的德文/翻譯內容，支援上一句/下一句/播放/關閉。
@@ -122,19 +122,7 @@ export default function ConversationBox({
       ? currentTurn.translation
       : "";
 
-  let tConversationTitle;
-  if (conversationTitle && typeof conversationTitle === "string") {
-    tConversationTitle = conversationTitle;
-  } else if (
-    conversationCloseLabel &&
-    typeof conversationCloseLabel === "string" &&
-    conversationCloseLabel.toLowerCase().includes("close")
-  ) {
-    tConversationTitle = "Conversation";
-  } else {
-    tConversationTitle = "連續對話";
-  }
-
+  
   const tConversationTurnLabel = conversationTurnLabel || "turn";
   const tConversationPrev = conversationPrevLabel || "上一句";
   const tConversationNext = conversationNextLabel || "下一句";
@@ -245,7 +233,7 @@ export default function ConversationBox({
                   ? 0.35
                   : 0.95,
             }}
-            aria-label="conversation-prev"
+            data-conv-nav="prev" aria-label="conversation-prev"
           >
             ◀
           </button>
@@ -291,7 +279,7 @@ export default function ConversationBox({
                   ? 0.35
                   : 0.95,
             }}
-            aria-label="conversation-next"
+            data-conv-nav="next" aria-label="conversation-next"
           >
             ▶
           </button>
@@ -320,6 +308,17 @@ export default function ConversationBox({
 
   return (
     <div
+      data-conversation-root="1"
+      onPointerDown={() => {
+        try {
+          if (typeof window !== "undefined") {
+            window.__CONV_NAV_ACTIVE = true;
+            window.dispatchEvent(new CustomEvent("conv-nav-change", { detail: { active: true } }));
+          }
+        } catch (e) {
+          // ignore
+        }
+      }}
       style={{
         marginTop: 12,
         padding: 8,
@@ -343,7 +342,12 @@ export default function ConversationBox({
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-          <span>{tConversationTitle}</span>
+
+          {hasConversationTurns && (
+            <span style={{ whiteSpace: "nowrap" }}>
+              {tConversationTurnLabel} {conversation.currentIndex + 1} / {conversation.turns.length}
+            </span>
+          )}
 
           {onSpeak && currentTurnDe && (
             <button
@@ -384,12 +388,6 @@ export default function ConversationBox({
           )}
         </div>
 
-        {hasConversationTurns && (
-          <div>
-            {tConversationTurnLabel} {conversation.currentIndex + 1} /{" "}
-            {conversation.turns.length}
-          </div>
-        )}
       </div>
 
       {/* Content */}
@@ -452,114 +450,7 @@ export default function ConversationBox({
           )}
         </>
       )}
-
-      {/* Footer: Prev / Next / Close */}
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          marginTop: 4,
-        }}
-      >
-        <div style={{ display: "flex", gap: 6 }}>
-          <button
-            type="button"
-            onClick={onPrev}
-            disabled={!hasConversationTurns || conversation.currentIndex === 0}
-            style={{
-              minWidth: 32,
-              height: 32,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              borderRadius: "50%",
-              border: "1px solid rgba(255,255,255,0.6)",
-              background: "rgba(255,255,255,0.08)",
-              cursor:
-                !hasConversationTurns || conversation.currentIndex === 0
-                  ? "default"
-                  : "pointer",
-              opacity:
-                !hasConversationTurns || conversation.currentIndex === 0 ? 0.4 : 1,
-            }}
-          >
-            <svg
-              width="18"
-              height="18"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="var(--conversation-arrow-color)"
-              strokeWidth="2.4"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <polyline points="15 6 9 12 15 18" />
-            </svg>
-          </button>
-
-          <button
-            type="button"
-            onClick={onNext}
-            disabled={
-              !hasConversationTurns ||
-              conversation.currentIndex === conversation.turns.length - 1
-            }
-            style={{
-              minWidth: 32,
-              height: 32,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              borderRadius: "50%",
-              border: "1px solid rgba(255,255,255,0.6)",
-              background: "rgba(255,255,255,0.08)",
-              cursor:
-                !hasConversationTurns ||
-                conversation.currentIndex === conversation.turns.length - 1
-                  ? "default"
-                  : "pointer",
-              opacity:
-                !hasConversationTurns ||
-                conversation.currentIndex === conversation.turns.length - 1
-                  ? 0.4
-                  : 1,
-            }}
-          >
-            <svg
-              width="18"
-              height="18"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="var(--conversation-arrow-color)"
-              strokeWidth="2.4"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            >
-              <polyline points="9 6 15 12 9 18" />
-            </svg>
-          </button>
-        </div>
-
-        <button
-          type="button"
-          onClick={onClose}
-          title={tConversationClose}
-          style={{
-            padding: "2px 10px",
-            fontSize: 13,
-            borderRadius: 999,
-            border:
-              "1px solid var(--button-ghost-border, var(--border-subtle, rgba(120,120,120,0.4)))",
-            background: "var(--button-ghost-bg, transparent)",
-            color: "var(--button-ghost-fg, var(--text-color))",
-            cursor: "pointer",
-            opacity: 0.9,
-          }}
-        >
-          {tConversationClose}
-        </button>
-      </div>
     </div>
   );
 }
-// frontend/src/components/result/ConversationBox.jsx
+// frontend/src/components/conversation/ConversationBox.jsx

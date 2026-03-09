@@ -100,7 +100,7 @@ function logInitOnce(provider, lang) {
  * @param {string} [params.lang="de-DE"] 語言代碼，例如 "de-DE"
  * @returns {Promise<{ audioContent: string | null, mimeType: string, provider: string }>}
  */
-async function synthesizeTTS({ text, lang = "de-DE" }) {
+async function synthesizeTTS({ text, lang = "de-DE", voiceName, gender, rate }) {
   if (!text || typeof text !== "string") {
     throw new Error("synthesizeTTS: `text` is required and must be a string");
   }
@@ -145,14 +145,31 @@ async function synthesizeTTS({ text, lang = "de-DE" }) {
 
       const client = new textToSpeech.TextToSpeechClient(clientOptions);
 
+      const normalizedLang = lang || "de-DE";
+      const normGender = String(gender || "").toUpperCase();
+      const resolvedVoiceName =
+        (voiceName && String(voiceName)) ||
+        process.env.TTS_VOICE ||
+        (normGender === "FEMALE"
+          ? `${normalizedLang}-Wavenet-F`
+          : normGender === "MALE"
+            ? `${normalizedLang}-Wavenet-D`
+            : `${normalizedLang}-Wavenet-D`);
+
+      const numericRate =
+        rate === undefined || rate === null || rate === ""
+          ? undefined
+          : Number(rate);
+
       const request = {
         input: { text },
         voice: {
-          languageCode: lang || "de-DE",
-          name: process.env.TTS_VOICE || `${lang || "de-DE"}-Wavenet-D`,
+          languageCode: normalizedLang,
+          name: resolvedVoiceName,
         },
         audioConfig: {
           audioEncoding: "MP3",
+          ...(Number.isFinite(numericRate) ? { speakingRate: numericRate } : {}),
         },
       };
 

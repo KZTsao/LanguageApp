@@ -54,6 +54,29 @@ const BalanceScaleIcon = ({ size = 30, className }) => (
 
 );
 
+
+const PersonOutlineIcon = ({ size = 18, className }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    aria-hidden="true"
+    className={className}
+    xmlns="http://www.w3.org/2000/svg"
+  >
+    <g transform="translate(12 12) scale(1.15) translate(-12 -12)">
+      <circle cx="12" cy="8.2" r="3.2" stroke="#F2992E" strokeWidth={strokeWidth} />
+      <path
+        d="M5.2 20c.9-3.7 4-5.8 6.8-5.8S17.9 16.3 18.8 20"
+        stroke="#F2992E"
+        strokeWidth={strokeWidth}
+        strokeLinecap="round"
+      />
+    </g>
+  </svg>
+);
+
 const SupportAdminIcon = ({ size = 30, className }) => (
   <svg
   width={size}
@@ -99,7 +122,8 @@ const SupportAdminIcon = ({ size = 30, className }) => (
 );
 
 
-import LoginButton from "../auth/LoginButton";
+import LoginPage from "../../pages/LoginPage";
+import { supabase } from "../../utils/supabaseClient";
 import { useAuth } from "../../context/AuthProvider";
 import { apiFetch } from "../../utils/apiClient";
 import uiText from "../../uiText";
@@ -756,7 +780,85 @@ function LayoutShell({
 
   /** 模組：選單開關（右上角頭像選單） */
   const [menuOpen, setMenuOpen] = useState(false);
+  /** 模組：登入彈窗（未登入入口 icon） */
+  const [loginModalOpen, setLoginModalOpen] = useState(false);
+
   const menuWrapRef = useRef(null);
+
+  function __clearAuthLocalStorage() {
+    try {
+      if (typeof window === "undefined") return;
+      const ls = window.localStorage;
+      if (!ls) return;
+
+      // Supabase v2 default: sb-<project>-auth-token
+      const keys = Object.keys(ls);
+      for (const k of keys) {
+        if (k.startsWith("sb-") && k.endsWith("-auth-token")) {
+          try { ls.removeItem(k); } catch {}
+        }
+      }
+
+      // common fallbacks (safe no-op if absent)
+      try { ls.removeItem("supabase.auth.token"); } catch {}
+      try { ls.removeItem("sb-auth-token"); } catch {}
+      try { ls.removeItem("access_token"); } catch {}
+      try { ls.removeItem("token"); } catch {}
+    } catch {}
+  }
+
+  function __renderLoginModal() {
+    if (!loginModalOpen) return null;
+
+    return (
+      <div
+        role="dialog"
+        aria-modal="true"
+        style={{
+          position: "fixed",
+          inset: 0,
+          background: "rgba(0,0,0,0.35)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: 16,
+          zIndex: 9999,
+        }}
+        onMouseDown={(e) => {
+          // 點擊遮罩關閉（只在遮罩本身）
+          if (e.target === e.currentTarget) setLoginModalOpen(false);
+        }}
+      >
+        <div style={{ position: "relative" }}>
+          <button
+            type="button"
+            onClick={() => setLoginModalOpen(false)}
+            aria-label="Close"
+            style={{
+              position: "absolute",
+              right: 10,
+              top: 10,
+              width: 34,
+              height: 34,
+              borderRadius: 999,
+              border: "1px solid var(--border-subtle)",
+              background: "var(--card-bg)",
+              color: "var(--text-main)",
+              cursor: "pointer",
+              fontSize: 16,
+              lineHeight: "34px",
+              textAlign: "center",
+            }}
+          >
+            ✕
+          </button>
+
+          <LoginPage embedded />
+        </div>
+      </div>
+    );
+  }
+
 
   /** 模組：usage state（未登入/已登入都看得到） */
   const [usage, setUsage] = useState(null);
@@ -829,7 +931,10 @@ function LayoutShell({
     try {
       const token = getAccessTokenFromLocalStorage();
       if (!token) {
-        alert("請先登入再升級");
+        alert(
+          (uiText?.[uiLang]?.layout?.upgradeLoginRequired || uiText?.en?.layout?.upgradeLoginRequired) ||
+            "Please sign in to upgrade"
+        );
         return;
       }
 
@@ -845,21 +950,30 @@ function LayoutShell({
       if (!r.ok) {
         const t = await r.text().catch(() => "");
         console.warn("[LayoutShell] billing checkout-url failed:", r.status, t);
-        alert("取得付款連結失敗，請稍後再試");
+        alert(
+          (uiText?.[uiLang]?.layout?.checkoutUrlFailed || uiText?.en?.layout?.checkoutUrlFailed) ||
+            "Failed to get checkout link. Please try again."
+        );
         return;
       }
 
       const data = await r.json().catch(() => null);
       const url = data?.url;
       if (!url) {
-        alert("取得付款連結失敗（無 URL）");
+        alert(
+          (uiText?.[uiLang]?.layout?.checkoutUrlMissing || uiText?.en?.layout?.checkoutUrlMissing) ||
+            "Failed to get checkout link (no URL)."
+        );
         return;
       }
 
       window.location.href = url;
     } catch (e) {
       console.warn("[LayoutShell] startCheckout failed:", e);
-      alert("取得付款連結失敗，請稍後再試");
+      alert(
+        (uiText?.[uiLang]?.layout?.checkoutUrlFailed || uiText?.en?.layout?.checkoutUrlFailed) ||
+          "Failed to get checkout link. Please try again."
+      );
     } finally {
       setBillingBusy(false);
     }
@@ -1176,20 +1290,41 @@ function LayoutShell({
               gap: 12,
             }}
           >
-            {/* 模組：語言選擇（同一個匡 pill） */}
-            <div
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                borderRadius: 999,
-                border: "1px solid var(--border-subtle)",
-                background: "var(--card-bg)",
-                overflow: "hidden",
-              }}
-            >
+            {/* 模組：左上 Logo + 語言選擇 + TOS（Logo 與語言匡不同 div，但同一高度對齊） */}
+            <div style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
+              <div
+                style={{
+                  height: 30,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  flex: "0 0 auto",
+                }}
+              >
+                <img
+                  src="/logo.png"
+                  alt="soLang"
+                  style={{
+                    width: 40,
+                    height: 40,
+                    display: "block",
+                    objectFit: "contain",
+                  }}
+                />
+              </div>
+
+              <div
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  borderRadius: 999,
+                  border: "1px solid var(--border-subtle)",
+                  background: "var(--card-bg)",
+                  overflow: "hidden",
+                }}
+              >
               <span
                 style={{
-                  padding: "6px 0px 6px 10px",
+                  padding: "6px 6px 6px 6px",
                   color: "var(--text-muted)",
                   fontSize: 12,
                   fontWeight: 600,
@@ -1221,14 +1356,20 @@ function LayoutShell({
                 <option value="fr">Français</option>
                 <option value="zh-CN">简体中文</option>
               </select>
-            </div>
 
-            <div style={{ display: "inline-flex", alignItems: "center", paddingLeft: 12 }}>
+              <span
+                aria-hidden="true"
+                style={{
+                  width: 1,
+                  height: 24,
+                  background: "var(--border-subtle)",
+                }}
+              />
+
               <button
                 type="button"
                 disabled={__interactionDisabled}
                 onClick={() => {
-                  // ✅ state-only open
                   __setTermsOpenStateOnly(true);
                   try {
                     __loadTermsMd(uiLang || "en");
@@ -1237,30 +1378,50 @@ function LayoutShell({
                 style={{
                   background: "transparent",
                   border: "none",
-                  padding: "6px 10px 6px 8px",
+                  padding: "6px 10px",
                   cursor: __interactionDisabled ? "not-allowed" : "pointer",
-                  color: "var(--text-muted)",
-                  fontSize: 12,
-                  fontWeight: 700,                  opacity: __interactionDisabled ? 0.55 : 1,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  opacity: __interactionDisabled ? 0.55 : 1,
                 }}
                 title={(uiText?.[uiLang]?.layout?.termsOfService || uiText?.en?.layout?.termsOfService) || "Terms of Service"}
                 aria-label={(uiText?.[uiLang]?.layout?.termsOfService || uiText?.en?.layout?.termsOfService) || "Terms of Service"}
               >
-                <span style={{ width: 28, height: 28, borderRadius: "50%", border: "1px solid var(--border-subtle)", display: "inline-flex", alignItems: "center", justifyContent: "center", background: "#fff" }}>
-                  <BalanceScaleIcon size={18} />
-                </span>
+                <BalanceScaleIcon size={18} />
               </button>
+              </div>
             </div>
 
 
             <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-              <LoginButton uiLang={uiLang} />
+              <button
+                type="button"
+                onClick={() => setLoginModalOpen(true)}
+                title="登入 / 註冊"
+                style={{
+                  width: 38,
+                  height: 38,
+                  borderRadius: 999,
+                  border: "1px solid var(--border-subtle)",
+                  background: "var(--card-bg)",
+                  color: "var(--text-main)",
+                  cursor: "pointer",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  fontSize: 16,
+                }}
+              >
+                <PersonOutlineIcon size={18} />
+              </button>
             </div>
           </div>
 
           {children}
 
           {__renderTermsModal()}
+          {__renderLoginModal()}
           {renderSupportAdminModal()}
         </div>
       </div>
@@ -1305,8 +1466,28 @@ function LayoutShell({
             gap: 12,
           }}
         >
-          <div style={{ display: "flex", alignItems: "center", gap: 0 }}>
-            {/* 模組：語言選擇（同一個匡 pill） */}
+          {/* 模組：左上 Logo + 語言選擇 + TOS（Logo 與語言匡不同 div，但同一高度對齊） */}
+          <div style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
+            <div
+              style={{
+                height: 30,
+                display: "inline-flex",
+                alignItems: "center",
+                flex: "0 0 auto",
+              }}
+            >
+              <img
+                src="/logo.png"
+                alt="soLang"
+                style={{
+                  width: 28,
+                  height: 28,
+                  display: "block",
+                  objectFit: "contain",
+                }}
+              />
+            </div>
+
             <div
               style={{
                 display: "inline-flex",
@@ -1319,7 +1500,7 @@ function LayoutShell({
             >
               <span
                 style={{
-                  padding: "6px 0px 6px 10px",
+                  padding: "6px 6px 6px 6px",
                   color: "var(--text-muted)",
                   fontSize: 12,
                   fontWeight: 600,
@@ -1351,14 +1532,20 @@ function LayoutShell({
                 <option value="fr">Français</option>
                 <option value="zh-CN">简体中文</option>
               </select>
-            </div>
 
-            <div style={{ display: "inline-flex", alignItems: "Left" }}>
+              <span
+                aria-hidden="true"
+                style={{
+                  width: 1,
+                  height: 24,
+                  background: "var(--border-subtle)",
+                }}
+              />
+
               <button
                 type="button"
                 disabled={__interactionDisabled}
                 onClick={() => {
-                  // ✅ state-only open
                   __setTermsOpenStateOnly(true);
                   try {
                     __loadTermsMd(uiLang || "en");
@@ -1367,16 +1554,17 @@ function LayoutShell({
                 style={{
                   background: "transparent",
                   border: "none",
-                  padding: "6px 10px 6px 8px",
+                  padding: "6px 10px",
                   cursor: __interactionDisabled ? "not-allowed" : "pointer",
-                  color: "var(--text-muted)",
-                  fontSize: 12,
-                  fontWeight: 700,                  opacity: __interactionDisabled ? 0.55 : 1,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  opacity: __interactionDisabled ? 0.55 : 1,
                 }}
                 title={(uiText?.[uiLang]?.layout?.termsOfService || uiText?.en?.layout?.termsOfService) || "Terms of Service"}
                 aria-label={(uiText?.[uiLang]?.layout?.termsOfService || uiText?.en?.layout?.termsOfService) || "Terms of Service"}
               >
-                <span style={{ width: 28, height: 28, borderRadius: "50%", border: "1px solid var(--border-subtle)", display: "inline-flex", alignItems: "center", justifyContent: "center", background: "#fff" }}><BalanceScaleIcon size={18} /></span>
+                <BalanceScaleIcon size={18} />
               </button>
             </div>
 
@@ -1460,9 +1648,7 @@ function LayoutShell({
                     }}
                   />
                 ) : (
-                  <span style={getAvatarStyle(email, theme)}>
-                    {avatarLetter}
-                  </span>
+                  <span style={{ width: 28, height: 28, borderRadius: "50%", border: "1px solid var(--border-subtle)", display: "inline-flex", alignItems: "center", justifyContent: "center", background: "#fff" }}><PersonOutlineIcon size={18} /></span>
                 )}
               </button>
 
@@ -1496,10 +1682,12 @@ function LayoutShell({
                         color: "var(--text-muted)",
                       }}
                     >
-                      Today: LLM {usage.today.byKind.llm || 0} · TTS{" "}
+                      {(uiText?.[uiLang]?.usage?.today || uiText?.en?.usage?.today) || "Today"}: LLM{" "}
+                      {usage.today.byKind.llm || 0} · TTS{" "}
                       {usage.today.byKind.tts || 0}
                       <br />
-                      Month: LLM {usage.month.byKind.llm || 0} · TTS{" "}
+                      {(uiText?.[uiLang]?.usage?.month || uiText?.en?.usage?.month) || "Month"}: LLM{" "}
+                      {usage.month.byKind.llm || 0} · TTS{" "}
                       {usage.month.byKind.tts || 0}
                     </div>
                   )}
@@ -1512,7 +1700,8 @@ function LayoutShell({
                         marginBottom: 6,
                       }}
                     >
-                      方案：{planText}
+                      {(uiText?.[uiLang]?.layout?.planLabel || uiText?.en?.layout?.planLabel || "Plan: ")}
+                      {planText}
                     </div>
 
                     {profile?.plan === "free" ? (
@@ -1534,7 +1723,8 @@ function LayoutShell({
                             opacity: __billingBusy ? 0.6 : 1,
                           }}
                         >
-                          月繳升級
+                          {(uiText?.[uiLang]?.layout?.upgradeMonthly || uiText?.en?.layout?.upgradeMonthly) ||
+                            "Upgrade (monthly)"}
                         </button>
 
                         <button
@@ -1554,7 +1744,8 @@ function LayoutShell({
                             opacity: __billingBusy ? 0.6 : 1,
                           }}
                         >
-                          年繳升級
+                          {(uiText?.[uiLang]?.layout?.upgradeYearly || uiText?.en?.layout?.upgradeYearly) ||
+                            "Upgrade (yearly)"}
                         </button>
                       </div>
                     ) : null}
@@ -1578,6 +1769,10 @@ function LayoutShell({
                         await signOut?.();
                       } catch (e) {
                         console.warn("[LayoutShell] signOut failed:", e);
+                      } finally {
+                        // ✅ 確保 session / localStorage 都清乾淨，避免「登出後又自動回登入」的假登出
+                        try { await supabase.auth.signOut(); } catch {}
+                        __clearAuthLocalStorage();
                       }
                     }}
                     style={{
@@ -1604,6 +1799,7 @@ function LayoutShell({
         {children}
 
         {__renderTermsModal()}
+          {__renderLoginModal()}
           {renderSupportAdminModal()}
 
         {/* ====== 2026/02/01 新增：Footer - {uiText[uiLang]?.layout?.termsOfService || 'Terms of Service'}（最小插入，不影響既有邏輯） ====== */}

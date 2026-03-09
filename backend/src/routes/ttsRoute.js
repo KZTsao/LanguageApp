@@ -350,7 +350,7 @@ router.post("/", async (req, res) => {
     // const { text, lang = process.env.ELEVEN_LANGUAGE || "de" } = req.body || {};
 
     // ✅ 改為以 TTS_LANGUAGE 為主的預設值
-    const { text, lang = getDefaultLang() } = req.body || {};
+    const { text, lang = getDefaultLang(), gender, rate, voiceName } = req.body || {};
 
     if (!text || typeof text !== "string") {
       return res.status(400).json({ error: "Missing `text` field" });
@@ -372,7 +372,11 @@ router.post("/", async (req, res) => {
     // const voiceId = process.env.ELEVEN_VOICE_ID || "";
 
     const voiceKey = getVoiceKeyForCache(activeProvider) || "";
-    const providerScopedVoiceKey = `${activeProvider}:${voiceKey}`;
+    const rateKey = rate === undefined || rate === null ? "" : String(rate);
+    const genderKey = gender ? String(gender) : "";
+    const voiceNameKey = voiceName ? String(voiceName) : "";
+    const ttsOptKey = [voiceNameKey, genderKey, rateKey].join("|");
+    const providerScopedVoiceKey = `${activeProvider}:${voiceKey}|${ttsOptKey}`;
     const cacheKey = makeTtsCacheKey(text, lang, providerScopedVoiceKey);
 
     // ------------- Cache HIT -------------
@@ -408,6 +412,9 @@ router.post("/", async (req, res) => {
     const { audioContent, provider } = await synthesizeTTS({
       text,
       lang,
+      voiceName,
+      gender,
+      rate,
     });
 
     if (!audioContent) {

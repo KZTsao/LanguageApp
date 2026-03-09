@@ -342,8 +342,36 @@ function __mergeAuthorityIntoBase(baseEntry, authEntry) {
  * - signature 完全相容原本 lookupWord(text, explainLang, options)
  */
 async function lookupWord(text, explainLang, options) {
-  // 先走原本流程（避免破壞既有 DB/LLM 行為）
+  
+  try { globalThis.__solang_last_lookup_word = text; } catch {}
+  console.log('[定冠詞][dictionaryClient] lookupWord', { text, explainLang, hasOptions: !!options, options });
+// 先走原本流程（避免破壞既有 DB/LLM 行為）
   const base = await lookupWordLegacy(text, explainLang, options);
+
+  // [定冠詞]：保守修補 - 若 base 把冠詞類查詢判成 unknown，則強制回 Artikel（避免整條資料流落到 unknown）
+  const __da_raw = String(text || '').trim().toLowerCase();
+  const __da_isArtikelForm = (() => {
+    // 常見定冠詞/不定冠詞與格變化（僅在 unknown 時套用，不覆蓋已知詞性）
+    const s = new Set([
+      'der','die','das','den','dem','des',
+      'ein','eine','einen','einem','einer','eines',
+      'kein','keine','keinen','keinem','keiner','keines',
+      'dieser','diese','dieses','diesen','diesem',
+      'jener','jene','jenes','jenen','jenem',
+      'welcher','welche','welches','welchen','welchem',
+      'mancher','manche','manches','manchen','manchem',
+      'solcher','solche','solches','solchen','solchem'
+    ]);
+    return s.has(__da_raw);
+  })();
+
+  if (base && (base.partOfSpeech === 'unknown' || !base.partOfSpeech) && !base.canonicalPos && __da_isArtikelForm) {
+    console.log('[定冠詞][dictionaryClient] force Artikel (base unknown)', { text: __da_raw });
+    base.partOfSpeech = 'Artikel';
+    base.canonicalPos = 'Artikel';
+    if (!base.primaryPos) base.primaryPos = 'Artikel';
+    if (!base.posKey) base.posKey = 'Artikel';
+  }
 
   // 再旁掛權威辭典（只補缺欄位）
   if (!__DICT_AUTHORITY_ENABLED) return base;
@@ -357,11 +385,21 @@ async function lookupWord(text, explainLang, options) {
       !(base.recommendations && Array.isArray(base.recommendations.synonyms) && base.recommendations.synonyms.length) &&
       !(base.recommendations && Array.isArray(base.recommendations.antonyms) && base.recommendations.antonyms.length));
 
-  // 若 base 已足夠，就不查 authority
+  
+  console.log('[定冠詞][dictionaryClient] base', {
+    hasBase: !!base,
+    word: base && base.word,
+    partOfSpeech: base && base.partOfSpeech,
+    canonicalPos: base && base.canonicalPos,
+    needAuthority,
+  });
+// 若 base 已足夠，就不查 authority
   if (!needAuthority) return base;
 
   const auth = await __lookupWiktionaryAuthority(text);
-  return __mergeAuthorityIntoBase(base, auth);
+  
+  console.log('[定冠詞][dictionaryClient] authority', { hasAuth: !!auth, partOfSpeech: auth && auth.partOfSpeech, canonicalPos: auth && auth.canonicalPos });
+return __mergeAuthorityIntoBase(base, auth);
 }
 
 
@@ -493,30 +531,35 @@ function getDialogSystem(uiLang) {
 function getTranslationSystem(uiLang) {
   const translationSystemByLang = {
     "zh-TW":
-      "你會收到多行德文對話。請逐行翻譯成『繁體中文』，輸出格式規則：\n" +
-      "1. 每行只放對應的一句翻譯。\n" +
-      "2. 不要編號，不要引號。\n" +
-      "3. 不要任何說明文字，只輸出翻譯的那些行。",
+      "你會收到多行德文對話。請逐行翻譯成『繁體中文』。\n" +
+      "輸出格式：只回傳 JSON 字串陣列（array of strings），元素數量必須與輸入行數完全相同。\n" +
+      "禁止：編號、任何說明文字、Markdown。",
     "zh-CN":
-      "你会收到多行德语对话。请逐行翻译成『简体中文』，输出规则：\n" +
-      "1. 每行只放对应一句翻译。\n" +
-      "2. 不要编号，不要引号。\n" +
-      "3. 不要任何解释，只输出翻译的行。",
+      "你会收到多行德语对话。请逐行翻译成『简体中文』。\n" +
+      "输出格式：只返回 JSON 字符串数组（array of strings），数量必须与输入行数完全一致。\n" +
+      "禁止：编号、额外解释、Markdown。",
     en:
       "You will receive several lines of German dialogue. Translate line by line into English.\n" +
-      "Output rules:\n" +
-      "1. Each line contains only the translation of the corresponding German line.\n" +
-      "2. No numbers, no quotes.\n" +
-      "3. No explanations – only the translated lines.",
+      "Output format: return ONLY a JSON array of strings with exactly the same number of items as the input lines.\n" +
+      "No extra text, no Markdown.",
     de:
       "Du erhältst mehrere Zeilen eines deutschen Dialogs. Gib für jede Zeile eine einfache deutsche Umschreibung oder Erklärung.\n" +
-      "Ausgaberichtlinien:\n" +
-      "1. Eine Umschreibung pro Zeile, in derselben Reihenfolge.\n" +
-      "2. Keine Nummerierung, keine Anführungszeichen.\n" +
-      "3. Keine zusätzlichen Erklärungen – nur diese Zeilen。",
+      "Ausgabeformat: Gib NUR ein JSON-Array von Strings zurück, mit exakt derselben Anzahl Einträge wie die Eingabezeilen.\n" +
+      "Kein zusätzlicher Text, kein Markdown。",
   };
 
   return translationSystemByLang[uiLang] || translationSystemByLang.en;
+}
+
+/**
+ * 中文功能說明：把 uiLang 轉成可讀的語言名稱（僅用於 prompt 字串）
+ */
+function mapExplainLang(uiLang) {
+  const v = String(uiLang || "").trim();
+  if (v === "zh-TW") return "Traditional Chinese";
+  if (v === "zh-CN") return "Simplified Chinese";
+  if (v === "de") return "German";
+  return "English";
 }
 
 /**
@@ -681,7 +724,7 @@ async function generateConversation({
   const uiLang = explainLang || "zh-TW";
   const model = resolveConversationModel();
 
-  // ========= STEP 1：產生德文對話 =========
+  // ========= STEP 1：產生德文對話（4–6 句）=========
   const dialogSystem = getDialogSystem(uiLang);
   let germanTurns = [];
 
@@ -724,9 +767,6 @@ async function generateConversation({
 
   console.log("[conversation] germanTurns =", germanTurns);
 
-  // 先建立預設輸出（避免翻譯失敗時沒有結構）
-  let finalTurns = germanTurns.map((de) => ({ de, translation: "" }));
-
   // ========= STEP 2：產生對應翻譯 =========
   const translationSystem = getTranslationSystem(uiLang);
   let translations = [];
@@ -738,7 +778,7 @@ async function generateConversation({
       maxTokens: 400,
       systemPrompt: translationSystem,
       userPrompt:
-        "Bitte übersetze jede der folgenden Zeilen einzeln und gib NUR die Übersetzungen Zeile für Zeile aus:\n\n" +
+        `Translate each line into ${mapExplainLang(uiLang)}. Return ONLY a JSON array of strings with exactly ${germanTurns.length} items (no extra text).\n\n` +
         germanTurns.join("\n"),
     });
 
@@ -755,10 +795,24 @@ async function generateConversation({
     const rawTrans = transCompletion?.choices?.[0]?.message?.content || "";
     console.log("[conversation] RAW translation response =", rawTrans);
 
-    translations = alignTranslations(
-      splitLines(rawTrans).map(stripLeadingNumber),
-      germanTurns.length
-    );
+    translations = (() => {
+      // Prefer strict JSON array to avoid line-mismatch issues
+      try {
+        const js = JSON.parse(rawTrans);
+        if (Array.isArray(js)) {
+          return alignTranslations(
+            js.map((x) => (typeof x === "string" ? x : String(x || ""))),
+            germanTurns.length
+          );
+        }
+      } catch (_) {}
+
+      // Fallback: line-based parsing
+      return alignTranslations(
+        splitLines(rawTrans).map(stripLeadingNumber),
+        germanTurns.length
+      );
+    })();
   } catch (err) {
     console.error("[conversation] Groq error on translation:", err);
     translations = [];
@@ -766,16 +820,11 @@ async function generateConversation({
 
   console.log("[conversation] translations =", translations);
 
-  if (translations.length === germanTurns.length) {
-    finalTurns = germanTurns.map((de, idx) => ({
-      de,
-      translation: translations[idx] || "",
-    }));
-  } else {
-    console.log(
-      "[conversation] translation length mismatch, keep translation empty"
-    );
-  }
+  // ========= STEP 3：組裝輸出（永遠回傳固定結構）=========
+  const finalTurns = germanTurns.map((de, idx) => ({
+    de: typeof de === "string" ? de : String(de || ""),
+    translation: typeof translations?.[idx] === "string" ? translations[idx].trim() : "",
+  }));
 
   console.log("[conversation] finalTurns =", finalTurns);
   return finalTurns;
@@ -817,6 +866,8 @@ async function generateImportCandidates({
     if (v === "vocab") return "word";
     if (v === "words") return "word";
     if (v === "phrases") return "phrase";
+    if (v === "sentence") return "sentence";
+    if (v === "sentences") return "sentence";
     if (v === "grammars") return "grammar";
     return v;
   };
@@ -831,7 +882,7 @@ async function generateImportCandidates({
       "You are a helpful assistant that generates German learning candidates.",
       "Return STRICT JSON only. No markdown, no explanation.",
       "The JSON must be an array of objects.",
-      "Each object: { candidateId: string, type: 'word'|'phrase'|'grammar', importKey: string, display: { de: string } }",
+      "Each object: { candidateId: string, type: 'word'|'phrase'|'sentence'|'grammar', importKey: string, display: { de: string } }",
       "HARD RULES:",
       `- Output ONLY type = '${safeType}' (do not output other types).`,
       "- German only: importKey and display.de MUST be German text (no English translations, no Chinese).",
@@ -840,7 +891,8 @@ async function generateImportCandidates({
       "- candidateId must be unique within the array.",
       "- importKey must be unique within the array.",
       "- For type=word: importKey should be ONE German word (no spaces).",
-      "- For type=phrase: importKey should be a short everyday German phrase.",
+      "- For type=phrase: importKey MUST be a short everyday German phrase (NOT a full sentence). Aim for 2–6 words. It MUST NOT end with . ? ! (no sentence-ending punctuation).",
+      "- For type=sentence: importKey MUST be a full everyday German sentence (NOT a fragment). It must have at least 4 words, start with a capital letter, and end with one of: . ? !",
       "- For type=grammar: importKey should be a short grammar label (e.g., 'Präsens').",
       "- Do not output any candidate whose importKey is in excludeKeys (case-insensitive).",
     ].join("\n");
@@ -904,8 +956,39 @@ async function generateImportCandidates({
       // type=word 額外保護：避免出現空白（多詞片語）
       if (wantType === "word" && /\s/.test(k)) continue;
 
+      // type=phrase 額外保護：強制「片語」而非整句（2–6 詞，且不得有句尾標點）
+      if (wantType === "phrase") {
+        const words = k.split(/\s+/).filter(Boolean);
+        if (words.length < 2) continue;
+        if (words.length > 6) continue;
+        if (/[.?!]$/.test(k)) continue;
+      }
+
+      // type=sentence 額外保護：強制「整句」（至少 4 個詞，首字大寫，句尾標點）
+      if (wantType === "sentence") {
+        const words = k.split(/\s+/).filter(Boolean);
+        if (words.length < 4) continue;
+        if (!/[.?!]$/.test(k)) continue;
+        if (!/^[A-ZÄÖÜ]/.test(k)) continue;
+      }
+
       const cid = normalizeKey(it.candidateId || it.id || `cand_${Date.now()}_${Math.random()}`);
       const de = normalizeKey(it.display?.de || k);
+
+      if (wantType === "phrase") {
+        const wordsDe = de.split(/\s+/).filter(Boolean);
+        if (wordsDe.length < 2) continue;
+        if (wordsDe.length > 6) continue;
+        if (/[.?!]$/.test(de)) continue;
+      }
+
+      if (wantType === "sentence") {
+        const wordsDe = de.split(/\s+/).filter(Boolean);
+        if (wordsDe.length < 4) continue;
+        if (!/[.?!]$/.test(de)) continue;
+        if (!/^[A-ZÄÖÜ]/.test(de)) continue;
+      }
+
 
       // German-only guard: drop candidates that contain CJK or disallowed characters
       if (!__isGermanOnly(k) || !__isGermanOnly(de)) continue;

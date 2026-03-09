@@ -39,6 +39,44 @@ import { getAuthAccessToken } from "./authTokenStore";
 // ======================================
 const VISIT_ID_STORAGE_KEY = "solang_visit_id";
 
+// UUID v4 generator (fallback when crypto.randomUUID is not available)
+// - Must be "uuid-like" because backend enforces anon quota only when visit-id looks like UUID.
+function __uuidV4Fallback() {
+  try {
+    const rnd = (n) => {
+      // return a number in [0, n)
+      try {
+        if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
+          const buf = new Uint8Array(1);
+          crypto.getRandomValues(buf);
+          return buf[0] % n;
+        }
+      } catch {
+        // ignore
+      }
+      return Math.floor(Math.random() * n);
+    };
+
+    const hex = (len) => {
+      let out = "";
+      for (let i = 0; i < len; i++) out += "0123456789abcdef"[rnd(16)];
+      return out;
+    };
+
+    // UUID v4: xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx (y: 8..b)
+    const a = hex(8);
+    const b = hex(4);
+    const c = `4${hex(3)}`;
+    const y = "89ab"[rnd(4)];
+    const d = `${y}${hex(3)}`;
+    const e = hex(12);
+    return `${a}-${b}-${c}-${d}-${e}`;
+  } catch {
+    // Worst-case fallback: still return a uuid-like string
+    return "00000000-0000-4000-8000-000000000000";
+  }
+}
+
 function getOrCreateVisitId() {
   try {
     const existing = localStorage.getItem(VISIT_ID_STORAGE_KEY);
@@ -46,10 +84,9 @@ function getOrCreateVisitId() {
     const id =
       (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
         ? crypto.randomUUID()
-        : `${Date.now()}-${Math.random()}-${Math.random()}`)
+        : __uuidV4Fallback())
         .toString()
         .trim();
-    // If fallback was used, it won't be uuid; server will ignore for quota.
     localStorage.setItem(VISIT_ID_STORAGE_KEY, id);
     return id;
   } catch {
@@ -137,6 +174,76 @@ function getAccessToken() {
   }
 }
 
+// ======================================
+// ✅ Backward-compat fallback: read Supabase token from localStorage ONCE
+// - Reason: authTokenStore may not be hydrated yet (page refresh timing)
+// - Safety: read-only; single scan per page load; cache result
+// - This re-introduces the old capability in a strictly-limited way.
+// ======================================
+const __legacyTokenCache = {
+  checked: false,
+  key: null,
+  token: null,
+};
+
+function __looksLikeJwt(token) {
+  try {
+    const s = String(token || "").trim();
+    if (!s) return false;
+    const parts = s.split(".");
+    return parts.length === 3 && parts.every((p) => p && p.length > 8);
+  } catch {
+    return false;
+  }
+}
+
+function getLegacyAccessTokenFromLocalStorageOnce() {
+  try {
+    if (__legacyTokenCache.checked) return __legacyTokenCache.token;
+    __legacyTokenCache.checked = true;
+
+    // Only read; never write; never mutate Supabase state.
+    const keys = Object.keys(localStorage || {});
+    const candidates = keys
+      .filter((k) => String(k).includes("auth-token"))
+      // Prefer supabase-like keys first (sb-...-auth-token)
+      .sort((a, b) => (String(b).startsWith("sb-") ? 1 : 0) - (String(a).startsWith("sb-") ? 1 : 0));
+
+    for (const k of candidates) {
+      let raw = null;
+      try {
+        raw = localStorage.getItem(k);
+      } catch {
+        raw = null;
+      }
+      if (!raw) continue;
+
+      let parsed = null;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        parsed = null;
+      }
+
+      const t =
+        parsed?.access_token ||
+        parsed?.currentSession?.access_token ||
+        parsed?.session?.access_token ||
+        null;
+      if (t && __looksLikeJwt(t)) {
+        __legacyTokenCache.key = k;
+        __legacyTokenCache.token = t;
+        initStatus.lastAuthTokenKey = k;
+        return t;
+      }
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 
 // ======================================
 // 功能：檢查 headers 是否已經有 Content-Type
@@ -166,12 +273,44 @@ function ensureJsonContentTypeIfNeeded(headers, options) {
 
   if (hasContentTypeHeader(next)) return next;
 
+  const body = options.body;
+
+  // IMPORTANT: do NOT force JSON for FormData / binary bodies
+  // - FormData: browser will set multipart/form-data boundary automatically
+  // - Blob/ArrayBuffer/TypedArray: typically used for binary uploads (e.g. ASR audio)
+  try {
+    if (typeof FormData !== "undefined" && body instanceof FormData) return next;
+  } catch (_) {}
+  try {
+    if (typeof Blob !== "undefined" && body instanceof Blob) return next;
+  } catch (_) {}
+  if (typeof ArrayBuffer !== "undefined" && body instanceof ArrayBuffer) return next;
+  if (typeof Uint8Array !== "undefined" && body instanceof Uint8Array) return next;
+
   // 你目前 App.jsx 會用 JSON.stringify(...) 傳 body
   // 若沒有 Content-Type，後端 express.json() 可能不會 parse，導致 req.body undefined
   next["Content-Type"] = "application/json";
 
   return next;
 }
+
+
+// ======================================
+// 功能：判斷該 API 是否允許「匿名」呼叫
+// - 用於處理：前端殘留/過期 token 導致 401 時，對匿名可用的 API 做一次無 token 重試
+// - 只允許少量白名單，避免影響需要登入的 API
+// ======================================
+function isAnonAllowedPath(path) {
+  if (typeof path !== "string") return false;
+  return (
+    path === "/api/analyze" ||
+    path.startsWith("/api/dictionary/lookup") ||
+    path.startsWith("/api/dictionary/examples") ||
+    path.startsWith("/api/dictionary/conversation") ||
+    path.startsWith("/api/query/normalize")
+  );
+}
+
 
 /**
  * 功能：apiFetch(path, options)
@@ -201,24 +340,44 @@ export async function apiFetch(path, options = {}) {
   // ✅ 自動補 JSON Content-Type（本輪修正點）
   headers = ensureJsonContentTypeIfNeeded(headers, options);
 
-  // ✅ 自動補 Authorization（只使用 authTokenStore：由 AuthProvider 單一出口更新）
-  const token = getAuthAccessToken();
+  // ✅ 自動補 Authorization
+  // 1) primary: authTokenStore（由 AuthProvider 單一出口更新）
+  // 2) fallback: localStorage scan ONCE（僅用於 refresh 初期 store 尚未 hydrated 的窗口）
+  
+  // ✅ Always attach visit id for both anonymous and logged-in users
+  // - Do NOT overwrite caller-provided header
+  // - Helps server-side usage tracking for anonymous flows and debugging
+  if (!headers["x-visit-id"]) {
+    const visitId = getOrCreateVisitId();
+    if (visitId) headers["x-visit-id"] = visitId;
+  }
+
+const token = getAuthAccessToken() || getLegacyAccessTokenFromLocalStorageOnce();
   __supportTrace('apiClient:token', { hasToken: !!token, tokenLen: token ? String(token).length : 0 });
   if (token) {
     headers["Authorization"] = `Bearer ${token}`;
-  } else {
-    // ✅ Anonymous quota key (server-side enforcement)
-    const visitId = getOrCreateVisitId();
-    if (visitId) headers["x-visit-id"] = visitId;
   }
 
   try {
     try {
       try { console.info("[apiFetch] request", { path, url: `${API_BASE}${path}` }); } catch (_) {}
-      const __resp = await fetch(`${API_BASE}${path}`, {
-            ...options,
-            headers,
-          });
+      const __doFetch = async (__headers) =>
+            fetch(`${API_BASE}${path}`, {
+              ...options,
+              headers: __headers,
+            });
+
+      let __resp = await __doFetch(headers);
+
+      // ✅ 如果有殘留/過期 token 造成 401，且該 API 允許匿名，則無 token 重試一次
+      // - 目的：匿名模式不要被「舊 token」卡死（例如 /api/dictionary/examples）
+      if (__resp.status === 401 && token && isAnonAllowedPath(path)) {
+        const __retryHeaders = { ...(headers || {}) };
+        delete __retryHeaders["Authorization"];
+        const __visitId2 = __retryHeaders["x-visit-id"] || getOrCreateVisitId();
+        if (__visitId2) __retryHeaders["x-visit-id"] = __visitId2;
+        __resp = await __doFetch(__retryHeaders);
+      }
       try { console.info("[apiFetch] response", { path, status: __resp.status }); } catch (_) {}
       if (!__resp.ok) {
         const __clone = __resp.clone();
@@ -237,26 +396,43 @@ export async function apiFetch(path, options = {}) {
         } catch (_) {}
       }
 
-      // ✅ Anonymous daily limit hint (UI)
-      // - Server returns: 429 { error: "ANON_DAILY_LIMIT_REACHED" }
-      // - We do NOT consume body (use clone)
+      // ✅ Usage limit hint (UI)
+// - Server returns: 429 { error: "*_LIMIT_REACHED", tier, metric, timeWindow, resetAt?, ... }
+// - We do NOT consume body (use clone)
+// - Do NOT show hardcoded strings here; UI layer will decide via uiText.
       try {
         if (__resp.status === 429) {
           const __clone429 = __resp.clone();
           let __p = null;
           try { __p = await __clone429.json(); } catch (_) { __p = null; }
-          if (__p && __p.error === "ANON_DAILY_LIMIT_REACHED") {
-            // Event hook (preferred)
+          const __code = String(__p?.error || "").trim();
+          const __isAnonDailyLimit =
+            __code === "ANON_DAILY_LIMIT_REACHED" ||
+            /^ANON_DAILY_.*_LIMIT_REACHED$/.test(__code);
+
+          // ✅ New: generic quota/usage limit event (covers anon/free/paid/premium)
+          // - UI layer decides how to render message (i18n)
+          if (__code) {
             try {
               window.dispatchEvent(
-                new CustomEvent("anon-daily-limit", { detail: { ...__p, path } })
+                new CustomEvent("langapp:quotaLimit", {
+                  detail: {
+                    ...(__p || {}),
+                    code: __code,
+                    path,
+                    status: 429,
+                  },
+                })
               );
             } catch (_) {}
+          }
 
-            // Minimal fallback: alert once per page load
-            if (true) {
-              try { window.alert("如果要查詢更多，請註冊會員"); } catch (_) {}
-            }
+          if (__isAnonDailyLimit) {
+            try {
+              window.dispatchEvent(
+                new CustomEvent("langapp:anonDailyLimit", { detail: { ...(__p || {}), code: __code, path } })
+              );
+            } catch (_) {}
           }
         }
       } catch (_) {}
@@ -285,3 +461,6 @@ export { API_BASE, initStatus };
 
 
 // PATCH: ensure uiLang is forwarded when calling pronunciation-tips
+export function getVisitId() {
+  return getOrCreateVisitId();
+}

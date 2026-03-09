@@ -117,6 +117,7 @@
 
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import SupportAdminPage from "./pages/SupportAdminPage";
+import LoginPage from "./pages/LoginPage";
 import uiText from "./uiText";
 import WordCard from "./components/word/WordCard";
 import GrammarCard from "./components/grammar/GrammarCard";
@@ -197,6 +198,187 @@ import { useAppState } from "./app/useAppState";
 // ✅ 拆出：單字庫/收藏 controller
 import { useLibraryController } from "./hooks/useLibraryController";
 import { findFavoritesSnapshot, upsertFavoritesSnapshot } from "./app/favoritesSnapshotStorage";
+
+// ============================================================
+// In-App Browser Guard (LINE / Instagram / Facebook WebView)
+// - 目的：在內建瀏覽器中提示「請用系統瀏覽器開啟」，避免語音/登入在 WebView 失敗
+// - 設計原則：
+//   1) 不嘗試強制跳轉（多數 WebView 會攔截/無效）
+//   2) 永遠可關閉（避免把使用者鎖死），但提供「複製連結」與操作指引
+//   3) 只在偵測到常見 In-App WebView 且為行動裝置時顯示
+// ============================================================
+
+function __detectInAppBrowser() {
+  try {
+    if (typeof navigator === "undefined") return { isInApp: false, name: "" };
+    const ua = String(navigator.userAgent || "");
+    const ual = ua.toLowerCase();
+
+    // Mobile guard (avoid desktop false positives)
+    const isMobile = /iphone|ipad|ipod|android|mobile/.test(ual);
+    if (!isMobile) return { isInApp: false, name: "" };
+
+    // Instagram
+    if (ual.includes("instagram")) return { isInApp: true, name: "Instagram" };
+
+    // LINE
+    // iOS LINE often includes "Line"; Android also.
+    if (ual.includes(" line/") || ual.includes("line")) return { isInApp: true, name: "LINE" };
+
+    // Facebook / Messenger
+    if (ual.includes("fbav") || ual.includes("fban") || ual.includes("fb_iab")) return { isInApp: true, name: "Facebook" };
+    if (ual.includes("messenger")) return { isInApp: true, name: "Messenger" };
+
+    // TikTok (common ad traffic)
+    if (ual.includes("tiktok")) return { isInApp: true, name: "TikTok" };
+
+    return { isInApp: false, name: "" };
+  } catch {
+    return { isInApp: false, name: "" };
+  }
+}
+
+function InAppBrowserGuard({ uiLang = "zh-TW", theme = "light" } = {}) {
+  const [open, setOpen] = useState(false);
+  const [detected, setDetected] = useState({ isInApp: false, name: "" });
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    const d = __detectInAppBrowser();
+    setDetected(d);
+    if (d && d.isInApp) setOpen(true);
+  }, []);
+
+  const textPack = useMemo(() => {
+    const isZh = String(uiLang || "").toLowerCase().startsWith("zh");
+    if (isZh) {
+      return {
+        title: "請用系統瀏覽器開啟",
+        body:
+          "你目前在 App 內建瀏覽器（WebView）中開啟。\n\n為了正常使用『語音』與『登入』，請改用 Safari / Chrome 開啟這個頁面。",
+        hintIOS: "iPhone：點右上角『分享』→『在 Safari 打開』",
+        hintAndroid: "Android：點右上角『⋮』→『在瀏覽器中開啟』",
+        copy: "複製連結",
+        copied: "已複製",
+        close: "先繼續使用（可能不穩）",
+      };
+    }
+
+    return {
+      title: "Open in your browser",
+      body:
+        "You are viewing this page inside an in-app browser (WebView).\n\nFor microphone and login to work reliably, please open it in Safari / Chrome.",
+      hintIOS: "iPhone: Tap Share → Open in Safari",
+      hintAndroid: "Android: Tap ⋮ → Open in browser",
+      copy: "Copy link",
+      copied: "Copied",
+      close: "Continue here (may break)",
+    };
+  }, [uiLang]);
+
+  const doCopy = useCallback(async () => {
+    try {
+      const url = typeof window !== "undefined" ? String(window.location.href || "") : "";
+      if (!url) return;
+      if (navigator?.clipboard?.writeText) {
+        await navigator.clipboard.writeText(url);
+      } else {
+        // fallback
+        const ta = document.createElement("textarea");
+        ta.value = url;
+        ta.setAttribute("readonly", "");
+        ta.style.position = "fixed";
+        ta.style.left = "-9999px";
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+      }
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  if (!open || !detected?.isInApp) return null;
+
+  const border = theme === "dark" ? "1px solid rgba(255,255,255,0.16)" : "1px solid rgba(0,0,0,0.10)";
+  const bg = theme === "dark" ? "rgba(18,18,18,0.92)" : "rgba(255,255,255,0.95)";
+  const fg = theme === "dark" ? "rgba(255,255,255,0.92)" : "rgba(0,0,0,0.84)";
+  const muted = theme === "dark" ? "rgba(255,255,255,0.70)" : "rgba(0,0,0,0.62)";
+
+  return (
+    <div
+      className="inapp-browser-guard"
+      style={{
+        position: "fixed",
+        inset: 0,
+        zIndex: 10000,
+        background: theme === "dark" ? "rgba(0,0,0,0.55)" : "rgba(0,0,0,0.35)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 16,
+      }}
+    >
+      <div
+        style={{
+          width: "min(520px, 100%)",
+          borderRadius: 16,
+          border,
+          background: bg,
+          color: fg,
+          boxShadow: theme === "dark" ? "0 18px 50px rgba(0,0,0,0.65)" : "0 18px 50px rgba(0,0,0,0.22)",
+          padding: 16,
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+          <div style={{ fontSize: 16, fontWeight: 700 }}>{textPack.title}</div>
+          <div style={{ fontSize: 12, color: muted }}>{detected?.name ? `Detected: ${detected.name}` : ""}</div>
+        </div>
+
+        <div style={{ marginTop: 10, whiteSpace: "pre-wrap", lineHeight: 1.45, color: fg }}>{textPack.body}</div>
+
+        <div style={{ marginTop: 12, display: "grid", gap: 6, color: muted, fontSize: 13 }}>
+          <div>• {textPack.hintIOS}</div>
+          <div>• {textPack.hintAndroid}</div>
+        </div>
+
+        <div style={{ marginTop: 14, display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <button
+            onClick={doCopy}
+            style={{
+              padding: "10px 12px",
+              borderRadius: 12,
+              border,
+              background: theme === "dark" ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.04)",
+              color: fg,
+              cursor: "pointer",
+              fontWeight: 600,
+            }}
+          >
+            {copied ? textPack.copied : textPack.copy}
+          </button>
+
+          <button
+            onClick={() => setOpen(false)}
+            style={{
+              padding: "10px 12px",
+              borderRadius: 12,
+              border,
+              background: "transparent",
+              color: muted,
+              cursor: "pointer",
+            }}
+          >
+            {textPack.close}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 // ===== [20260202 support] console logger =====
 const __SUPPORT_TRACE_ON =
   typeof import.meta !== "undefined" &&
@@ -657,7 +839,7 @@ useEffect(() => {
 
   if (__authPath.endsWith("/auth/callback")) return <AuthCallbackLite />;
   if (__authPath.endsWith("/reset-password")) return <ResetPasswordPageLite />;
-  if (__authPath.endsWith("/login") || __authPath.endsWith("/auth")) return <EmailAuthPageLite />;
+  if (__authPath.endsWith("/login") || __authPath.endsWith("/auth")) return <LoginPage />;
 
 
   // ✅ Step 1：集中 state（不含 effect）
@@ -665,6 +847,12 @@ useEffect(() => {
     authUserId,
     defaultUiLang: "zh-TW",
   });
+
+  // ============================================================
+  // ✅ /library/add (independent import page) state
+  // - no router: keep a lightweight URL sync
+  // ============================================================
+  const [libraryAddTargetCategoryId, setLibraryAddTargetCategoryId] = useState("");
 
   const {
     text,
@@ -719,6 +907,55 @@ useEffect(() => {
     setTestMetaMap,
     setTestMetaLoading,
   } = actions;
+
+  // ✅ URL → view sync (best-effort, no router)
+  useEffect(() => {
+    try {
+      if (typeof window === "undefined") return;
+      const path = String(window.location.pathname || "").replace(/\/+$/g, "");
+      if (!path.endsWith("/library/add")) return;
+
+      const url = new URL(window.location.href);
+      const cid = url.searchParams.get("categoryId") || url.searchParams.get("category_id") || "";
+      if (cid) setLibraryAddTargetCategoryId(String(cid));
+      setView("libraryAdd");
+    } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const openLibraryAddPage = useCallback(
+    (categoryId) => {
+      const cid = categoryId != null ? String(categoryId) : "";
+      setLibraryAddTargetCategoryId(cid);
+
+      try {
+        setShowLibraryModal(false);
+      } catch {}
+      try {
+        setView("libraryAdd");
+      } catch {}
+
+      // push URL (optional)
+      try {
+        if (typeof window !== "undefined" && window.history && window.history.pushState) {
+          const nextUrl = cid ? `/library/add?categoryId=${encodeURIComponent(cid)}` : "/library/add";
+          window.history.pushState({}, "", nextUrl);
+        }
+      } catch {}
+    },
+    [setShowLibraryModal, setView]
+  );
+
+  const closeLibraryAddPage = useCallback(() => {
+    try {
+      setView("search");
+    } catch {}
+    try {
+      if (typeof window !== "undefined" && window.history && window.history.pushState) {
+        window.history.pushState({}, "", "/");
+      }
+    } catch {}
+  }, [setView]);
 
   const {
     safeWriteLocalStorageText,
@@ -893,6 +1130,58 @@ useEffect(() => {
     setResult,
   });
 
+  // ===== [DEBUG] soLang mode/intent observer (no logic change) =====
+  const __soDbgLastRef = useRef(null);
+  const __soDbgWatchRef = useRef(false);
+
+  // ============================================================
+  // UI intent（searchbox/user-search/...）
+  // - 不新增 state：用 ref 記錄「最近一次 analyze 的 intent」
+  // - 目的：ResultPanel 的「返回學習」顯示規則必須以 intent 為條件
+  // ============================================================
+  const lastNavIntentRef = useRef("");
+
+  const __soDbgSnapshot = useCallback(() => {
+    return {
+      mode,
+      view,
+      historyIndex,
+      navIntent: (lastNavIntentRef && lastNavIntentRef.current) || "",
+      learningTitle: learningContext?.title || "",
+      queryText,
+      lastNormalizedQuery,
+    };
+  }, [mode, view, historyIndex, learningContext, queryText, lastNormalizedQuery]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const w = window;
+    if (!w.__soLangDebug) w.__soLangDebug = {};
+    w.__soLangDebug.snapshot = __soDbgSnapshot;
+    w.__soLangDebug.mode = () => mode;
+    w.__soLangDebug.view = () => view;
+    w.__soLangDebug.historyIndex = () => historyIndex;
+    w.__soLangDebug.learningTitle = () => learningContext?.title;
+    w.__soLangDebug.watch = () => {
+      __soDbgWatchRef.current = true;
+      try { console.log('[DEBUG] watch:on', __soDbgSnapshot()); } catch {}
+    };
+    w.__soLangDebug.unwatch = () => {
+      __soDbgWatchRef.current = false;
+      try { console.log('[DEBUG] watch:off'); } catch {}
+    };
+    try {
+      const snap = __soDbgSnapshot();
+      const key = JSON.stringify(snap);
+      if (__soDbgWatchRef.current && __soDbgLastRef.current !== key) {
+        __soDbgLastRef.current = key;
+        console.log('[DEBUG] state', snap);
+      }
+    } catch {}
+  }, [__soDbgSnapshot, mode, view, historyIndex, learningContext, queryText, lastNormalizedQuery]);
+  // ===== END [DEBUG] =====
+
+
   // ============================================================
   // Fix: Maximum update depth exceeded（Task 2 navContext + unstable handlers）
   // - 原因：goPrevHistory/goNextHistory 可能是每次 render 都變的新 function
@@ -1040,6 +1329,98 @@ useEffect(() => {
     };
   }, [currentUiText]);
 
+  // ✅ Anonymous daily limit (429) is a normal product flow, not a crash.
+  // - apiClient dispatches: window.dispatchEvent(new CustomEvent('langapp:anonDailyLimit', ...))
+  // - App renders UI message via uiText (no hardcoded strings)
+  useEffect(() => {
+    const onAnonDailyLimit = () => {
+      try {
+        window.alert(t("alerts.anonDailyLimit"));
+      } catch {}
+    };
+
+    try {
+      window.addEventListener("langapp:anonDailyLimit", onAnonDailyLimit);
+    } catch {}
+
+    return () => {
+      try {
+        window.removeEventListener("langapp:anonDailyLimit", onAnonDailyLimit);
+      } catch {}
+    };
+  }, [t]);
+
+  // ✅ Generic quota/usage limit (429)
+  // - apiClient dispatches: window.dispatchEvent(new CustomEvent('langapp:quotaLimit', { detail }))
+  // - Covers: anon/free/paid/ + daily/monthly + all metrics
+  useEffect(() => {
+    const safeToLocalString = (iso) => {
+      try {
+        if (!iso) return "";
+        const d = new Date(iso);
+        if (Number.isNaN(d.getTime())) return String(iso);
+        return d.toLocaleString();
+      } catch {
+        return String(iso || "");
+      }
+    };
+
+    const buildQuotaMessage = (detail) => {
+      const code = String(detail?.code || detail?.error || "").trim();
+      const tier = String(detail?.tier || "").trim();
+      const metric = String(detail?.metric || detail?.feature || "").trim();
+      const timeWindow = String(detail?.timeWindow || detail?.time_window || "").trim();
+      const resetAt = detail?.resetAt || detail?.reset_at || detail?.nextResetAt || detail?.next_reset_at;
+
+      // Avoid double-alert: anon daily has its own dedicated handler.
+      if (code === "ANON_DAILY_LIMIT_REACHED" || /^ANON_DAILY_.*_LIMIT_REACHED$/.test(code)) return "";
+
+      const tierLabel = t(`alerts.quotaParts.tier.${tier}`);
+      const winLabel = t(`alerts.quotaParts.window.${timeWindow}`);
+      const metricLabel = t(`alerts.quotaParts.metric.${metric}`);
+
+      // Fallbacks (still i18n-driven)
+      const tierLabelFinal = tierLabel && tierLabel !== "—" ? tierLabel : t("alerts.quotaParts.tier.unknown");
+      const winLabelFinal = winLabel && winLabel !== "—" ? winLabel : t("alerts.quotaParts.window.unknown");
+      const metricLabelFinal = metricLabel && metricLabel !== "—" ? metricLabel : t("alerts.quotaParts.metric.unknown");
+
+      const reached = t("alerts.quotaParts.reached");
+      const sep = t("alerts.quotaParts.sep");
+
+      let msg = `${tierLabelFinal}${sep}${winLabelFinal}${metricLabelFinal}${reached}`;
+
+      if (resetAt) {
+        const resetPrefix = t("alerts.quotaParts.resetAtPrefix");
+        msg += `${resetPrefix}${safeToLocalString(resetAt)}`;
+      }
+
+      // If everything missing, use a generic fallback (still via uiText)
+      if (!msg || msg.includes("—")) {
+        msg = t("alerts.quotaParts.generic");
+      }
+      return msg;
+    };
+
+    const onQuotaLimit = (evt) => {
+      try {
+        const detail = evt?.detail || {};
+        const msg = buildQuotaMessage(detail);
+        if (!msg) return;
+        window.alert(msg);
+      } catch {}
+    };
+
+    try {
+      window.addEventListener("langapp:quotaLimit", onQuotaLimit);
+    } catch {}
+
+    return () => {
+      try {
+        window.removeEventListener("langapp:quotaLimit", onQuotaLimit);
+      } catch {}
+    };
+  }, [t]);
+
   // ✅ 初始化：語言/主題/最後查詢（分桶），並保留 legacy fallback
   useEffect(() => {
     try {
@@ -1179,6 +1560,10 @@ useEffect(() => {
 
     // options.preflightNormalize === false → skip
     const __intent = options && typeof options.intent === "string" ? options.intent : "";
+    // ✅ UI: remember last intent (ref-only; no new state)
+    try {
+      lastNavIntentRef.current = __intent || "";
+    } catch {}
     const __shouldPreflight =
       options?.preflightNormalize !== false &&
       (__intent === "user-search" || __intent === "searchbox" || __intent === "" || __intent === "manual");
@@ -1401,6 +1786,10 @@ useEffect(() => {
     const hasTargetPosKey =
       options && typeof options?.targetPosKey === "string" && options.targetPosKey.trim();
 
+    // ✅ Infra: allow callers to force hitting the server (skip Phase X history-hit replay)
+    // - Used by word-click queries so anonymous daily limits are consistently enforced.
+    const forceApi = !!(options && (options.forceApi === true));
+
     // ✅ 可控 runtime 觀察（你現在排查用）：確認是否被 history-hit 擋掉
     try {
       console.log("[App][posSwitch][handleAnalyzeByText] precheck", {
@@ -1416,7 +1805,7 @@ useEffect(() => {
     // ⚠️ 但：
     // - 詞性切換必須重查（hasTargetPosKey=true）
     // - Task B replay 必須 noHistory（不依賴 history / 不 reorder history）
-    if (!hasTargetPosKey && !noHistory) {
+    if (!hasTargetPosKey && !forceApi && !noHistory) {
       const hitIndex = findHistoryHitIndex(q);
       if (hitIndex !== -1) {
         const replayed = replayHistoryHit(hitIndex, q, "handleAnalyzeByText");
@@ -1433,6 +1822,8 @@ useEffect(() => {
         delete apiOptions.source;
         delete apiOptions.intent;
         delete apiOptions.queryTextOverride;
+        delete apiOptions.forceApi;
+        delete apiOptions.queryMode;
       }
 
       const res = await apiFetch(`/api/analyze`, {
@@ -1442,6 +1833,41 @@ useEffect(() => {
 
       if (!res) throw new Error("[analyze] response is null");
       if (!res.ok) {
+        // ✅ 429 anonymous daily limit is a normal flow (UI handled via event),
+        // so we should NOT throw and crash the app.
+        try {
+          if (res.status === 429) {
+            const __clone = res.clone();
+            let __p = null;
+            try { __p = await __clone.json(); } catch (_) { __p = null; }
+
+            let __code = "";
+            try {
+              if (__p) {
+                if (typeof __p.error === "string") __code = __p.error;
+                else if (__p.error && typeof __p.error.code === "string") __code = __p.error.code;
+                else if (typeof __p.code === "string") __code = __p.code;
+              }
+            } catch (_) { __code = ""; }
+
+            const __isAnonDailyLimit =
+              (__code === "ANON_DAILY_LIMIT_REACHED") ||
+              (/^ANON_DAILY_.*_LIMIT_REACHED$/.test(String(__code || "")));
+
+            if (__isAnonDailyLimit) {
+              // Ensure the UI hook fires even if apiClient didn't dispatch for some reason.
+              try {
+                window.dispatchEvent(
+                  new CustomEvent("langapp:anonDailyLimit", {
+                    detail: { code: __code, path: "/api/analyze", status: res.status, payload: __p },
+                  })
+                );
+              } catch (_) {}
+              return; // ✅ swallow (normal flow)
+            }
+          }
+        } catch (_) {}
+
         let detail = "";
         try {
           detail = await res.text();
@@ -1885,7 +2311,11 @@ useEffect(() => {
 
     setText(q);
     setHistoryIndex(-1);
-    handleAnalyzeByText(q, { intent: "user-search" });
+    // ✅ Infra: word-click must behave like a real query (count/limit/429)
+    // - Avoid Phase X history-hit replay bypassing server-side anonymous daily limits.
+    // - We still keep SearchBox history-hit replay for performance, but word-click
+    //   is treated as an explicit user query.
+    handleAnalyzeByText(q, { intent: "user-search", forceApi: true, queryMode: "word_click" });
   };
 
   // ✅ 單字庫/收藏 controller（已拆出）
@@ -1953,6 +2383,44 @@ useEffect(() => {
     normalizeSearchQuery,
     handleAnalyzeByText,
   });
+
+  // ✅ Guard: 未登入點擊「學習本 / 我的最愛」→ 顯示多國提示
+  const openLibraryModalGuarded = useCallback(() => {
+    if (!authUserId) {
+      // 多國：請先註冊/登入後才能使用
+      const msg = t("app.library.loginRequiredAlert") || "請先註冊或登入後才能使用";
+      // eslint-disable-next-line no-alert
+      alert(msg);
+      return;
+    }
+    openLibraryModal();
+  }, [authUserId, openLibraryModal, t]);
+
+  // ============================================================
+  // ✅ Onboarding：登入成功後若沒有任何「學習本（分類）」→ 自動打開學習本彈窗
+  // - 目的：讓使用者立刻看到「新增學習本」小視窗（在 WordLibraryPanel 內會再自動打開管理分類 modal）
+  // - 只觸發一次（per user），避免每次刷新都跳
+  // ============================================================
+  useEffect(() => {
+    if (!authUserId) return;
+    if (favoriteCategoriesLoading) return;
+
+    const arr = Array.isArray(favoriteCategories) ? favoriteCategories : [];
+    if (arr.length !== 0) return;
+
+    // 同一個 guard key：WordLibraryPanel 也會使用
+    const k = `langapp::${String(authUserId)}::prompt_create_category_v1`;
+    try {
+      const v = window?.localStorage?.getItem(k);
+      if (v === "1") return;
+    } catch {}
+
+    // ✅ 打開學習本彈窗，讓使用者立即建立第一本
+    try {
+      openLibraryModal();
+    } catch {}
+  }, [authUserId, favoriteCategoriesLoading, favoriteCategories, openLibraryModal]);
+
   // ============================================================
   // 2026-01-14：Task 2-1｜切換分類時主畫面星號即時連動（後端分類狀態 API）
   // - 星號亮暗以「分類內是否存在 link」為準（不得用全域收藏）
@@ -2405,6 +2873,42 @@ useEffect(() => {
   }, [mode, learningContext, setNavContext, updateLearningContext]);
 
   const canClearHistory = historyIndex >= 0 && historyIndex < history.length;
+
+  const handleResumeLearning = useCallback(() => {
+    try {
+      // ✅ 關鍵：強制允許 favorites-learning replay effect 再跑一次
+      // - 否則從 learning → search 查詢後再回來，可能因 headword guard 而不重播，畫面仍停在 search view
+      lastReplayedHeadwordRef.current = "";
+    } catch {}
+    try {
+      enterLearningMode({});
+    } catch {}
+  }, [enterLearningMode]);
+
+  const resumeLearningLabel = useMemo(() => {
+    try {
+      // 只在「從學習跳到查詢」時才顯示（search 模式 + learningContext 有來源）
+      if (mode !== "search") return "";
+      const title = typeof learningContext?.title === "string" ? learningContext.title.trim() : "";
+      if (!title) return "";
+
+      if (title) {
+        const tpl = t("app.learning.continueWithTitle");
+        if (typeof tpl === "string" && tpl.trim() && tpl.trim() !== "—") {
+          // ✅ 兼容兩種模板：
+          // 1) "繼續學習：{title}"（含 {title} 佔位符）
+          // 2) "繼續學習"（不含佔位符，需求：後面直接加學習本名稱）
+          if (tpl.includes("{title}")) return tpl.replace("{title}", title);
+          return `${tpl}：${title}`;
+        }
+      }
+      const base = t("app.learning.backToLearning");
+      return typeof base === "string" ? base : "";
+    } catch {
+      return "";
+    }
+  }, [mode, learningContext, t]);
+
 
   
 
@@ -2942,6 +3446,9 @@ useEffect(() => {
 
   return (
     <div style={{ position: "relative" }}>
+      {/* ✅ In-App Browser Guard：LINE/Instagram/Facebook 內建瀏覽器提示（避免語音/登入失效） */}
+      <InAppBrowserGuard uiLang={uiLang} theme={theme} />
+
       {!appReady && (
         <div
           className="app-init-overlay"
@@ -3014,13 +3521,19 @@ useEffect(() => {
       onAnalyze={handleAnalyze}
       onEnterSearch={enterSearchMode}
       onEnterLearning={enterLearningMode}
-      onOpenLibrary={openLibraryModal}
+      onOpenLibrary={openLibraryModalGuarded}
+      // ✅ /library/add
+      libraryAddTargetCategoryId={libraryAddTargetCategoryId}
+      onOpenLibraryAddPage={openLibraryAddPage}
+      onCloseLibraryAddPage={closeLibraryAddPage}
       // result panel
       result={result}
       showRaw={showRaw}
       onToggleRaw={() => setShowRaw((p) => !p)}
       mode={mode}
       learningContext={learningContext}
+      // ✅ UI：ResultPanel 以 mode 為唯一真相；intent 只用於「返回學習」顯示條件
+      navIntent={lastNavIntentRef.current}
       // ✅ Task F2：examples 補齊完成後回寫 favorites cache（由下游 useExamples 觸發）
       onExamplesResolved={handleFavoritesExamplesResolved}
   // === FIX: ensure updatedResult is used consistently ===
@@ -3041,6 +3554,8 @@ useEffect(() => {
       canClearHistory={canClearHistory}
       onClearHistoryItem={clearCurrentHistoryItem}
       clearHistoryLabel={t("app.history.clearThis")}
+      onResumeLearning={handleResumeLearning}
+      resumeLearningLabel={resumeLearningLabel}
       onSelectPosKey={handleSelectPosKey}
       // library modal
       showLibraryModal={showLibraryModal}

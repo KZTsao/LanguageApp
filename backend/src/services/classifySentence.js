@@ -12,8 +12,8 @@
  *   { mode: "sentence" | "phrase" }
  */
 
-const { callGroq } = require("../clients/groqClient");
-
+const { groqChatCompletion } = require("../clients/groqClient");
+const { tokenizeSentence } = require("../core/tokenizer");
 // =========================
 // [normal] trace helper (dev)
 // =========================
@@ -30,6 +30,106 @@ async function classifySentence(text, { requestId } = {}) {
   if (!input) {
       __nlog("return", { value: (typeof { mode: "phrase" } === "string" ? { mode: "phrase" } : undefined), obj: (typeof { mode: "phrase" } === "object" ? { mode: "phrase" } : undefined) });
   return { mode: "phrase" };
+  }
+
+  // =========================
+  // ✅ Deterministic fast-path (no LLM)
+  // Goal: avoid misrouting obvious full sentences into word lookup
+  // - If clearly a sentence, return { mode: "sentence" }
+  // - Otherwise fall back to LLM classifier
+  // =========================
+  try {
+    const raw = input;
+    const tokens = tokenizeSentence(raw);
+    const isWordLike = (tok) => /[\p{L}\p{N}]/u.test(String(tok || ""));
+    const wordTokens = Array.isArray(tokens) ? tokens.filter(isWordLike) : [];
+
+    if (wordTokens.length >= 2) {
+      const lower = wordTokens.map((t) => String(t).toLowerCase());
+      const first = lower[0] || "";
+
+      // Personal pronouns / polite "Sie" (kept small on purpose)
+      const pronouns = new Set([
+        "ich",
+        "du",
+        "er",
+        "sie",
+        "es",
+        "wir",
+        "ihr",
+        "mich",
+        "dich",
+        "ihn",
+        "ihr",
+        "uns",
+        "euch",
+        "ihnen",
+        "sie",
+      ]);
+
+      // Common finite verb forms (small but covers most everyday inputs)
+      const finiteVerbs = new Set([
+        "bin",
+        "bist",
+        "ist",
+        "sind",
+        "seid",
+        "war",
+        "waren",
+        "habe",
+        "hast",
+        "hat",
+        "haben",
+        "hatte",
+        "hatten",
+        "werde",
+        "wirst",
+        "wird",
+        "werden",
+        "kann",
+        "kannst",
+        "können",
+        "muss",
+        "musst",
+        "müssen",
+        "will",
+        "willst",
+        "wollen",
+        "darf",
+        "darfst",
+        "dürfen",
+        "soll",
+        "sollst",
+        "sollen",
+        "komme",
+        "kommst",
+        "kommt",
+        "kommen",
+        "gehe",
+        "gehst",
+        "geht",
+        "gehen",
+      ]);
+
+      const hasPronoun = pronouns.has(first);
+      const hasFiniteVerb = lower.some((t) => finiteVerbs.has(t));
+
+      // If input starts with pronoun and contains a common finite verb -> treat as sentence
+      // Example: "ich habe einen Hund"
+      if (hasPronoun && hasFiniteVerb) {
+        __nlog("fastpath", { mode: "sentence", reason: "pronoun+finiteVerb", requestId });
+        return { mode: "sentence" };
+      }
+
+      // If it ends with terminal punctuation and has 2+ words, treat as sentence
+      if (/[.!?]\s*$/.test(raw)) {
+        __nlog("fastpath", { mode: "sentence", reason: "terminalPunct", requestId });
+        return { mode: "sentence" };
+      }
+    }
+  } catch (e) {
+    // Do not break main flow
+    __nlog("fastpath:error", { message: e?.message || String(e), requestId });
   }
 
   const prompt = `
@@ -49,11 +149,10 @@ async function classifySentence(text, { requestId } = {}) {
 `.trim();
 
   try {
-    const res = await callGroq({
-      prompt,
+        const res = await groqChatCompletion({
+      messages: [{ role: "user", content: prompt }],
       temperature: 0,
       max_tokens: 20,
-      requestId,
     });
 
     const content = res?.content || res?.text || "";

@@ -214,12 +214,21 @@ function SearchBox({
   // ============================================================
   const lastManualAnalyzedTextRef = useRef(null);
 
-  // 安全展開 uiText，避免 undefined
-  const safeText = uiText || {};
+  // ✅ i18n：與 ResultPanel / WordPosInfo 同規則
+  // - 若 uiText 是「整包語系表」，優先取 uiText[uiLang]
+  // - 若 uiText 已是單一語系 pack，直接用 uiText
+  const t =
+    uiText && uiLang && uiText[uiLang] && typeof uiText[uiLang] === "object"
+      ? uiText[uiLang]
+      : uiText || {};
 
   const placeholder =
-    safeText.placeholder ||
-    "Gib ein Wort oder einen Satz ein / 請輸入單字 oder 句子";
+    // ✅ 正式 key（uiText.js 已有）：searchPlaceholder
+    t.searchPlaceholder ||
+    // ✅ 相容舊 key
+    t.placeholder ||
+    // ✅ 最後保底：英文（避免混語言）
+    "Enter a word or sentence…";
 
   // 統一處理「查詢」按鈕多國語系
   const getDefaultAnalyzeLabel = (lang) => {
@@ -240,14 +249,16 @@ function SearchBox({
   };
 
   const analyzeLabel =
-    // 先吃你在 uiText 給的字串
-    safeText.analyzeButtonLabel ||
-    safeText.searchButtonLabel ||
-    safeText.buttonLabel ||
+    // ✅ 正式 key（uiText.js 已有）：searchButton
+    t.searchButton ||
+    // ✅ 相容舊 key
+    t.analyzeButtonLabel ||
+    t.searchButtonLabel ||
+    t.buttonLabel ||
     // 再用 uiLang 當 fallback
     getDefaultAnalyzeLabel(uiLang);
 
-  const inputLabel = safeText.inputLabel || "";
+  const inputLabel = t.inputLabel || "";
 
   // ============================================================
   // Task 1（UI）：模式按鈕狀態（高光/灰階）
@@ -296,7 +307,7 @@ function SearchBox({
       ? learningContext.title
       : "";
   // 目前下方不要再顯示 UI Language，只保留這個值，不用
-  const langLabel = safeText.langLabel || "UI Language";
+  const langLabel = t.langLabel || "UI Language";
 
   // ============================================================
   // 送後端前的輸入前處理（最小規則版本）

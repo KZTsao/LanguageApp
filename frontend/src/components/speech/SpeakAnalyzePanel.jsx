@@ -117,14 +117,6 @@ function __realignTokens(expectedText, asrWords, confThreshold) {
   return out;
 }
 
-function __getLangPack(uiLang) {
-  const raw = String(uiLang || "").toLowerCase();
-  if (raw === "zh-cn" || raw.startsWith("zh-cn")) return "zh-CN";
-  if (raw === "zh-tw" || raw.startsWith("zh-tw")) return "zh-TW";
-  // Default: align with uiText available packs (this repo currently ships zh-TW / zh-CN)
-  return "zh-TW";
-}
-
 
 function __pick(obj, pathArr) {
   try {
@@ -139,7 +131,54 @@ function __pick(obj, pathArr) {
   }
 }
 
+function __getLangKey(uiLang) {
+  const raw = typeof uiLang === "string" ? uiLang.trim() : "";
+  if (raw && uiText && uiText[raw]) return raw;
+
+  // tolerate common variants (best-effort)
+  const lower = raw.toLowerCase();
+  if (lower === "zh" || lower.startsWith("zh-")) {
+    if ((lower.includes("cn") || lower.includes("hans")) && uiText && uiText["zh-CN"]) return "zh-CN";
+    if (uiText && uiText["zh-TW"]) return "zh-TW";
+  }
+  if ((lower === "en" || lower.startsWith("en-")) && uiText && uiText.en) return "en";
+  if ((lower === "de" || lower.startsWith("de-")) && uiText && uiText.de) return "de";
+
+  // default
+  if (uiText && uiText.en) return "en";
+  if (uiText && uiText["zh-TW"]) return "zh-TW";
+  return raw || "en";
+}
+
 export default function SpeakAnalyzePanel({
+  // ============================================================
+  // Props Contract (single source of truth for callers)
+  //
+  // Required for "usable panel" (core):
+  // - targetText: string (preferred) OR legacy expectedText: string
+  // - translationText: string
+  // - disabled: boolean
+  // - recordState: string (panel checks recordState === "recording")
+  // - seconds: number
+  // - hasAudio: boolean
+  // - analyzeState: string (panel checks analyzeState === "processing")
+  // - tokens: array
+  // - transcript: string
+  // - message: string
+  // - onClose: () => void
+  // - onToggleRecord: () => void
+  // - onReplay: () => void
+  // - onAnalyzeOnce: () => void
+  //
+  // Strongly recommended (i18n):
+  // - uiLang: string (e.g. "zh-TW" | "zh-CN" | "en" | "de")
+  //
+  // Optional (only if caller supports these UX):
+  // - showTarget/showTranslation + onToggleShowTarget/onToggleShowTranslation
+  // - onPlayTarget (TTS)
+  // - conversation* + onConversationPrev/onConversationNext (turn paging)
+  // - asrWords + confidenceThreshold (ASR realign coloring)
+  // ============================================================
   // ===== Legacy props (backward compatible) =====
   expectedText,
 
@@ -187,6 +226,327 @@ export default function SpeakAnalyzePanel({
   const __isRecording = recordState === "recording";
 
   // ============================================================
+  // ✅ Smooth visual transition when continuous-play naturally
+  // ends and we rewind back to the first turn.
+  // - Prevents visible "flash" caused by rapid prev() loops.
+  // - Cross-dissolve: fade out -> rewind -> fade in.
+  // ============================================================
+  const [__rewindFading, __setRewindFading] = useState(false);
+
+  // ============================================================
+  // ✅ Always use latest props inside async loops
+  // - Prevent stale closures causing: "always speak initial sentence" / "next keeps firing"
+  // ============================================================
+  const __onPlayTargetRef = useRef(onPlayTarget);
+  const __conversationActiveRef = useRef(!!conversationActive);
+  const __conversationCanPrevRef = useRef(!!conversationCanPrev);
+  const __conversationCanNextRef = useRef(!!conversationCanNext);
+  const __onConversationPrevRef = useRef(onConversationPrev);
+  const __onConversationNextRef = useRef(onConversationNext);
+  const __conversationIndexRef = useRef(typeof conversationIndex === "number" ? conversationIndex : 0);
+
+  useEffect(() => {
+    __onPlayTargetRef.current = onPlayTarget;
+  }, [onPlayTarget]);
+  useEffect(() => {
+    __conversationActiveRef.current = !!conversationActive;
+  }, [conversationActive]);
+  useEffect(() => {
+    __conversationCanPrevRef.current = !!conversationCanPrev;
+  }, [conversationCanPrev]);
+  useEffect(() => {
+    __conversationCanNextRef.current = !!conversationCanNext;
+  }, [conversationCanNext]);
+  useEffect(() => {
+    __onConversationPrevRef.current = onConversationPrev;
+  }, [onConversationPrev]);
+  useEffect(() => {
+    __onConversationNextRef.current = onConversationNext;
+  }, [onConversationNext]);
+  useEffect(() => {
+    __conversationIndexRef.current = typeof conversationIndex === "number" ? conversationIndex : 0;
+  }, [conversationIndex]);
+
+  const __rewindToFirstTurn = async (__seq) => {
+    try {
+      if (!__conversationActiveRef.current) return;
+      const prevFn = __onConversationPrevRef.current;
+      if (typeof prevFn !== "function") return;
+
+      // Cross-dissolve start
+      try {
+        __setRewindFading(true);
+        await new Promise((res) => setTimeout(res, 120));
+      } catch (e) {}
+
+      // Fast rewind: keep calling prev until it stops moving.
+      // Guarded by seq to avoid running after manual stop/close.
+      let safety = 0;
+      while (
+        __continuousPlayActiveRef.current &&
+        __continuousPlaySeqRef.current === __seq &&
+        __conversationCanPrevRef.current &&
+        safety < 200
+      ) {
+        safety += 1;
+        const beforeIdx = __conversationIndexRef.current;
+        const beforeText = (__expectedRef && typeof __expectedRef.current === "string") ? __expectedRef.current : "";
+        try {
+          prevFn();
+        } catch (e) {}
+
+        const started = Date.now();
+        while (__continuousPlayActiveRef.current && __continuousPlaySeqRef.current === __seq) {
+          const idxChanged = __conversationIndexRef.current !== beforeIdx;
+          const textNow = (__expectedRef && typeof __expectedRef.current === "string") ? __expectedRef.current : "";
+          const textChanged = beforeText && textNow && textNow !== beforeText;
+          if (idxChanged || textChanged) break;
+          if (Date.now() - started > 350) break;
+          await new Promise((res) => setTimeout(res, 16));
+        }
+
+        // If we didn't move, bail.
+        if (__conversationIndexRef.current === beforeIdx) break;
+      }
+    } catch (e) {
+      // ignore
+    } finally {
+      // Cross-dissolve end
+      try {
+        await new Promise((res) => setTimeout(res, 80));
+      } catch (e) {}
+      try {
+        __setRewindFading(false);
+      } catch (e) {}
+    }
+  };
+
+  // Continuous play (conversation mode): play target -> next -> ... -> last
+  const __continuousPlaySeqRef = useRef(0);
+  const __continuousPlayActiveRef = useRef(false);
+  const __continuousPlayEndedRef = useRef(true);
+  const [__continuousPlaying, __setContinuousPlaying] = useState(false);
+  const __startContinuousPlay = async (opts = {}) => {
+    const __force = !!(opts && opts.force);
+    const __reason = (opts && opts.reason) ? String(opts.reason) : "";
+
+    // If already playing and not forcing restart, do nothing.
+    if (__continuousPlaying && !__force) return;
+
+    // If forcing: interrupt any existing loop but keep UI in "playing" state.
+    if (__force) {
+      try {
+        __continuousPlayActiveRef.current = false;
+        __continuousPlaySeqRef.current += 1;
+      } catch (e) {}
+      try { __stopAudioOnly(`continuous_restart_${__reason}`); } catch (e) {}
+    }
+
+    __continuousPlayEndedRef.current = false;
+    __setContinuousPlaying(true);
+    __continuousPlayActiveRef.current = true;
+    __continuousPlaySeqRef.current += 1;
+    const __seq = __continuousPlaySeqRef.current;
+    try {
+      // loop until no next page
+      // Note: onPlayTarget may return a Promise (preferred). If not, fallback to a short delay.
+      // Also: we do NOT abort fetch here; stale responses are ignored by seq guards in callers.
+      while (__continuousPlayActiveRef.current && __continuousPlaySeqRef.current === __seq) {
+        const playFn = __onPlayTargetRef.current;
+        if (typeof playFn === "function") {
+          try {
+            const r = playFn();
+            if (r && typeof r.then === "function") {
+              await r.catch(() => {});
+            } else {
+              await new Promise((res) => setTimeout(res, 900));
+            }
+          } catch (e) {
+            await new Promise((res) => setTimeout(res, 300));
+          }
+        }
+
+        // ✅ Guard: if user navigated/stop happened during await, do NOT auto-advance another turn
+        if (!__continuousPlayActiveRef.current || __continuousPlaySeqRef.current !== __seq) break;
+
+        const canNext = __conversationActiveRef.current && __conversationCanNextRef.current;
+        const nextFn = __onConversationNextRef.current;
+        if (canNext && typeof nextFn === "function") {
+          const beforeIdx = __conversationIndexRef.current;
+          const beforeText = (__expectedRef && typeof __expectedRef.current === "string") ? __expectedRef.current : "";
+          try {
+            nextFn();
+          } catch (e) {}
+
+          // ✅ Wait until next turn is actually rendered (index/text changed) — tighter loop for smoother chaining
+          const started = Date.now();
+          while (__continuousPlayActiveRef.current && __continuousPlaySeqRef.current === __seq) {
+            const idxChanged = __conversationIndexRef.current !== beforeIdx;
+            const textNow = (__expectedRef && typeof __expectedRef.current === "string") ? __expectedRef.current : "";
+            const textChanged = beforeText && textNow && textNow !== beforeText;
+            if (idxChanged || textChanged) break;
+            if (Date.now() - started > 650) break;
+            await new Promise((res) => setTimeout(res, 16));
+          }
+          continue;
+        }
+        // ✅ Natural end: rewind to first page (no manual stop pressed)
+        // Mark session ended before rewinding so paging after rewind behaves like single-play mode.
+        __continuousPlayEndedRef.current = true;
+        await __rewindToFirstTurn(__seq);
+        break;
+      }
+    } finally {
+      if (__continuousPlaySeqRef.current === __seq) {
+        __continuousPlayActiveRef.current = false;
+        __continuousPlayEndedRef.current = true;
+        __setContinuousPlaying(false);
+      }
+    }
+  };
+
+
+
+  const __stopContinuousPlay = () => {
+    try {
+      console.log("[錄音] continuousPlay STOP (manual)", {
+        atIndex: __conversationIndexRef.current,
+        canNext: __conversationCanNextRef.current,
+      });
+    } catch {}
+    try {
+      if (typeof window !== "undefined" && typeof window.__SOLANG_TTS_STOP === "function") {
+        window.__SOLANG_TTS_STOP();
+      }
+    } catch {}
+    __continuousPlayActiveRef.current = false;
+    __continuousPlayEndedRef.current = true;
+    // bump seq so any in-flight loop notices it's stale and exits quickly
+    __continuousPlaySeqRef.current += 1;
+    __setContinuousPlaying(false);
+  };
+
+  // ============================================================
+  // ✅ Hard stop all audio immediately
+  // - Continuous play loop
+  // - Single TTS playback
+  // - Browser speechSynthesis (if used)
+  // ============================================================
+  const __hardStopAllAudio = (reason = "") => {
+    try {
+      console.log("[錄音] hardStopAllAudio", {
+        reason,
+        continuousPlaying: !!__continuousPlayActiveRef.current,
+        atIndex: __conversationIndexRef.current,
+        ts: Date.now(),
+      });
+    } catch (e) {}
+
+    // 1) stop continuous loop + bump seq
+    try {
+      if (__continuousPlayActiveRef.current || __continuousPlaying) {
+        __stopContinuousPlay();
+      }
+    } catch (e) {
+      try {
+        __continuousPlayActiveRef.current = false;
+        __continuousPlaySeqRef.current += 1;
+        __setContinuousPlaying(false);
+      } catch (e2) {}
+    }
+
+    // 2) stop global TTS (our app)
+    try {
+      if (typeof window !== "undefined" && typeof window.__SOLANG_TTS_STOP === "function") {
+        window.__SOLANG_TTS_STOP();
+      }
+    } catch (e) {}
+
+    // 3) stop browser speechSynthesis if any caller uses it
+    try {
+      if (typeof window !== "undefined" && window.speechSynthesis && typeof window.speechSynthesis.cancel === "function") {
+        window.speechSynthesis.cancel();
+      }
+    } catch (e) {}
+  };
+
+  // ============================================================
+  // ✅ Nav auto-play (prev/next):
+  // - Switching page should IMMEDIATELY cut current audio
+  // - After new page is rendered, auto-play THIS page audio
+  // - If continuous-play was active, keep it active and continue from the new page
+  // ============================================================
+  const __pendingNavAutoPlayRef = useRef(null);
+
+  const __stopAudioOnly = (reason = "") => {
+    try {
+      console.log("[錄音] stopAudioOnly", { reason, ts: Date.now(), atIndex: __conversationIndexRef.current });
+    } catch (e) {}
+    // Stop app-level TTS
+    try {
+      if (typeof window !== "undefined" && typeof window.__SOLANG_TTS_STOP === "function") {
+        window.__SOLANG_TTS_STOP();
+      }
+    } catch (e) {}
+    // Stop browser speechSynthesis if any caller uses it
+    try {
+      if (typeof window !== "undefined" && window.speechSynthesis && typeof window.speechSynthesis.cancel === "function") {
+        window.speechSynthesis.cancel();
+      }
+    } catch (e) {}
+  };
+
+  const __navigateConversation = (dir, source = "") => {
+    try {
+      if (__navDisabled) return;
+      if (!__conversationActiveRef.current) return;
+
+      const wasContinuous = !__continuousPlayEndedRef.current && !!(__continuousPlayActiveRef.current || __continuousPlaying);
+
+      // 1) Always cut audio immediately
+      if (wasContinuous) {
+        // Interrupt current loop without flipping the UI state
+        __continuousPlayActiveRef.current = false;
+        __continuousPlaySeqRef.current += 1;
+        __stopAudioOnly(`nav_${dir}_${source}`);
+      } else {
+        __hardStopAllAudio(`nav_${dir}_${source}`);
+      }
+
+      // 2) Mark pending auto-play ONLY when continuous-play is active.
+      //    If not continuous-playing, paging is a pure UI switch (no auto audio).
+      __pendingNavAutoPlayRef.current = wasContinuous
+        ? {
+            dir,
+            source,
+            wasContinuous,
+            ts: Date.now(),
+          }
+        : null;
+
+      // 3) Trigger parent paging
+      if (dir === "prev") {
+        if (__conversationCanPrevRef.current && typeof __onConversationPrevRef.current === "function") {
+          try { __onConversationPrevRef.current(); } catch (e) {}
+        }
+        return;
+      }
+      if (dir === "next") {
+        if (__conversationCanNextRef.current && typeof __onConversationNextRef.current === "function") {
+          try { __onConversationNextRef.current(); } catch (e) {}
+        }
+      }
+    } catch (e) {}
+  };
+
+  function __resetPanelSessionGuards(reason = "") {
+    try { __doneSoundPlayedRef.current = false; } catch (e) {}
+    try { __celebratedRef.current = false; } catch (e) {}
+    try { __setShowCelebrate(false); } catch (e) {}
+  }
+
+
+  // ============================================================
   // ✅ Controlled target/translation (single source of truth: parent)
   // - Prefer targetText/showTarget/... from ExampleSentence
   // - Fallback to legacy expectedText callers
@@ -194,6 +554,35 @@ export default function SpeakAnalyzePanel({
   const __expected = String(targetText ?? expectedText ?? "");
   const __translation = String(translationText ?? "");
 
+  // ✅ Keep latest expected sentence for continuous-play (avoid stale closures)
+  const __expectedRef = useRef("");
+  useEffect(() => {
+    __expectedRef.current = __expected || "";
+  }, [__expected]);
+
+
+  // ✅ After paging (prev/next), auto-play the newly rendered page
+  useEffect(() => {
+    const p = __pendingNavAutoPlayRef.current;
+    if (!p) return;
+
+    // Clear first to avoid double-trigger if play() throws
+    __pendingNavAutoPlayRef.current = null;
+
+    // If panel is disabled/recording/processing, do not auto-play
+    if (__navDisabled) return;
+    if (!__expectedRef.current) return;
+
+    // Ensure there is no leftover audio tail
+    try { __stopAudioOnly(`nav_autoplay_${p.dir}`); } catch (e) {}
+
+    // Keep continuous-play active; restart loop from current turn
+    if (p.wasContinuous) {
+      try {
+        __startContinuousPlay({ force: true, reason: `nav_${p.dir}` });
+      } catch (e) {}
+    }
+  }, [conversationIndex, __expected, disabled, __isRecording, analyzeState]);
   const __canToggle = !disabled && !!__expected;
   const __canReplay = !disabled && !!hasAudio && !__isRecording;
   const __canAnalyze = !disabled && !!hasAudio && !__isRecording && analyzeState !== "processing";
@@ -262,15 +651,11 @@ export default function SpeakAnalyzePanel({
       // ✅ If conversation paging is active, navigate
       if (!!conversationActive) {
         if (e.key === "ArrowLeft") {
-          if (conversationCanPrev && typeof onConversationPrev === "function") {
-            try { onConversationPrev(); } catch (err) {}
-          }
+          __navigateConversation("prev", "kbd");
           return;
         }
         if (e.key === "ArrowRight") {
-          if (conversationCanNext && typeof onConversationNext === "function") {
-            try { onConversationNext(); } catch (err) {}
-          }
+          __navigateConversation("next", "kbd");
         }
       }
     }
@@ -299,6 +684,11 @@ export default function SpeakAnalyzePanel({
           try { onToggleRecord(); } catch (e) {}
           return;
         }
+
+        // ✅ close 必須中斷所有播放中的聲音（含連續播放與單句 TTS）
+        try { __hardStopAllAudio("esc"); } catch (e) {}
+        try { __resetPanelSessionGuards("esc"); } catch (e) {}
+
         if (typeof onClose === "function") onClose();
       } catch (e) {}
     };
@@ -307,7 +697,15 @@ export default function SpeakAnalyzePanel({
     return () => {
       try { window.removeEventListener("keydown", onEscCapture, { capture: true }); } catch (e) {}
     };
-  }, [__isRecording, onToggleRecord, onClose]);
+  }, [__isRecording, onToggleRecord, onClose, __continuousPlaying]);
+
+  // ✅ unmount 時也要中斷聲音，避免背景續播
+  useEffect(() => {
+    return () => {
+      try { __hardStopAllAudio("unmount"); } catch (e) {}
+      try { __resetPanelSessionGuards("unmount"); } catch (e) {}
+    };
+  }, []);
 
 
 
@@ -317,13 +715,7 @@ export default function SpeakAnalyzePanel({
     return "█".repeat(n);
   };
 
-  // ============================================================
-  // ✅ 2026-01-24: i18n (uiText)
-  // - Prefer uiText[lang].speech.speakAnalyzePanel.* if exists
-  // - Fallback to internal defaults
-  // ============================================================
-  const __langKey = useMemo(() => __getLangPack(uiLang), [uiLang]);
-
+  
   // ------------------------------------------------------------
   // DEPRECATED (kept intentionally to avoid losing historical context)
   // - Prior versions shipped internal fallback strings here.
@@ -370,9 +762,7 @@ export default function SpeakAnalyzePanel({
   // ------------------------------------------------------------
   const __t = (k) => {
     // ✅ Single source of truth:
-    // uiText[lang].speakAnalyzePanel.<key>
-    const pack = (uiText && uiText[__langKey]) || (uiText && uiText["zh-TW"]) || {};
-
+    
     // ✅ Backward-compatible aliases (do NOT remove call-sites in this phase)
     const __aliasMap = {
       startRecord: "startRecording",
@@ -382,9 +772,15 @@ export default function SpeakAnalyzePanel({
 
 
     const key = (__aliasMap && __aliasMap[k]) || k;
-    const v = __pick(pack, ["speakAnalyzePanel", key]);
+    const langKey = __getLangKey(uiLang);
 
+    // ✅ uiText is the single source of truth
+    const v = __pick(uiText, [langKey, "speakAnalyzePanel", key]);
     if (typeof v === "string" && v.length) return v;
+
+    // fallback to English if available
+    const vEn = __pick(uiText, ["en", "speakAnalyzePanel", key]);
+    if (typeof vEn === "string" && vEn.length) return vEn;
 
     // strict-ish i18n: fallback to key itself so missing strings are easy to spot
     return String(key || "");
@@ -399,6 +795,16 @@ export default function SpeakAnalyzePanel({
   // ============================================================
   const [__llmPronTips, __setLlmPronTips] = useState(null); // null=not fetched, []=fetched but empty
   const [__llmPronTipsLoading, __setLlmPronTipsLoading] = useState(false);
+  const __pronTipsReqSeq = useRef(0);
+
+  const __tokenSig = useMemo(() => {
+    const tks = Array.isArray(tokens) ? tokens : [];
+    if (!tks.length) return "";
+    // stable signature to avoid re-fetch on array identity changes
+    return tks
+      .map((t) => `${String(t?.norm || t?.raw || "").toLowerCase()}|${String(t?.state || "")}`)
+      .join(";");
+  }, [tokens]);
 
   useEffect(() => {
     // reset when inputs change
@@ -407,13 +813,14 @@ export default function SpeakAnalyzePanel({
     const tks = Array.isArray(tokens) ? tokens : [];
     if (!__expected || !__asrText || tks.length === 0) return;
 
-    let aborted = false;
-    const ac = typeof AbortController !== "undefined" ? new AbortController() : null;
+    const mySeq = ++__pronTipsReqSeq.current;
 
     async function run() {
       try {
         __setLlmPronTipsLoading(true);
 
+        // NOTE: do NOT abort fetch on sentence switching; instead ignore stale responses
+        // This prevents DevTools showing lots of "(canceled)" requests when user flips sentences quickly.
         const resp = await apiFetch("/api/analyze/pronunciation-tips", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -423,11 +830,10 @@ export default function SpeakAnalyzePanel({
             transcript: __asrText,
             tokens: tks,
           }),
-          signal: ac ? ac.signal : undefined,
         });
 
         const data = await resp.json().catch(() => null);
-        if (aborted) return;
+        if (__pronTipsReqSeq.current !== mySeq) return;
 
         if (resp.ok && data && Array.isArray(data.tips)) {
           __setLlmPronTips(data.tips.filter(Boolean).slice(0, 3));
@@ -436,10 +842,10 @@ export default function SpeakAnalyzePanel({
           __setLlmPronTips([]);
         }
       } catch (e) {
-        if (aborted) return;
+        if (__pronTipsReqSeq.current !== mySeq) return;
         __setLlmPronTips([]);
       } finally {
-        if (aborted) return;
+        if (__pronTipsReqSeq.current !== mySeq) return;
         __setLlmPronTipsLoading(false);
       }
     }
@@ -447,12 +853,10 @@ export default function SpeakAnalyzePanel({
     run();
 
     return () => {
-      aborted = true;
-      try {
-        ac && ac.abort();
-      } catch (e) {}
+      // bump seq so any in-flight response is ignored
+      __pronTipsReqSeq.current += 1;
     };
-  }, [__expected, __asrText, uiLang, tokens]);
+  }, [__expected, __asrText, uiLang, __tokenSig]);
 
   const __pronTips = useMemo(() => {
     // prefer real LLM tips if present
@@ -601,11 +1005,11 @@ export default function SpeakAnalyzePanel({
           style={{
             display: "inline-flex",
             alignItems: "center",
-            padding: "6px 8px",
-            margin: "0 6px 6px 0",
-            borderRadius: 10,
-            fontSize: 14,
-            lineHeight: 1.2,
+            padding: "4px 6px",
+            margin: 0,
+            borderRadius: 8,
+            fontSize: 13,
+            lineHeight: 1.15,
             ...style,
           }}
           title={typeof t.confidence === "number" ? String(t.confidence.toFixed(2)) : ""}
@@ -685,18 +1089,15 @@ export default function SpeakAnalyzePanel({
   // ============================================================
   const __doneSoundPlayedRef = useRef(false);
 
+
   // ============================================================
   // ✅ 2026-01-24: Allow re-analyze
   // - When user triggers another analyze, parent should flip analyzeState
   // - Reset "done sound" + "celebration" guards so UX can repeat
   // ============================================================
-  useEffect(() => {
-    if (analyzeState !== "done") {
-      __doneSoundPlayedRef.current = false;
-      __celebratedRef.current = false;
-      __setShowCelebrate(false);
-    }
-  }, [analyzeState]);
+  // NOTE:
+  // - 不要在 analyzeState 變動時重置音效/慶祝旗標，避免「切換對話/句子」時又播一次結果音效。
+  // - 只在面板關閉/卸載時重置（見 __resetPanelSessionGuards）。
 
 
   const __isAllCorrect = useMemo(() => {
@@ -940,16 +1341,17 @@ export default function SpeakAnalyzePanel({
   return (
     <div
       role="dialog"
+      data-keep-conversation="1"
       aria-modal="true"
       style={{
         position: "fixed",
         inset: 0,
         background: "rgba(0,0,0,0.45)",
         zIndex: 9999,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: 12,
+        // Use absolute-positioned panel so its top is stable and not affected by content height.
+        display: "block",
+        padding: 0,
+        overflow: "hidden",
       }}
       onClick={(e) => {
         if (e && e.target === e.currentTarget) {
@@ -958,14 +1360,24 @@ export default function SpeakAnalyzePanel({
             try { onToggleRecord(); } catch (e2) {}
             return;
           }
+          // ✅ close 必須立刻中斷所有播放中的聲音
+          try { __hardStopAllAudio("click_outside"); } catch (e2) {}
+          try { __resetPanelSessionGuards("click_outside"); } catch (e2) {}
           if (typeof onClose === "function") onClose();
         }
       }}
     >
       <div
         style={{
-          width: "min(920px, 96vw)",
-          maxHeight: "88vh",
+          // ✅ UX: panel fixed region
+          // top starts at 20% viewport height, ends at 30% from bottom (≈ 50vh tall)
+          position: "absolute",
+          left: "3vw",
+          right: "3vw",
+          top: "20vh",
+          height: "50vh",
+          // keep a sensible minimum on very small screens
+          minHeight: 240,
           overflow: "auto",
           background: "linear-gradient(180deg, rgba(255, 244, 234, 0.14) 0%, rgba(255,122,0,0.06) 55%, rgba(255,122,0,0.03) 100%), var(--panel-bg, var(--bg, #fff))",
           color: "var(--text)",
@@ -973,6 +1385,8 @@ export default function SpeakAnalyzePanel({
           border: "1px solid rgba(127,127,127,0.22)",
           boxShadow: "0 14px 40px rgba(0,0,0,0.22)",
           padding: 14,
+          opacity: __rewindFading ? 0 : 1,
+          transition: "opacity 180ms ease",
         }}
         onClick={(e) => {
           try { e.stopPropagation(); } catch (e2) {}
@@ -980,7 +1394,102 @@ export default function SpeakAnalyzePanel({
       >
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
-            <div style={{ fontSize: 14, fontWeight: 700, opacity: 0.92, whiteSpace: "nowrap" }}>{__t("title")}</div>
+            
+
+            
+
+            {/* ✅ Play / Continuous play (move next to conversation nav) */}
+            {typeof onPlayTarget === "function" ? (
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <SpeakButton
+                  onClick={() => {
+                    try {
+                      const r = onPlayTarget();
+                      if (r && typeof r.then === "function") r.catch(() => {});
+                    } catch (e) {}
+                  }}
+                  title={__t("playTarget") || "播放語音"}
+                  ariaLabel="play-target"
+                  style={{ width: 16, height: 16, borderRadius: 9 }}
+                />
+
+                {conversationActive ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (__continuousPlaying) __stopContinuousPlay();
+                      else __startContinuousPlay();
+                    }}
+                    disabled={disabled || typeof onPlayTarget !== "function"}
+                    className="icon-button sound-button"
+                    style={{
+                      height: 26,
+                      width: 26,
+                      padding: 0,
+                      borderRadius: 13,
+                      display: "inline-flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      opacity: disabled ? 0.55 : 0.92,
+                    }}
+                    aria-label={__continuousPlaying ? "continuous-stop" : "continuous-play"}
+                    title={
+                      __continuousPlaying
+                        ? (__t("stop") || "停止")
+                        : (__t("continuousPlay") || "連續播放")
+                    }
+                  >
+                    {!__continuousPlaying ? (
+                      <svg
+                        width="16"
+                        height="16"
+                        viewBox="0 0 24 24"
+                        xmlns="http://www.w3.org/2000/svg"
+                        aria-hidden="true"
+                      >
+                        <circle
+                          cx="12"
+                          cy="12"
+                          r="10"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="1.6"
+                        />
+                        <text
+                          x="12"
+                          y="16"
+                          textAnchor="middle"
+                          fontSize="12"
+                          fontWeight="600"
+                          fill="currentColor"
+                        >
+                          A
+                        </text>
+                      </svg>
+                    ) : (
+                      <svg
+                        width="16"
+                        height="16"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        xmlns="http://www.w3.org/2000/svg"
+                        aria-hidden="true"
+                      >
+                        <circle
+                          cx="12"
+                          cy="12"
+                          r="10"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="1.6"
+                        />
+                        <rect x="8" y="8" width="8" height="8" rx="2" fill="currentColor" />
+                      </svg>
+                    )}
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
 
             {/* ✅ Conversation paging (matches dialog arrows behavior) */}
             {!!conversationActive && (Number(conversationTotal) || 0) > 0 ? (
@@ -989,20 +1498,14 @@ export default function SpeakAnalyzePanel({
                   display: "flex",
                   alignItems: "center",
                   gap: 6,
-                  padding: "4px 8px",
-                  borderRadius: 999,
-                  border: "1px solid rgba(255,122,0,0.22)",
-                  background: "rgba(255,122,0,0.06)",
                 }}
               >
                 <button
                   type="button"
                   disabled={__navDisabled}
-                  onClick={() => {
-                    // Always block history regardless of boundary; if cannot prev, do nothing.
-                    if (conversationCanPrev && typeof onConversationPrev === "function") {
-                      try { onConversationPrev(); } catch (e) {}
-                    }
+                  onClick={(e) => {
+                    try { e.preventDefault(); e.stopPropagation(); } catch (err) {}
+                    __navigateConversation("prev", "btn");
                   }}
                   title={__t("prev") || "上一句"}
                   aria-label={__t("prev") || "上一句"}
@@ -1026,11 +1529,9 @@ export default function SpeakAnalyzePanel({
                 <button
                   type="button"
                   disabled={__navDisabled}
-                  onClick={() => {
-                    // Always block history regardless of boundary; if cannot next, do nothing.
-                    if (conversationCanNext && typeof onConversationNext === "function") {
-                      try { onConversationNext(); } catch (e) {}
-                    }
+                  onClick={(e) => {
+                    try { e.preventDefault(); e.stopPropagation(); } catch (err) {}
+                    __navigateConversation("next", "btn");
                   }}
                   title={__t("next") || "下一句"}
                   aria-label={__t("next") || "下一句"}
@@ -1056,6 +1557,9 @@ export default function SpeakAnalyzePanel({
               try {
                 if (__isRecording && typeof onToggleRecord === "function") onToggleRecord();
               } catch (e) {}
+              // ✅ close 必須立刻中斷所有播放中的聲音
+              try { __hardStopAllAudio("close_btn"); } catch (e) {}
+              try { __resetPanelSessionGuards("close_btn"); } catch (e) {}
               if (typeof onClose === "function") onClose();
             }}
             style={{
@@ -1075,35 +1579,77 @@ export default function SpeakAnalyzePanel({
 
         <div
           style={{
-            marginTop: 10,
-            padding: 10,
-            borderRadius: 10,
+            marginTop: 8,
+            padding: 6,
+            borderRadius: 8,
             border: "1px solid rgba(127,127,127,0.18)",
             background: "rgb(255,255,255)",
           }}
         >
-          {/* ===== Target / Translation (controlled by parent) ===== */}
-          {/* header row: label left, controls right (eye only) */}
+
+          {/* target row (eye icon + sentence) */}
           <div
             style={{
               display: "flex",
-              alignItems: "center",
+              alignItems: "flex-start",
               gap: 10,
-              marginBottom: 8,
             }}
           >
-            {/* ✅ UI tweak: enlarge label (目標) */}
-            <div style={{ fontSize: 14, fontWeight: 600, opacity: 0.78 }}>{__t("targetLabel")}</div>
+            {typeof onToggleShowTarget === "function" ? (
+              <button
+                type="button"
+                onClick={() => {
+                  try {
+                    onToggleShowTarget();
+                  } catch (e) {}
+                }}
+                title={showTarget ? (__t("hideTarget") || "隱藏") : (__t("showTarget") || "顯示")}
+                aria-label="toggle-show-target"
+                className="icon-button sound-button"
+                style={{
+                  border: "none",
+                  background: "transparent",
+                  cursor: "pointer",
+                  padding: 0,
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  width: 24,
+                  height: 24,
+                  flexShrink: 0,
+                  opacity: disabled ? 0.55 : 1,
+                }}
+                disabled={disabled}
+              >
+                {showTarget ? <EyeIconOpen size={20} /> : <EyeIconClosed size={20} />}
+              </button>
+            ) : null}
 
-            <div style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
-              {typeof onToggleShowTarget === "function" ? (
+            <div style={{ fontSize: 18, lineHeight: 1.35, wordBreak: "break-word", flex: 1 }}>
+              {showTarget === false ? <span style={{ whiteSpace: "nowrap" }}>{MOSAIC_LINE}</span> : __expected}
+            </div>
+          </div>
+
+                    {/* translation */}
+          {__translation ? (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "flex-start",
+                gap: 10,
+                marginTop: 12,
+              }}
+            >
+              {typeof onToggleShowTranslation === "function" ? (
                 <button
                   type="button"
                   onClick={() => {
-                    try { onToggleShowTarget(); } catch (e) {}
+                    try {
+                      onToggleShowTranslation();
+                    } catch (e) {}
                   }}
-                  title={showTarget ? (__t("hideTarget") || "隱藏") : (__t("showTarget") || "顯示")}
-                  aria-label="toggle-show-target"
+                  title={showTranslation ? (__t("hideTranslation") || "隱藏") : (__t("showTranslation") || "顯示")}
+                  aria-label="toggle-show-translation"
                   className="icon-button sound-button"
                   style={{
                     border: "none",
@@ -1113,123 +1659,25 @@ export default function SpeakAnalyzePanel({
                     display: "inline-flex",
                     alignItems: "center",
                     justifyContent: "center",
-                    width: 34,
-                    height: 34,
+                    width: 24,
+                    height: 24,
                     flexShrink: 0,
                     opacity: disabled ? 0.55 : 1,
                   }}
                   disabled={disabled}
                 >
-                  {showTarget ? <EyeIconOpen size={20} /> : <EyeIconClosed size={20} />}
+                  {showTranslation ? <EyeIconOpen size={20} /> : <EyeIconClosed size={20} />}
                 </button>
               ) : null}
-            </div>
-          </div>
 
-          
-          {/* target row (play icon on the left of sentence) */}
-          <div
-            style={{
-              display: "flex",
-              alignItems: "flex-start",
-              gap: 10,
-            }}
-          >
-            {typeof onPlayTarget === "function" ? (
-              <SpeakButton
-                onClick={() => {
-                  try { onPlayTarget(); } catch (e) {}
-                }}
-                title={__t("playTarget") || "播放語音"}
-                ariaLabel="play-target"
-                style={{ width: 16, height: 16, borderRadius: 9, marginTop: 2 }}
-              />
-            ) : null}
-
-            {/* target text */}
-            <div style={{ fontSize: 18, lineHeight: 1.35, wordBreak: "break-word", flex: 1 }}>
-              {showTarget === false ? <span style={{ whiteSpace: "nowrap" }}>{MOSAIC_LINE}</span> : __expected}
-            </div>
-          </div>
-
-
-
-
-          {/* translation */}
-          {__translation ? (
-            <>
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10,
-                  marginTop: 12,
-                  marginBottom: 6,
-                }}
-              >
-                <div style={{ fontSize: 14, fontWeight: 600, opacity: 0.78 }}>
-                  {__t("translationLabel")}
-                </div>
-                
-                {typeof onToggleShowTranslation === "function" ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      try { onToggleShowTranslation(); } catch (e) {}
-                    }}
-                    title={showTranslation ? (__t("hideTranslation") || "隱藏") : (__t("showTranslation") || "顯示")}
-                    aria-label="toggle-show-translation"
-                    className="icon-button sound-button"
-                    style={{
-                      border: "none",
-                      background: "transparent",
-                      cursor: "pointer",
-                      padding: 0,
-                      display: "inline-flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      width: 34,
-                      height: 34,
-                      flexShrink: 0,
-                      opacity: disabled ? 0.55 : 1,
-                    }}
-                    disabled={disabled}
-                  >
-                    {showTranslation ? <EyeIconOpen size={20} /> : <EyeIconClosed size={20} />}
-                  </button>
-                ) : null}
-                
+              <div style={{ fontSize: 16, lineHeight: 1.35, wordBreak: "break-word", opacity: 0.92, flex: 1 }}>
+                {showTranslation === false ? (
+                  <span style={{ whiteSpace: "nowrap" }}>{MOSAIC_LINE}</span>
+                ) : (
+                  __translation
+                )}
               </div>
-                
-              <div style={{ fontSize: 16, lineHeight: 1.35, wordBreak: "break-word", opacity: 0.92 ,gap:10}}>
-                  {/* target row (play icon on the left of sentence) */}
-          <div
-            style={{
-              display: "flex",
-              alignItems: "flex-start",
-              gap: 10,
-            }}
-          >
-            {typeof onPlayTarget === "function" ? (
-                  <div
-                    
-                    aria-label="play-target"
-                    style={{ width: 16, height: 16, borderRadius: 9, marginTop: 2 }}
-                  />
-                ) : null}
-
-            {/* target text */}
-            <div style={{ fontSize: 16, lineHeight: 1.35, wordBreak: "break-word", flex: 1 }}>
-            {showTranslation === false ? <span style={{ whiteSpace: "nowrap" }}>{MOSAIC_LINE}</span> : __translation}
             </div>
-          </div>
-          
-
-          
-                  
-                
-              </div>
-            </>
           ) : null}
           </div>
           
@@ -1330,42 +1778,8 @@ export default function SpeakAnalyzePanel({
 
         {analyzeState === "done" ? (
           <div style={{ marginTop: 12 }}>
-            {/* ✅ Success celebration (all green) */}
-            {__showCelebrate ? (
-              <>
-                <style>{`
-                  @keyframes speakCelebrateIn {
-                    0% { transform: translateY(6px); opacity: 0; }
-                    35% { transform: translateY(0px); opacity: 1; }
-                    80% { transform: translateY(-2px); opacity: 1; }
-                    100% { transform: translateY(-6px); opacity: 0; }
-                  }
-                `}</style>
-                <div
-                  style={{
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: 8,
-                    padding: "8px 10px",
-                    borderRadius: 999,
-                    border: "1px solid rgba(34,197,94,0.32)",
-                    background: "rgba(34,197,94,0.18)",
-                    color: "rgba(20,83,45,1)",
-                    fontSize: 13,
-                    fontWeight: 700,
-                    marginBottom: 10,
-                    animation: "speakCelebrateIn 900ms ease-out 1",
-                  }}
-                >
-                  <span aria-hidden="true">✅</span>
-                  <span>{__t("perfect")}</span>
-                </div>
-              </>
-            ) : null}
-
-
             <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }}>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, flex: "1 1 auto", minWidth: 0 }}>{__tokenNodes}</div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 4, flex: "1 1 auto", minWidth: 0 }}>{__tokenNodes}</div>
               <div style={{ position: "relative", display: "inline-flex", alignItems: "center", flex: "0 0 auto", marginTop: 2 }}>
                 <button
                   type="button"

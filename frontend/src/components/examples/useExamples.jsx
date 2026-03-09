@@ -207,6 +207,12 @@ export default function useExamples({
   sentenceType,
   explainLang,
 
+  // ✅ 新增：Artikel 格位控制（由 WordPosInfoArtikel 點選回拋）
+  articleCaseOverride,
+  articleGenderOverride,
+  articleTypeOverride,
+  articleNumberOverride,
+
   // ✅ 新增（可選）：多重參考（不破壞既有呼叫）
   multiRefEnabled,
   refs,
@@ -215,6 +221,9 @@ export default function useExamples({
   // - 目的：讓「重新產生例句」以 UI 顯示的 headword 為準（word），baseForm 仍保留 lemma
   // - 注意：只影響本次 refreshExamples 的 payload.word，不改 d.word / history key
   headwordOverride,
+
+  // ✅ 新增（可選）：例句生成用的 headword 意義提示（Pronomen: ihr/Sie 等）
+  headwordHintKeyOverride,
 
   // =========================
   // Task F2（Favorites/Learning examples cache 回寫）
@@ -310,6 +319,9 @@ export default function useExamples({
    */
   const headwordOverrideRef = useRef("");
 
+  // ✅ 新增：headwordHintKeyOverrideRef（Pronomen 意義提示）
+  const headwordHintKeyOverrideRef = useRef("");
+
   /**
    * 中文功能說明：
    * - 同步外部傳入的 multiRefEnabled/refs 到 ref（不影響既有流程）
@@ -325,6 +337,9 @@ export default function useExamples({
     headwordOverrideRef.current =
       typeof headwordOverride === "string" ? headwordOverride.trim() : "";
 
+    headwordHintKeyOverrideRef.current =
+      typeof headwordHintKeyOverride === "string" ? headwordHintKeyOverride.trim() : "";
+
     // ✅ Production 排查：refs 同步狀態（預設關閉）
     diagLog("multiRef:sync", {
       word: d?.word,
@@ -334,7 +349,7 @@ export default function useExamples({
       multiRefEnabled: !!multiRefEnabled,
       refsCount: Array.isArray(refs) ? refs.length : 0,
     });
-  }, [multiRefEnabled, refs, headwordOverride, d, senseIndex, sentenceType, explainLang]);
+  }, [multiRefEnabled, refs, headwordOverride, headwordHintKeyOverride, d, senseIndex, sentenceType, explainLang]);
 
   /**
    * 中文功能說明：
@@ -474,6 +489,24 @@ export default function useExamples({
           definitionLangList: d.definition_list || [],
 
           explainLang,
+
+          // ✅ Artikel 格位控制（獨立欄位；後端做 deterministic mapping + 驗證）
+          articleCase:
+            typeof articleCaseOverride === "string" && articleCaseOverride.trim()
+              ? articleCaseOverride.trim()
+              : undefined,
+          articleGender:
+            typeof articleGenderOverride === "string" && articleGenderOverride.trim()
+              ? articleGenderOverride.trim()
+              : undefined,
+          articleType:
+            typeof articleTypeOverride === "string" && articleTypeOverride.trim()
+              ? articleTypeOverride.trim()
+              : undefined,
+          articleNumber:
+            typeof articleNumberOverride === "string" && articleNumberOverride.trim()
+              ? articleNumberOverride.trim()
+              : undefined,
 
           options: {
             polarity: "pos",

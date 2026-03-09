@@ -58,8 +58,9 @@
  */
 
 import React from "react";
-import { callTTS } from "../../utils/ttsClient";
+import { playTTS } from "../../utils/ttsClient";
 import ExamIcon from "../icons/ExamIcon";
+import SentenceCard from "../sentence/SentenceCard";
 
 function ResultPanel({
   result,
@@ -110,6 +111,8 @@ function ResultPanel({
   canClearHistory,
   onClearHistoryItem,
   clearHistoryLabel,
+  onResumeLearning,
+  resumeLearningLabel,
 
   // ✅ 2026-01-06：POS 切換（多詞性）事件往上傳（由 App 注入 handler）
   onSelectPosKeyFromApp,
@@ -448,20 +451,74 @@ function ResultPanel({
   }
 
   // ============================================================
+  // ✅ Render Guard（更嚴格、對齊「實際會被 GrammarCard 顯示的欄位」）
+  // 你的重點是：
+  // - 沒有內容「可以給 GrammarCard 顯示」→ 文法區塊（含標題）不得進 DOM
+  //
+  // ⚠️ 常見坑：grammar 物件可能只有 metadata（如 lang/mode/id），是非空物件、甚至含字串，
+  // 但 GrammarCard 真正會顯示的欄位（overallComment / structure / errors...）是空的。
+  // 這會導致：section 仍 render、但卡片視覺上是空白。
+  //
+  // ✅ 所以這裡不要用「深度任何字串」判斷，而是只檢查「可視內容」來源。
+  // ============================================================
+  const hasNonEmptyString = (v) => typeof v === "string" && v.trim().length > 0;
+
+  const grammarErrorsHasContent = (errors) => {
+    if (!Array.isArray(errors) || errors.length === 0) return false;
+    return errors.some((e) => {
+      if (!e || typeof e !== "object") return false;
+      return (
+        hasNonEmptyString(e.original) ||
+        hasNonEmptyString(e.suggestion) ||
+        hasNonEmptyString(e.explanation)
+      );
+    });
+  };
+
+  const grammarStructureHasContent = (structure) => {
+    if (!structure || typeof structure !== "object") return false;
+    const slots = Array.isArray(structure.slots) ? structure.slots : null;
+    if (!slots || slots.length === 0) return false;
+    return slots.some((sl) => sl && typeof sl === "object" && hasNonEmptyString(sl.text));
+  };
+
+  const isRenderableGrammarCardData = (g) => {
+    // 支援 g 直接是字串（極端情況）
+    if (hasNonEmptyString(g)) return true;
+
+    // Array：至少有一個元素有可視內容
+    if (Array.isArray(g)) return g.some((it) => isRenderableGrammarCardData(it));
+
+    // Object：只認「會被 GrammarCard 顯示」的欄位
+    if (g && typeof g === "object") {
+      if (hasNonEmptyString(g.overallComment)) return true;
+      if (grammarStructureHasContent(g.structure)) return true;
+      if (grammarErrorsHasContent(g.errors)) return true;
+      return false;
+    }
+
+    return false;
+  };
+
+  const renderableGrammarItems = Array.isArray(grammarItems)
+    ? grammarItems.filter((g) => isRenderableGrammarCardData(g))
+    : [];
+
+  // ============================================================
   // ✅ Sentence Gate：
   // - 若後端回 mode/kind=sentence，UI 只顯示整句（GrammarCard）
   // - 避免 analyzeSentence 內部 token-by-token 產生的 words 被渲染成多筆 WordCard
   // ============================================================
   const isSentenceResult = !!(result && (result.mode === "sentence" || result.kind === "sentence"));
 
+  const __ttsAudioRef = React.useRef(null);
 
+  // ✅ SpeakAnalyzePanel 連續播放需要等待「上一句播完」才進下一句
+  // - 所以 handleSpeak 必須回傳 Promise（ended / error 才 resolve）
   const handleSpeak = async (text) => {
     if (!text) return;
     try {
-      const audioSrc = await callTTS(text, "de-DE");
-      if (!audioSrc) return;
-      const audio = new Audio(audioSrc);
-      audio.play();
+      await playTTS(text, "de-DE");
     } catch (err) {
       console.error("TTS 播放錯誤：", err);
     }
@@ -559,13 +616,50 @@ function ResultPanel({
   const effectiveOnNext = isFavNav ? navContext?.goNext : onNext;
 
   // ✅ 低調清除文案（props > fallback）
-  const clearLabel = (typeof clearHistoryLabel === "string" && clearHistoryLabel.trim()) || "點擊清除該筆紀錄";
-  const reportIssueHint = (typeof wordCardLabels?.reportIssueHint === "string" && wordCardLabels.reportIssueHint.trim()) || (typeof wordCardLabels?.reportIssueLabel === "string" && wordCardLabels.reportIssueLabel.trim()) || "回報問題";
+  const clearLabel =
+    (typeof clearHistoryLabel === "string" && clearHistoryLabel.trim()) || "點擊清除該筆紀錄";
+
+  // ✅ 回報問題：label 與 tooltip/hint 分離
+  const reportIssueLabel =
+    (typeof wordCardLabels?.reportIssueLabel === "string" && wordCardLabels.reportIssueLabel.trim()) ||
+    "回報";
+  const reportIssueHint =
+    (typeof wordCardLabels?.reportIssueHint === "string" && wordCardLabels.reportIssueHint.trim()) ||
+    reportIssueLabel ||
+    "回報問題";
+
+  // ============================================================
+  // UI 顯示邏輯（本任務核心）
+  // - ActionsRow（回報/清除）只以 mode 為唯一真相
+  //   - mode === "search"   => 顯示
+  //   - mode === "learning" => 絕對不顯示
+  // - 返回學習（Resume learning）
+  //   - 只在 mode === "search" 且 learningContext.title 存在時顯示
+  // ============================================================
+  const isSearchMode = mode === "search";
+  const showActionsRow = isSearchMode;
+
+  // ✅ 返回學習（Resume learning）：只以 mode + learningContext.title 決定顯示
+  // - mode === "search" && learningContext.title 存在 => 顯示
+  // - 不再依賴 items/intent/history/view/result/conversation 等推導
+  const learningTitle =
+    typeof learningContext?.title === "string" ? learningContext.title.trim() : "";
+  const showResumeLearning = isSearchMode && !!learningTitle;
+
+  // ✅ 文案：優先用 uiText.continueWithTitle（若上游仍傳入 resumeLearningLabel，也當 fallback）
+  const _continueWithTitleBase =
+    (typeof t.continueWithTitle === "string" && t.continueWithTitle.trim()) ||
+    (typeof resumeLearningLabel === "string" && resumeLearningLabel.trim()) ||
+    "繼續學習";
+  const _resumeLearningText = showResumeLearning
+    ? `${_continueWithTitleBase}：${learningTitle}`
+    : "";
+
   // ✅ 2026-01-17（需求變更）：註解（移除）「點擊清除該筆紀錄」功能
   // - 保留原本 props 與 UI 程式碼（以註解方式保留），但功能不啟用
   // - 之後若要恢復：把 canClear 改回原先判斷即可
   // const canClear = !!canClearHistory && typeof onClearHistoryItem === "function";
-  const canClear = !!canClearHistory && typeof onClearHistoryItem === "function";
+  const canClear = isSearchMode && !!canClearHistory && typeof onClearHistoryItem === "function";
   // ✅ 2026-01-27：導覽列寬度規格調整
   // - Prev / Current / Next 永遠「三等分」容器寬度（各 1/3）
   // - 總寬度不超過 WordCard（因此這裡只用 width:100% + maxWidth:100%，不自設固定像素寬）
@@ -715,9 +809,7 @@ function ResultPanel({
       // - When dialog practice or SpeakAnalyzePanel is active, history navigation MUST be disabled.
       try {
         if (e.defaultPrevented) return;
-        if (typeof window !== "undefined") {
-          if (window.__CONV_NAV_ACTIVE) return;
-          if (window.__SPEAK_PANEL_OPEN) return;
+        if (typeof window !== "undefined") {          if (window.__SPEAK_PANEL_OPEN) return;
         }
       } catch (err) {
         // ignore
@@ -834,7 +926,7 @@ function ResultPanel({
                 <span style={HISTORY_NAV_PAGE_STYLE}>
                   {effectivePageX} / {effectivePageY}
                 </span>
-              </div>
+	              </div>
 
               {/* Next：下一頁字 + 箭頭（同一顆按鈕） */}
               <button
@@ -874,15 +966,59 @@ function ResultPanel({
             </div>
 
             {/* ✅ 清除當下回放紀錄：仍放在導覽列附近（低調、不破壞單列導覽規格） */}
-            {canClear && (
+            {showActionsRow && (
               <div
                 style={{
                   marginTop: 6,
                   display: "flex",
-                  justifyContent: "flex-end",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  gap: 12,
                 }}
               >
-<button
+                {showResumeLearning ? (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      try {
+                        e.preventDefault();
+                        e.stopPropagation();
+                      } catch (err) {}
+                      try {
+                        if (typeof onResumeLearning === "function") onResumeLearning();
+                      } catch (err) {}
+                    }}
+                    aria-label={_resumeLearningText}
+                    title={_resumeLearningText}
+                    disabled={typeof onResumeLearning !== "function"}
+                    style={{
+                      opacity: typeof onResumeLearning === "function" ? 0.55 : 0.35,
+                      fontSize: 12,
+                      userSelect: "none",
+                      cursor: typeof onResumeLearning === "function" ? "pointer" : "not-allowed",
+                      background: "transparent",
+                      border: "none",
+                      padding: 0,
+                      lineHeight: 1,
+                      textDecoration: "underline",
+                      textUnderlineOffset: 2,
+                      whiteSpace: "nowrap",
+                      color: "var(--text-muted)",
+                    }}
+                  >
+                    {_resumeLearningText}
+                  </button>
+                ) : (
+                  <span />
+                )}
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 12,
+                  }}
+                >
+                    <button
   type="button"
   onClick={(e) => {
     try {
@@ -930,34 +1066,37 @@ function ResultPanel({
     <path d="M6 4h11l-2 4 2 4H6" />
   </svg>
   <span style={{ textDecoration: "underline", textUnderlineOffset: 2 }}>
-    
+    {reportIssueLabel}
   </span>
 </button>
 
-<span
-  role="button"
-  tabIndex={0}
-  onClick={onClearHistoryItem}
-  onKeyDown={(e) => {
-    if (e.key === "Enter" || e.key === " ") {
-      e.preventDefault();
-      onClearHistoryItem();
-    }
-  }}
-  aria-label={clearLabel}
-  title={clearLabel}
-  style={{
-    opacity: 0.55,
-    fontSize: 12,
-    userSelect: "none",
-    cursor: "pointer",
-    textDecoration: "underline",
-    textUnderlineOffset: 2,
-    whiteSpace: "nowrap",
-  }}
->
-  {clearLabel}
-</span>
+                    {canClear ? (
+                      <span
+                        role="button"
+                        tabIndex={0}
+                        onClick={onClearHistoryItem}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            onClearHistoryItem();
+                          }
+                        }}
+                        aria-label={clearLabel}
+                        title={clearLabel}
+                        style={{
+                          opacity: 0.55,
+                          fontSize: 12,
+                          userSelect: "none",
+                          cursor: "pointer",
+                          textDecoration: "underline",
+                          textUnderlineOffset: 2,
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {clearLabel}
+                      </span>
+                    ) : null}
+                </div>
               </div>
             )}
           </div>
@@ -1175,7 +1314,20 @@ function ResultPanel({
             </section>
           )}
 
-          {grammarItems.length > 0 && GrammarCard && (
+          {isSentenceResult && (
+            <section>
+              <SentenceCard
+                input={result?.input || result?.normalizedQuery || ""}
+                sentence={result?.sentence || null}
+                labels={t.sentenceCard || {}}
+                onWordClick={onWordClick}
+                onSpeak={handleSpeak}
+                uiLang={uiLang}
+              />
+            </section>
+          )}
+
+          {renderableGrammarItems.length > 0 && (
             <section>
               <h2
                 style={{
@@ -1186,8 +1338,14 @@ function ResultPanel({
               >
                 {sections.grammarCardTitle || "文法說明"}
               </h2>
-              {grammarItems.map((g, idx) => (
-                <GrammarCard key={idx} data={g} labels={grammarCardLabels} />
+              {renderableGrammarItems.map((g, idx) => (
+                <GrammarCard
+                  key={idx}
+                  grammar={g}
+                  labels={grammarCardLabels}
+                  onWordClick={onWordClick}
+                  onSpeak={handleSpeak}
+                />
               ))}
             </section>
           )}

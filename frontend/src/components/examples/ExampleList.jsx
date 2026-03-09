@@ -1,6 +1,6 @@
 // FILE: frontend/src/components/examples/ExampleList.jsx
 // END FILE: frontend/src/components/examples/ExampleList.jsx
-import React, { useEffect, useMemo } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import ExampleSentence from "./ExampleSentence";
 import useConversation from "../conversation/useConversation";
 
@@ -93,6 +93,7 @@ export default function ExampleList({
 
   // 語言資訊（只給後端 / hook 用，不在這裡做文案判斷）
   explainLang,
+  uiLang,
 
   // 連續對話相關文案（通常由 uiText 注入）
   conversationTitle,
@@ -290,10 +291,31 @@ useEffect(() => {
     nextTurn,
     prevTurn,
   } = useConversation({
+    // ✅ per-wordcard conversation cache key
+    // - headword 優先（穩定識別）
+    // - fallback mainSentence（至少能依例句分卡）
+    storageKey:
+      typeof headword === "string" && headword.trim().length > 0
+        ? headword.trim()
+        : typeof mainSentence === "string"
+        ? mainSentence.trim()
+        : "",
     mainSentence,
     mainTranslation: exampleTranslation,
     explainLang,
   });
+
+  // ✅ rerender trigger when conversation keyboard priority changes (window.__CONV_NAV_ACTIVE)
+  const [__convNavTick, __setConvNavTick] = useState(0);
+  useEffect(() => {
+    try {
+      const __h = () => __setConvNavTick((x) => x + 1);
+      window.addEventListener("conv-nav-change", __h);
+      return () => window.removeEventListener("conv-nav-change", __h);
+    } catch (e) {
+      // ignore
+    }
+  }, []);
 
   // ✅ Conversation overlay data mapping
   const __convTurns =
@@ -306,6 +328,18 @@ useEffect(() => {
   const __convPage = __convTotal > 0 ? __convTurns[__convIndex] : null;
   const __convCanPrev = __convIndex > 0;
   const __convCanNext = __convIndex < __convTotal - 1;
+
+
+  // ✅ Conversation keyboard priority (do NOT override example sentence unless user is actively navigating conversation)
+  const __convPriority = (() => {
+    void __convNavTick; // trigger rerender on conv-nav-change
+    try {
+      if (typeof window !== "undefined" && window.__CONV_NAV_ACTIVE) return true;
+    } catch (e) {
+      // ignore
+    }
+    return false;
+  })();
 
   // ✅ Single source of truth for "currently displayed sentence" (for recording reference)
   // - conversation open: use current turn
@@ -347,68 +381,7 @@ useEffect(() => {
 
   return (
     <div style={{ marginTop: 16 }}>
-      {/* ✅ Phase 2-UX：refs 控制區塊插槽（移動到 Multi-ref button 上方） */}
-      {__RENDER_REFCONTROLS_ABOVE_EXAMPLESENTENCE && refControls ? (
-        <>
-          {/* DEPRECATED 2026-01-07: 原本 inline render 會一直佔版面，需求改為小視窗呈現。
-              - 保留原碼以利回滾（不刪行）
-          <div
-            style={{
-              marginBottom: 10,
-            }}
-          >
-            {refControls}
-          </div>
-          */}
-
-          {/* ✅ 2026-01-07：Popover-like 浮層容器（不佔版面） */}
-          {__USE_REFCONTROLS_POPOVER ? (
-            <div
-              style={{
-                position: "relative",
-                // ✅ 讓浮層不推擠版面：本容器高度不依內容撐開
-                height: 0,
-              }}
-            >
-              {__SHOULD_SHOW_REFCONTROLS_POPOVER ? (
-                <div
-                  style={{
-                    position: "absolute",
-                    // ✅ 顯示在例句區塊上方（不影響 layout）
-                    top: -6,
-                    right: 0,
-                    zIndex: 20,
-
-                    // ✅ 面板外觀（亮/暗版：避免寫死黑白，盡量使用 rgba）
-                    padding: 12,
-                    borderRadius: 12,
-                    minWidth: 360,
-                    maxWidth: 720,
-
-                    background: "var(--panel-bg, rgba(255, 255, 255, 0.98))",
-                    border: "1px solid rgba(0, 0, 0, 0.12)",
-                    boxShadow: "0 10px 28px rgba(0, 0, 0, 0.14)",
-
-                    // ✅ 讓面板內容不要被壓縮
-                    overflow: "visible",
-                  }}
-                >
-                  {refControls}
-                </div>
-              ) : null}
-            </div>
-          ) : (
-            // ✅ 回滾用：若關閉 __USE_REFCONTROLS_POPOVER，回到原本 inline（仍不建議）
-            <div
-              style={{
-                marginBottom: 10,
-              }}
-            >
-              {refControls}
-            </div>
-          )}
-        </>
-      ) : null}
+      
 
       {/* 例句區塊 */}
       <ExampleSentence
@@ -435,6 +408,7 @@ useEffect(() => {
         refreshTooltip={refreshTooltip}
         onWordClick={onWordClick}
         onSpeak={onSpeak}
+        uiLang={uiLang}
         onToggleConversation={(...args) => {
           console.log("[20260203 record][ExampleList][onToggleConversation]", { ts: Date.now() });
 
@@ -445,7 +419,15 @@ useEffect(() => {
     
   }        
 );
-  return openConversation(...args);
+  try {
+            if (typeof window !== "undefined") {
+              window.__CONV_NAV_ACTIVE = true;
+              window.dispatchEvent(new CustomEvent("conv-nav-change", { detail: { active: true } }));
+            }
+          } catch (e) {
+            // ignore
+          }
+          return openConversation(...args);
 }}
         conversationToggleTooltip={tConversationToggleTooltip}
         // ✅ Conversation navigation (overlay on ExampleSentence)
