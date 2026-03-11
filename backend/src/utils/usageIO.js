@@ -317,7 +317,7 @@ async function commitUsageEvent(payload) {
   const dailySelect = await supa
     .from("usage_daily")
     .select("user_id, day, llm_completion_tokens, tts_chars")
-    .eq("user_id", keyId)
+    .eq("user_id", userId)
     .eq("day", day)
     .maybeSingle();
 
@@ -347,7 +347,7 @@ async function commitUsageEvent(payload) {
   const monthlySelect = await supa
     .from("usage_monthly")
     .select("user_id, ym, llm_tokens_in, llm_tokens_out, llm_tokens_total, tts_chars_total")
-    .eq("user_id", keyId)
+    .eq("user_id", userId)
     .eq("ym", ym)
     .maybeSingle();
 
