@@ -151,16 +151,6 @@ function __usageLogFail(tag, ctx, e) {
   }
 }
 
-// ======================================
-// [統計] trace helper (module-scope)
-// Avoid ReferenceError when __statTrace is referenced outside init scope.
-const __STAT_TRACE_ON = (process?.env?.USAGE_DEBUG_STATS || "").toString() === "1";
-function __statTrace(event, payload) {
-  if (!__STAT_TRACE_ON) return;
-  try {
-    console.info("[統計]", event, payload || {});
-  } catch (_) {}
-}
 
 function getSupabaseServiceClient() {
   try {
@@ -172,6 +162,17 @@ function getSupabaseServiceClient() {
 
     // lazy require，避免在缺依賴時影響其他流程
     const { createClient } = require("@supabase/supabase-js");
+
+// ======================================
+// [統計] trace helper (module-scope)
+// Avoid ReferenceError when __statTrace is referenced outside init scope.
+const __STAT_TRACE_ON = (process?.env?.USAGE_DEBUG_STATS || "").toString() === "1";
+function __statTrace(event, payload) {
+  if (!__STAT_TRACE_ON) return;
+  try {
+    console.info("[統計]", event, payload || {});
+  } catch (_) {}
+}
 
 // ======================================
 // [20260203 統計] stats trace switch (dev-only)
@@ -373,9 +374,9 @@ async function commitUsageEvent(payload) {
     }
   }
 
-  __statTrace("[llm_tokens][commit] ok", { userId, day, ym, inTokens, outTokens, allTokens, kind });
+  __statTrace("[usage_event][commit] ok", { userId, day, ym, llmInTokens, llmOutTokens, llmTotalTokens, eventType, kind: eventRow.kind });
 
-  console.info("[統計] commitLlmTokens result", { ok: true, userId, day, ym, kind });
+  console.info("[統計] commitUsageEvent result", { ok: true, userId, day, ym, eventType, kind: eventRow.kind, llmInTokens, llmOutTokens, llmTotalTokens });
 
   return { ok: true };
 }
@@ -428,7 +429,7 @@ async function commitAsrSeconds(payload) {
     const sel = await supa
       .from("usage_daily")
       .select("asr_seconds")
-      .eq("user_id", keyId)
+      .eq("user_id", userId)
       .eq("day", day)
       .maybeSingle();
 
@@ -458,7 +459,7 @@ async function commitAsrSeconds(payload) {
     const selM = await supa
       .from("usage_monthly")
       .select("asr_seconds_total")
-      .eq("user_id", keyId)
+      .eq("user_id", userId)
       .eq("ym", ym)
       .maybeSingle();
 
@@ -725,7 +726,7 @@ async function commitLlmTokens({
     const dailySelect = await supa
       .from("usage_daily")
       .select("user_id, day, llm_tokens_in, llm_tokens_out, llm_tokens_total, llm_completion_tokens, tts_chars")
-      .eq("user_id", keyId)
+      .eq("user_id", userId)
       .eq("day", day)
       .maybeSingle();
 
@@ -759,7 +760,7 @@ async function commitLlmTokens({
     const monthlySelect = await supa
       .from("usage_monthly")
       .select("user_id, ym, llm_tokens_in, llm_tokens_out, llm_tokens_total, tts_chars_total, asr_seconds_total")
-      .eq("user_id", keyId)
+      .eq("user_id", userId)
       .eq("ym", ym)
       .maybeSingle();
 
@@ -852,7 +853,7 @@ async function commitQueryCount({ userId, inc = 1 } = {}) {
     const { data: curD, error: selD } = await supa
       .from("usage_daily")
       .select("user_id, day, query_count, llm_completion_tokens, tts_chars, asr_seconds, updated_at")
-      .eq("user_id", keyId)
+      .eq("user_id", userId)
       .eq("day", day)
       .maybeSingle();
 
@@ -880,7 +881,7 @@ async function commitQueryCount({ userId, inc = 1 } = {}) {
     const { data: curM, error: selM } = await supa
       .from("usage_monthly")
       .select("user_id, ym, query_count, llm_tokens_in, llm_tokens_out, llm_tokens_total, tts_chars_total, asr_seconds_total, updated_at")
-      .eq("user_id", keyId)
+      .eq("user_id", userId)
       .eq("ym", ym)
       .maybeSingle();
 
@@ -1105,6 +1106,8 @@ async function commitLookupCount({ userId, inc = 1 } = {}) {
   }
 
   // RPC failure is NOT a success path.
+  const allowFallback = __usageAllowFallback();
+
   if (!allowFallback) {
     return {
       ok: false,
@@ -1121,7 +1124,7 @@ async function commitLookupCount({ userId, inc = 1 } = {}) {
     const { data: curD } = await supabase
       .from("usage_daily")
       .select("user_id, day, lookup_count")
-      .eq("user_id", keyId)
+      .eq("user_id", userId)
       .eq("day", day)
       .maybeSingle();
 
@@ -1137,7 +1140,7 @@ async function commitLookupCount({ userId, inc = 1 } = {}) {
     const { data: curM } = await supabase
       .from("usage_monthly")
       .select("user_id, ym, lookup_count")
-      .eq("user_id", keyId)
+      .eq("user_id", userId)
       .eq("ym", ym)
       .maybeSingle();
 
@@ -1327,7 +1330,7 @@ async function commitFeatureCount({ userId, feature, inc = 1 } = {}) {
     const { data: curD } = await supa
       .from("usage_daily")
       .select(`user_id, day, ${dcol}`)
-      .eq("user_id", keyId)
+      .eq("user_id", userId)
       .eq("day", day)
       .maybeSingle();
 
@@ -1342,7 +1345,7 @@ async function commitFeatureCount({ userId, feature, inc = 1 } = {}) {
     const { data: curM } = await supa
       .from("usage_monthly")
       .select(`user_id, ym, ${mcol}`)
-      .eq("user_id", keyId)
+      .eq("user_id", userId)
       .eq("ym", ym)
       .maybeSingle();
 
