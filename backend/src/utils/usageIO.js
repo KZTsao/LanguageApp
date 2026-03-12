@@ -151,6 +151,16 @@ function __usageLogFail(tag, ctx, e) {
   }
 }
 
+// ======================================
+// [統計] trace helper (module-scope)
+// Avoid ReferenceError when __statTrace is referenced outside init scope.
+const __STAT_TRACE_ON = (process?.env?.USAGE_DEBUG_STATS || "").toString() === "1";
+function __statTrace(event, payload) {
+  if (!__STAT_TRACE_ON) return;
+  try {
+    console.info("[統計]", event, payload || {});
+  } catch (_) {}
+}
 
 function getSupabaseServiceClient() {
   try {
@@ -162,17 +172,6 @@ function getSupabaseServiceClient() {
 
     // lazy require，避免在缺依賴時影響其他流程
     const { createClient } = require("@supabase/supabase-js");
-
-// ======================================
-// [統計] trace helper (module-scope)
-// Avoid ReferenceError when __statTrace is referenced outside init scope.
-const __STAT_TRACE_ON = (process?.env?.USAGE_DEBUG_STATS || "").toString() === "1";
-function __statTrace(event, payload) {
-  if (!__STAT_TRACE_ON) return;
-  try {
-    console.info("[統計]", event, payload || {});
-  } catch (_) {}
-}
 
 // ======================================
 // [20260203 統計] stats trace switch (dev-only)
