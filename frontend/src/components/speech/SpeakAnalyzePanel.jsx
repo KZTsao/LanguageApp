@@ -209,6 +209,9 @@ export default function SpeakAnalyzePanel({
   // ✅ 2026-01-24: i18n (optional)
   uiLang,
 
+  // ✅ 2026-03-14: width guard (bound to ResultPanel actual width)
+  resultPanelWidth,
+
   // ✅ 2026-01-24: realign compare (optional)
   // If parent can pass ASR response words, panel can self-color with realign.
   asrWords,
@@ -1335,6 +1338,16 @@ export default function SpeakAnalyzePanel({
     };
   }, [__isRecording]);
 
+  const __resultPanelBoundWidth = useMemo(() => {
+    const n = Number(resultPanelWidth) || 0;
+    if (!Number.isFinite(n) || n <= 0) return 0;
+    return Math.max(280, Math.round(n));
+  }, [resultPanelWidth]);
+
+  const __panelWidthStyle = __resultPanelBoundWidth > 0
+    ? `min(calc(100vw - 48px), ${__resultPanelBoundWidth}px)`
+    : "min(calc(100vw - 48px), 94vw)";
+
   // ============================================================
   // Overlay container
   // ============================================================
@@ -1372,8 +1385,10 @@ export default function SpeakAnalyzePanel({
           // ✅ UX: panel fixed region
           // top starts at 20% viewport height, ends at 30% from bottom (≈ 50vh tall)
           position: "absolute",
-          left: "3vw",
-          right: "3vw",
+          left: "50%",
+          transform: "translateX(-50%)",
+          width: __panelWidthStyle,
+          maxWidth: __panelWidthStyle,
           top: "20vh",
           height: "50vh",
           // keep a sensible minimum on very small screens
@@ -1864,5 +1879,3 @@ export default function SpeakAnalyzePanel({
 }
 
 // frontend/src/components/speech/SpeakAnalyzePanel.jsx (file end)
-
-// PATCH: guard pronunciation tips by uiLang consistency

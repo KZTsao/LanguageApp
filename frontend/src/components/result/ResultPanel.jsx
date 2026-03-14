@@ -137,6 +137,44 @@ function ResultPanel({
     window.__appInit.blockInteraction
   );
 
+  const __resultPanelRef = React.useRef(null);
+  const [__resultPanelWidth, __setResultPanelWidth] = React.useState(0);
+
+  React.useEffect(() => {
+    const el = __resultPanelRef.current;
+    if (!el) return undefined;
+
+    const updateWidth = () => {
+      try {
+        const next = Math.round(el.getBoundingClientRect().width || 0);
+        __setResultPanelWidth((prev) => (prev !== next ? next : prev));
+      } catch (err) {}
+    };
+
+    updateWidth();
+
+    let ro = null;
+    try {
+      if (typeof ResizeObserver !== "undefined") {
+        ro = new ResizeObserver(() => updateWidth());
+        ro.observe(el);
+      }
+    } catch (err) {}
+
+    try {
+      window.addEventListener("resize", updateWidth);
+    } catch (err) {}
+
+    return () => {
+      try {
+        if (ro) ro.disconnect();
+      } catch (err) {}
+      try {
+        window.removeEventListener("resize", updateWidth);
+      } catch (err) {}
+    };
+  }, []);
+
   const t = uiText || {};
   const sections = t.sections || {};
   const wordCardLabels = t.wordCard || {};
@@ -861,6 +899,7 @@ function ResultPanel({
 
   return (
     <div
+      ref={__resultPanelRef}
       style={{
         marginTop: 8,
         display: "flex",
@@ -1323,6 +1362,7 @@ function ResultPanel({
                 onWordClick={onWordClick}
                 onSpeak={handleSpeak}
                 uiLang={uiLang}
+                resultPanelWidth={__resultPanelWidth}
               />
             </section>
           )}

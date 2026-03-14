@@ -346,6 +346,41 @@ export default function SentenceCard({ input, sentence, labels, uiLang: uiLangPr
   const conversationToggleRef = useRef(null);
   const conversationNavRef = useRef(null);
   const conversationActive = !!conversationIsOpen;
+  const sentenceCardRootRef = useRef(null);
+  const [pronPanelBoundWidth, setPronPanelBoundWidth] = useState(0);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+
+    const rootEl = sentenceCardRootRef.current;
+    if (!rootEl) return undefined;
+
+    const measure = () => {
+      try {
+        const host = rootEl.closest('[data-ref="result-panel-root"]') || rootEl;
+        const rect = host && typeof host.getBoundingClientRect === "function" ? host.getBoundingClientRect() : null;
+        const next = rect ? Math.max(0, Math.floor(rect.width)) : 0;
+        setPronPanelBoundWidth((prev) => (prev === next ? prev : next));
+      } catch (e) {}
+    };
+
+    measure();
+
+    let ro = null;
+    try {
+      const host = rootEl.closest('[data-ref="result-panel-root"]') || rootEl;
+      if (typeof ResizeObserver !== "undefined") {
+        ro = new ResizeObserver(() => measure());
+        ro.observe(host);
+      }
+    } catch (e) {}
+
+    window.addEventListener("resize", measure);
+    return () => {
+      try { window.removeEventListener("resize", measure); } catch (e) {}
+      try { if (ro) ro.disconnect(); } catch (e) {}
+    };
+  }, []);
 
   // ✅ Normalize turns: ensure each turn has `.translation` for current uiLang
   const pickTurnTranslation = useCallback((turnObj, uiLang0) => {
@@ -1001,8 +1036,21 @@ export default function SentenceCard({ input, sentence, labels, uiLang: uiLangPr
 
   const renderPronunciationPanel = () => {
     if (!pronOpen) return null;
+    const boundWidthPx = Number.isFinite(pronPanelBoundWidth) && pronPanelBoundWidth > 0 ? `${Math.max(0, pronPanelBoundWidth)}px` : "720px";
     return (
-      <div style={{ marginTop: 12 }}>
+      <div
+        className="solang-sentence-pron-bound"
+        style={{ marginTop: 12, ["--solang-pron-bound-width"]: boundWidthPx }}
+      >
+        <style>{`
+          .solang-sentence-pron-bound > [role="dialog"] > div {
+            left: 50% !important;
+            right: auto !important;
+            transform: translateX(-50%) !important;
+            width: min(calc(100vw - 48px), var(--solang-pron-bound-width)) !important;
+            max-width: var(--solang-pron-bound-width) !important;
+          }
+        `}</style>
         <SpeakAnalyzePanel
           targetText={displayedTargetText}
           translationText={displayedTranslationText}
@@ -1100,6 +1148,8 @@ export default function SentenceCard({ input, sentence, labels, uiLang: uiLangPr
 
   return (
     <div
+      ref={sentenceCardRootRef}
+      data-ref="sentence-card-root"
       style={{
         position: "relative",
         background: "var(--card-bg)",

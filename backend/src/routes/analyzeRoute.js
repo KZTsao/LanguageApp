@@ -450,18 +450,24 @@ function extractLlmTokensFromResult(result) {
 
     const usage =
       result.usage ||
+      result.raw?.usage ||
       (result.meta && result.meta.usage) ||
       (result.llm && result.llm.usage) ||
       result.llmUsage ||
       (result.data && result.data.usage) ||
+      result.raw?.data?.usage ||
       null;
 
     const promptTokens =
       Number(
         usage?.prompt_tokens ??
           usage?.promptTokens ??
+          usage?.input_tokens ??
+          usage?.inputTokens ??
           result.prompt_tokens ??
           result.promptTokens ??
+          result.input_tokens ??
+          result.inputTokens ??
           0
       ) || 0;
 
@@ -469,8 +475,12 @@ function extractLlmTokensFromResult(result) {
       Number(
         usage?.completion_tokens ??
           usage?.completionTokens ??
+          usage?.output_tokens ??
+          usage?.outputTokens ??
           result.completion_tokens ??
           result.completionTokens ??
+          result.output_tokens ??
+          result.outputTokens ??
           0
       ) || 0;
 
@@ -490,14 +500,26 @@ function extractLlmTokensFromResult(result) {
         result.provider ||
           result.llmProvider ||
           result.meta?.provider ||
+          result.raw?.provider ||
           usage?.provider ||
           ""
       ) || "";
 
     const model =
       String(
-        result.model || result.llmModel || result.meta?.model || usage?.model || ""
+        result.model ||
+          result.llmModel ||
+          result.meta?.model ||
+          result.raw?.model ||
+          usage?.model ||
+          ""
       ) || "";
+
+    console.log("[analyzeRoute][usage][extract]", {
+      usageKeys: usage && typeof usage === "object" ? Object.keys(usage) : [],
+      provider,
+      model,
+    });
 
     return { promptTokens, completionTokens, totalTokens, provider, model };
   } catch (e) {

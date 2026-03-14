@@ -1653,6 +1653,10 @@ async function handleImportCommit() {
           minHeight: 0,
           display: "flex",
           flexDirection: "column",
+          width: "100%",
+          maxWidth: "100%",
+          boxSizing: "border-box",
+          overflowX: "hidden",
         }}
       >
         <LibraryItemsList
@@ -1701,7 +1705,7 @@ async function handleImportCommit() {
   >
     <div
       style={{
-        width: "min(980px, 96vw)",
+        width: "min(880px, 84vw)",
         maxHeight: "min(86vh, 820px)",
         overflow: "auto",
         borderRadius: 18,

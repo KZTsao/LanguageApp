@@ -224,11 +224,16 @@ async function addTtsCharsToProfile({ userId, email, addChars, traceId }) {
  * - 若未設定，保留 legacy fallback（但會在 log 中提示）
  */
 function getActiveTtsProvider() {
-  const p = "google";
+  const raw = String(process.env.TTS_PROVIDER || "").trim().toLowerCase();
+  if (raw) return raw;
 
-  // legacy / fallback：保留但不鼓勵
-  // 若你希望「未設定就直接停用」，可把 default 改成 "none"
-  return p;
+  const hasGoogleCreds =
+    !!process.env.GOOGLE_APPLICATION_CREDENTIALS ||
+    !!process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON ||
+    !!process.env.GCP_SA_JSON;
+
+  // legacy / fallback：若未顯式設定 provider，但已具備 Google 憑證，則自動走 google
+  return hasGoogleCreds ? "google" : "none";
 }
 
 /**
@@ -238,7 +243,7 @@ function getActiveTtsProvider() {
  */
 function getDefaultLang() {
   const v = (process.env.TTS_LANGUAGE || "").trim();
-  if (v) return v;
+  if (v && v.toLowerCase() !== "default") return v;
 
   // DEPRECATED：舊邏輯使用 ELEVEN_LANGUAGE
   // const legacy = process.env.ELEVEN_LANGUAGE || "de";
@@ -288,7 +293,7 @@ function logInitOnce() {
       hasElevenVoiceId: !!process.env.ELEVEN_VOICE_ID,
       hasElevenApiKey: !!process.env.ELEVEN_API_KEY,
       hasGoogleCredPath: !!process.env.GOOGLE_APPLICATION_CREDENTIALS,
-      hasGoogleCredJson: !!process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON,
+      hasGoogleCredJson: !!(process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON || process.env.GCP_SA_JSON),
       voiceKeyPresent: !!voiceKey,
       hasSupabaseUrl: !!process.env.SUPABASE_URL,
       hasServiceRoleKey: !!process.env.SUPABASE_SERVICE_ROLE_KEY,

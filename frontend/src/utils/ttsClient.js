@@ -89,6 +89,42 @@ export async function callTTS(text, lang = "de-DE") {
   return data.audioContent;
 }
 
+
+function playBrowserTTS(text, lang = "de-DE", seq = playSeq) {
+  return new Promise((resolve, reject) => {
+    try {
+      if (typeof window === "undefined" || !window.speechSynthesis || typeof window.SpeechSynthesisUtterance === "undefined") {
+        reject(new Error("[TTS] browser speechSynthesis not available"));
+        return;
+      }
+
+      const utter = new window.SpeechSynthesisUtterance(String(text || ""));
+      utter.lang = lang || "de-DE";
+
+      currentPlaybackResolver = resolve;
+
+      utter.onend = () => {
+        if (seq !== playSeq) {
+          settlePlayback("stale");
+          return;
+        }
+        settlePlayback("ended");
+      };
+
+      utter.onerror = (event) => {
+        currentPlaybackResolver = null;
+        reject(event instanceof Error ? event : new Error("[TTS] browser speech failed"));
+      };
+
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.speak(utter);
+    } catch (err) {
+      currentPlaybackResolver = null;
+      reject(err);
+    }
+  });
+}
+
 async function callTTSWithSignal(text, lang, signal) {
   if (!text || typeof text !== "string") {
     throw new Error("callTTSWithSignal: `text` must be a string");
@@ -129,10 +165,20 @@ export async function playTTS(text, lang = "de-DE") {
   try {
     if (!text || typeof text !== "string" || !text.trim()) return "empty";
 
+    const trimmed = text.trim();
     const controller = new AbortController();
     currentController = controller;
 
-    const audioDataUrl = await callTTSWithSignal(text, lang, controller.signal);
+    let audioDataUrl = "";
+    try {
+      audioDataUrl = await callTTSWithSignal(text, lang, controller.signal);
+    } catch (err) {
+      const msg = String(err?.message || err || "");
+      const shouldFallback = /HTTP 503|TTS not available|Failed to fetch|NetworkError/i.test(msg);
+      if (!shouldFallback) throw err;
+      if (currentController === controller) currentController = null;
+      return await playBrowserTTS(trimmed, lang, seq);
+    }
 
     if (seq !== playSeq) return "stale";
 

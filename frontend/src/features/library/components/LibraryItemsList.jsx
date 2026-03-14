@@ -624,6 +624,10 @@ export default function LibraryItemsList({
     <div
       className="wl-list"
       style={{
+        width: "100%",
+        maxWidth: "100%",
+        boxSizing: "border-box",
+        overflowX: "hidden",
         display: "flex",
         flexDirection: "column",
         gap: 8,
@@ -706,6 +710,9 @@ export default function LibraryItemsList({
             key={`${g.headword}__${g.canonicalPos}__group__${gidx}`}
             className="wl-item"
             style={{
+              width: "100%",
+              maxWidth: "100%",
+              boxSizing: "border-box",
               textAlign: "left",
               padding: "1px 14px",
               borderRadius: 16,
