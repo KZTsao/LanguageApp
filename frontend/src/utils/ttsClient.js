@@ -8,6 +8,17 @@ let playSeq = 0;
 let currentObjectUrl = "";
 let currentPlaybackResolver = null;
 
+const TTS_OBSERVE =
+  (typeof import.meta !== "undefined" && import.meta?.env?.VITE_OBSERVE_TTS === "1") ||
+  (typeof import.meta !== "undefined" && import.meta?.env?.VITE_DEBUG_TTS === "1");
+
+function observeTTS(event, payload = {}) {
+  try {
+    if (!TTS_OBSERVE) return;
+    console.log('[observe][ttsClient]', event, payload || {});
+  } catch {}
+}
+
 function cleanupObjectUrl() {
   if (!currentObjectUrl) return;
   try { URL.revokeObjectURL(currentObjectUrl); } catch {}
@@ -38,6 +49,7 @@ function stopCurrentAudioOnly() {
 
 export function stopTTS(reason = "manual") {
   playSeq += 1;
+  observeTTS("stop", { reason, playSeq });
 
   if (currentController) {
     try { currentController.abort(); } catch {}
@@ -69,6 +81,8 @@ export async function callTTS(text, lang = "de-DE") {
     throw new Error("callTTS: text is empty after trim()");
   }
 
+  observeTTS("call.start", { lang, textLen: trimmed.length });
+
   const res = await apiFetch("/api/tts", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -81,6 +95,7 @@ export async function callTTS(text, lang = "de-DE") {
   }
 
   const data = await res.json();
+  observeTTS("call.ok", { lang, hasAudioContent: !!(data && typeof data.audioContent === "string"), provider: data?.provider || "" });
 
   if (!data || typeof data.audioContent !== "string") {
     throw new Error("[TTS] Missing audioContent from response");
@@ -99,11 +114,13 @@ function playBrowserTTS(text, lang = "de-DE", seq = playSeq) {
       }
 
       const utter = new window.SpeechSynthesisUtterance(String(text || ""));
+      observeTTS("browser.start", { lang, textLen: String(text || "").length, seq });
       utter.lang = lang || "de-DE";
 
       currentPlaybackResolver = resolve;
 
       utter.onend = () => {
+        observeTTS("browser.end", { lang, seq });
         if (seq !== playSeq) {
           settlePlayback("stale");
           return;
@@ -135,6 +152,8 @@ async function callTTSWithSignal(text, lang, signal) {
     throw new Error("callTTSWithSignal: text is empty after trim()");
   }
 
+  observeTTS("callWithSignal.start", { lang, textLen: trimmed.length, hasSignal: !!signal });
+
   const res = await apiFetch("/api/tts", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -148,6 +167,7 @@ async function callTTSWithSignal(text, lang, signal) {
   }
 
   const data = await res.json();
+  observeTTS("callWithSignal.ok", { lang, hasAudioContent: !!(data && typeof data.audioContent === "string"), provider: data?.provider || "" });
 
   if (!data || typeof data.audioContent !== "string") {
     throw new Error("[TTS] Missing audioContent from response");
@@ -159,6 +179,7 @@ async function callTTSWithSignal(text, lang, signal) {
 export async function playTTS(text, lang = "de-DE") {
   const seq = ++playSeq;
 
+  observeTTS("play.start", { lang, textLen: typeof text === "string" ? text.trim().length : 0, seq });
   stopTTS("replace");
   playSeq = seq;
 
@@ -176,6 +197,7 @@ export async function playTTS(text, lang = "de-DE") {
       const msg = String(err?.message || err || "");
       const shouldFallback = /HTTP 503|TTS not available|Failed to fetch|NetworkError/i.test(msg);
       if (!shouldFallback) throw err;
+      observeTTS("play.fallback", { lang, seq, reason: msg });
       if (currentController === controller) currentController = null;
       return await playBrowserTTS(trimmed, lang, seq);
     }
@@ -183,12 +205,14 @@ export async function playTTS(text, lang = "de-DE") {
     if (seq !== playSeq) return "stale";
 
     const audio = new Audio(audioDataUrl);
+    observeTTS("play.audioReady", { lang, seq });
     currentAudio = audio;
 
     return await new Promise((resolve, reject) => {
       currentPlaybackResolver = resolve;
 
       audio.onended = () => {
+        observeTTS("play.ended", { lang, seq });
         if (currentAudio === audio) currentAudio = null;
         cleanupObjectUrl();
         if (currentController === controller) currentController = null;
@@ -214,6 +238,7 @@ export async function playTTS(text, lang = "de-DE") {
   } catch (err) {
     if (currentController && currentController.signal && currentController.signal.aborted) return "aborted";
     if (err && (err.name === "AbortError" || err.code === 20)) return "aborted";
+    observeTTS("play.failed", { lang, seq, message: String(err?.message || err || "") });
     console.error("[TTS] playTTS failed:", err);
     throw err;
   } finally {

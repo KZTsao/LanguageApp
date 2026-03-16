@@ -436,6 +436,23 @@ function getRequestId(req) {
  * ✅ 2026-01-25：Usage Event（完成交易才算）
  * - token 欄位會嘗試從 result 的常見位置抽取；抽不到就記 0
  */
+function __isObserveEnabledRaw(v) {
+  const s = String(v || "").trim().toLowerCase();
+  return s === "1" || s === "true" || s === "yes" || s === "on";
+}
+
+const __ANALYZE_OBSERVE__ =
+  __isObserveEnabledRaw(process.env.ANALYZE_OBSERVE) ||
+  __isObserveEnabledRaw(process.env.DEBUG_ANALYZE_OBSERVE) ||
+  __isObserveEnabledRaw(process.env.OBSERVE_ANALYZE);
+
+function __observeAnalyze(event, payload) {
+  try {
+    if (!__ANALYZE_OBSERVE__) return;
+    console.log('[observe][analyzeRoute]', event, payload || {});
+  } catch (e) {}
+}
+
 function extractLlmTokensFromResult(result) {
   try {
     if (!result || typeof result !== "object") {
@@ -519,6 +536,19 @@ function extractLlmTokensFromResult(result) {
       usageKeys: usage && typeof usage === "object" ? Object.keys(usage) : [],
       provider,
       model,
+    });
+
+    __observeAnalyze("usage.extract", {
+      resultKeys: Object.keys(result || {}),
+      usageKeys: usage && typeof usage === "object" ? Object.keys(usage) : [],
+      provider,
+      model,
+      promptTokens,
+      completionTokens,
+      totalTokens,
+      hasRaw: !!result.raw,
+      hasGrammar: !!result.grammar,
+      hasSentence: !!result.sentence,
     });
 
     return { promptTokens, completionTokens, totalTokens, provider, model };
@@ -943,12 +973,32 @@ __nlog("analyzeWord:done", { lookupMode, normalizedQuery: (result && result.quer
         guard_reason: guardRow && guardRow.reason ? guardRow.reason : null,
       });
 
+      __observeAnalyze("sentence.request", {
+        requestId: options.requestId || "",
+        explainLang: options.explainLang,
+        userId: options.userId || "",
+        hasTargetPosKey: Boolean(options.targetPosKey),
+        guard_ok: guardRow && typeof guardRow.ok === "boolean" ? guardRow.ok : null,
+        guard_reason: guardRow && guardRow.reason ? guardRow.reason : null,
+      });
+
       let sentenceResult = null;
       try {
       __nlog("analyzeSentence:call", { text: trimmed, requestId: options.requestId || "" });
 
         sentenceResult = await analyzeSentence(trimmed, options);
       __nlog("analyzeSentence:done", { ok: Boolean(sentenceResult), requestId: options.requestId || "" });
+
+      __observeAnalyze("sentence.result", {
+        requestId: options.requestId || "",
+        keys: sentenceResult && typeof sentenceResult === "object" ? Object.keys(sentenceResult) : [],
+        grammarKeys: sentenceResult && sentenceResult.grammar && typeof sentenceResult.grammar === "object" ? Object.keys(sentenceResult.grammar) : [],
+        hasRaw: !!(sentenceResult && sentenceResult.raw),
+        hasUsage: !!(sentenceResult && sentenceResult.usage),
+        provider: sentenceResult?.provider || sentenceResult?.raw?.provider || "",
+        model: sentenceResult?.model || sentenceResult?.raw?.model || "",
+        fallbackMode: sentenceResult?.fallback?.mode || "",
+      });
 
       } catch (e) {
         // ✅ 規格：analyzeSentence 失敗 → fallback 回 analyzeWord（phrase）或回錯誤（保持一致）

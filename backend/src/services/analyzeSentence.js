@@ -75,6 +75,23 @@ function _sanitizeUsageText(s) {
 // =========================
 // [normal] trace helper (dev)
 // =========================
+function __isObserveEnabledRaw(v) {
+  const s = String(v || "").trim().toLowerCase();
+  return s === "1" || s === "true" || s === "yes" || s === "on";
+}
+
+const __ANALYZE_SENTENCE_OBSERVE__ =
+  __isObserveEnabledRaw(process.env.ANALYZE_OBSERVE) ||
+  __isObserveEnabledRaw(process.env.DEBUG_ANALYZE_OBSERVE) ||
+  __isObserveEnabledRaw(process.env.OBSERVE_ANALYZE);
+
+function __observeSentence(event, payload) {
+  try {
+    if (!__ANALYZE_SENTENCE_OBSERVE__) return;
+    console.log('[observe][analyzeSentence]', event, payload || {});
+  } catch (e) {}
+}
+
 function __nlog(event, payload) {
   try {
     if (typeof process !== "undefined" && process?.env?.DEBUG_NORMALIZE_TRACE === "1") {
@@ -222,6 +239,16 @@ const explainLang = options.explainLang || "zh-TW";
   }
 
   try { console.info("[classify][be][analyzeSentence] analyzeGrammar:done", { isCorrect: !!grammar && grammar.isCorrect === true, errorsCount: Array.isArray(grammar?.errors) ? grammar.errors.length : 0, fallbackCandidate: grammar?.fallbackNormalizedQuery || grammar?.suggestedQuery || grammar?.recommendedQuery || "" }); } catch {}
+  __observeSentence("grammar.done", {
+    requestId: options?.requestId || "",
+    isCorrect: !!grammar && grammar.isCorrect === true,
+    grammarKeys: grammar && typeof grammar === "object" ? Object.keys(grammar) : [],
+    hasRaw: !!(grammar && grammar.raw),
+    hasUsage: !!(grammar && grammar.usage),
+    provider: grammar?.provider || grammar?.raw?.provider || "",
+    model: grammar?.model || grammar?.raw?.model || "",
+    fallbackCandidate: grammar?.fallbackNormalizedQuery || grammar?.suggestedQuery || grammar?.recommendedQuery || "",
+  });
   const isCorrect = !!grammar && grammar.isCorrect === true;
 
   // -------- A) grammar correct -> sentence meaning 중심 --------
@@ -346,6 +373,14 @@ const explainLang = options.explainLang || "zh-TW";
 
     // Hard rule: do NOT return words[] / token analyses that could trigger multi-WordCard render
     delete res.words;
+    __observeSentence("return.correct", {
+      requestId: options?.requestId || "",
+      keys: Object.keys(res || {}),
+      grammarKeys: res.grammar && typeof res.grammar === "object" ? Object.keys(res.grammar) : [],
+      hasSentence: !!res.sentence,
+      hasRaw: !!res.raw,
+      hasUsage: !!res.usage,
+    });
     return res;
   }
 
@@ -377,6 +412,14 @@ const explainLang = options.explainLang || "zh-TW";
 
   // Hard rule: do NOT return words[] / token analyses that could trigger multi-WordCard render
   delete res.words;
+  __observeSentence("return.fallback", {
+    requestId: options?.requestId || "",
+    keys: Object.keys(res || {}),
+    grammarKeys: res.grammar && typeof res.grammar === "object" ? Object.keys(res.grammar) : [],
+    fallbackMode: res.fallback?.mode || "",
+    hasRaw: !!res.raw,
+    hasUsage: !!res.usage,
+  });
   return res;
 }
 
