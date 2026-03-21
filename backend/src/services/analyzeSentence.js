@@ -223,6 +223,7 @@ const explainLang = options.explainLang || "zh-TW";
       intent: "sentence_decision",
       wantFallback: true,
       detail,
+      requestId: options?.requestId || "",
     });
   } catch (e) {
     grammarFailed = true;

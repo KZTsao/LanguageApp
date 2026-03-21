@@ -99,6 +99,30 @@ Rules:
 
 
 
+
+function __isObserveEnabledRaw(v) {
+  const s = String(v || "").trim().toLowerCase();
+  return s === "1" || s === "true" || s === "yes" || s === "on";
+}
+
+const __ANALYZE_GRAMMAR_OBSERVE__ =
+  __isObserveEnabledRaw(process.env.ANALYZE_OBSERVE) ||
+  __isObserveEnabledRaw(process.env.DEBUG_ANALYZE_OBSERVE) ||
+  __isObserveEnabledRaw(process.env.OBSERVE_ANALYZE);
+
+function __observeGrammar(event, payload) {
+  try {
+    if (!__ANALYZE_GRAMMAR_OBSERVE__) return;
+    console.log("[observe][analyzeGrammar]", event, payload || {});
+  } catch (e) {}
+}
+
+function __previewText(s, limit = 500) {
+  const t = typeof s === "string" ? s : JSON.stringify(s || "");
+  if (!t) return "";
+  return t.length > limit ? `${t.slice(0, limit)}…` : t;
+}
+
 function fallbackGrammar(detail = "basic") {
   const base = {
     isCorrect: true,
@@ -332,19 +356,82 @@ function validateGrammarJSON(parsed, sentence, explainLang) {
   return { ok: errs.length === 0, errors: errs };
 }
 
-async function callLLMForGrammarJSON({ prompt, model = "llama-3.3-70b-versatile" }) {
+async function callLLMForGrammarJSON({
+  prompt,
+  model = "llama-3.3-70b-versatile",
+  requestId = "",
+  phase = "generate",
+}) {
+  __observeGrammar("llm.request", {
+    requestId,
+    phase,
+    model,
+    promptLength: typeof prompt === "string" ? prompt.length : 0,
+    promptPreview: __previewText(prompt, 500),
+  });
+
   const response = await groqClient.chat.completions.create({
     model,
     messages: [{ role: "user", content: prompt }],
     temperature: 0.2,
     response_format: { type: "json_object" },
   });
-  const content = response.choices[0]?.message?.content;
-  if (!content) return null;
+
+  const content = response?.choices?.[0]?.message?.content || "";
+  const usage = response?.usage || {};
+  const finishReason = response?.choices?.[0]?.finish_reason || "";
+
+  __observeGrammar("llm.response", {
+    requestId,
+    phase,
+    model: response?.model || model,
+    finishReason,
+    usage,
+    hasContent: !!content,
+    contentPreview: __previewText(content, 500),
+  });
+
+  if (!content) return {
+    parsed: null,
+    rawText: "",
+    usage,
+    model: response?.model || model,
+    finishReason,
+    parseError: "empty_content",
+  };
+
   try {
-    return JSON.parse(content);
-  } catch {
-    return null;
+    const parsed = JSON.parse(content);
+    __observeGrammar("llm.parsed", {
+      requestId,
+      phase,
+      keys: parsed && typeof parsed === "object" ? Object.keys(parsed) : [],
+      isCorrect: parsed?.isCorrect,
+      errorsCount: Array.isArray(parsed?.errors) ? parsed.errors.length : 0,
+    });
+    return {
+      parsed,
+      rawText: content,
+      usage,
+      model: response?.model || model,
+      finishReason,
+      parseError: "",
+    };
+  } catch (err) {
+    __observeGrammar("llm.parse_error", {
+      requestId,
+      phase,
+      error: err?.message || String(err || ""),
+      rawPreview: __previewText(content, 500),
+    });
+    return {
+      parsed: null,
+      rawText: content,
+      usage,
+      model: response?.model || model,
+      finishReason,
+      parseError: err?.message || "json_parse_failed",
+    };
   }
 }
 
@@ -385,6 +472,7 @@ async function analyzeGrammar(text, explainLang = "zh-TW", options = {}) {
   const t = String(text || "").trim();
   const detail = options && typeof options === "object" && typeof options.detail === "string" ? options.detail : "basic";
   const detailLevel = detail === "expand" ? "expand" : "basic";
+  const requestId = options && typeof options === "object" ? (options.requestId || "") : "";
   if (!t) return fallbackGrammar(detailLevel);
 
   const targetLangLabel = mapExplainLang(explainLang);
@@ -392,18 +480,59 @@ async function analyzeGrammar(text, explainLang = "zh-TW", options = {}) {
 
   const { promptBasic, promptExpand, repairPrompt } = buildPrompts({ t, targetLangLabel, explainLang });
 
+  __observeGrammar("start", {
+    requestId,
+    text: t,
+    explainLang,
+    targetLangLabel,
+    detail: detailLevel,
+    suppressStructure,
+    hasGroqClient: !!groqClient,
+  });
+
   try {
     const basePrompt = detailLevel === "expand" ? promptExpand : promptBasic;
 
     // 1) First pass generation
-    let parsed = await callLLMForGrammarJSON({ prompt: basePrompt });
-    if (!parsed) return fallbackGrammar(detailLevel);
+    let llmResult = await callLLMForGrammarJSON({
+      prompt: basePrompt,
+      requestId,
+      phase: "generate",
+    });
+    let parsed = llmResult?.parsed || null;
+    if (!parsed) {
+      __observeGrammar("done", {
+        requestId,
+        reason: "parsed_null_first_pass",
+        parseError: llmResult?.parseError || "",
+      });
+      const fb = fallbackGrammar(detailLevel);
+      fb.raw = {
+        provider: "groq",
+        model: llmResult?.model || "",
+        finishReason: llmResult?.finishReason || "",
+        rawText: llmResult?.rawText || "",
+        parseError: llmResult?.parseError || "",
+      };
+      fb.usage = llmResult?.usage || {};
+      fb.provider = "groq";
+      fb.model = llmResult?.model || "";
+      return fb;
+    }
 
     // 2) Validate + repair (multi-call)
     //    - 只做「品質保底」：不嘗試替你做語法全解析（那是另個專案）
     //    - 目標是：結構角色別再亂（例如 W-問句硬塞 SVO）
     for (let attempt = 0; attempt < 2; attempt++) {
       const v = validateGrammarJSON(parsed, t, explainLang);
+      __observeGrammar("validate", {
+        requestId,
+        attempt,
+        ok: v.ok,
+        errors: v.errors,
+        isCorrect: parsed?.isCorrect,
+        keys: parsed && typeof parsed === "object" ? Object.keys(parsed) : [],
+      });
       if (v.ok) break;
       const repairPrompt = buildRepairPrompt({
         sentence: t,
@@ -412,9 +541,13 @@ async function analyzeGrammar(text, explainLang = "zh-TW", options = {}) {
         prevJSON: parsed,
         validationErrors: v.errors,
       });
-      const repaired = await callLLMForGrammarJSON({ prompt: repairPrompt });
-      if (!repaired) break; // fall through; we'll sanitize whatever we have
-      parsed = repaired;
+      llmResult = await callLLMForGrammarJSON({
+        prompt: repairPrompt,
+        requestId,
+        phase: `repair_${attempt + 1}`,
+      });
+      if (!llmResult?.parsed) break; // fall through; we'll sanitize whatever we have
+      parsed = llmResult.parsed;
     }
 
     const out = {
@@ -440,9 +573,35 @@ async function analyzeGrammar(text, explainLang = "zh-TW", options = {}) {
       out.extraNotes = Array.isArray(parsed.extraNotes) ? parsed.extraNotes : [];
     }
 
+    out.raw = {
+      provider: "groq",
+      model: llmResult?.model || "",
+      finishReason: llmResult?.finishReason || "",
+      rawText: llmResult?.rawText || "",
+      parseError: llmResult?.parseError || "",
+    };
+    out.usage = llmResult?.usage || {};
+    out.provider = "groq";
+    out.model = llmResult?.model || "";
+
+    __observeGrammar("done", {
+      requestId,
+      isCorrect: out.isCorrect,
+      errorsCount: Array.isArray(out.errors) ? out.errors.length : 0,
+      model: out.model || "",
+      usage: out.usage || {},
+      learningFocusTitle: out.learningFocus?.title || "",
+      extendExampleDe: out.extendExample?.de || "",
+    });
+
     return out;
   } catch (err) {
     console.error("[grammar] Groq error:", err.message);
+    __observeGrammar("error", {
+      requestId,
+      message: err?.message || String(err || ""),
+      stackTop: typeof err?.stack === "string" ? err.stack.split("\n").slice(0, 3).join(" | ") : "",
+    });
     return fallbackGrammar(detailLevel);
   }
 }
