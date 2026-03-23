@@ -24,7 +24,29 @@ function buildPrompts({ t, targetLangLabel, explainLang }) {
   const lang = normalizeLang(explainLang || "en");
   const P = promptPack("analyzeGrammar", lang) || promptPack("analyzeGrammar", "en") || {};
 
+  try {
+    console.log("[AG-BP-1] buildPrompts input", {
+      lang,
+      hasPack: !!P && Object.keys(P).length > 0,
+      keys: P && typeof P === "object" ? Object.keys(P) : [],
+      hasRules: !!P?.rules,
+      hasBans: !!P?.bans,
+      hasExRules: !!P?.exRules,
+      rulesType: Array.isArray(P?.rules) ? "array" : typeof P?.rules,
+      bansType: Array.isArray(P?.bans) ? "array" : typeof P?.bans,
+      exRulesType: Array.isArray(P?.exRules) ? "array" : typeof P?.exRules,
+    });
+  } catch {}
+
   const S = P;
+
+  try {
+    console.log("[AG-BP-2] before join", {
+      rules: S?.rules,
+      bans: S?.bans,
+      exRules: S?.exRules,
+    });
+  } catch {}
 
   const __langNote = (P && Object.keys(P).length ? "" : `
 IMPORTANT: Write ALL explanations in ${targetLangLabel}.`);
@@ -93,6 +115,14 @@ Rules:
 - learningFocus.title MUST include at least one German word/chunk from the original sentence (keep it in German)
 - The core point must follow the chunk/pattern priority (chunks > patterns > transferable rule > word meaning)
 `.trim();
+
+  try {
+    console.log("[AG-BP-3] buildPrompts success", {
+      basicLength: basic.length,
+      expandLength: expand.length,
+      repairLength: repair.length,
+    });
+  } catch {}
 
   return { promptBasic: basic, promptExpand: expand, repairPrompt: repair };
 }
@@ -473,12 +503,45 @@ async function analyzeGrammar(text, explainLang = "zh-TW", options = {}) {
   const detail = options && typeof options === "object" && typeof options.detail === "string" ? options.detail : "basic";
   const detailLevel = detail === "expand" ? "expand" : "basic";
   const requestId = options && typeof options === "object" ? (options.requestId || "") : "";
+
+  try {
+    console.log("[AG-1] enter analyzeGrammar", {
+      text: t,
+      explainLang,
+      requestId,
+      detail: detailLevel,
+    });
+  } catch {}
+
   if (!t) return fallbackGrammar(detailLevel);
 
   const targetLangLabel = mapExplainLang(explainLang);
   const suppressStructure = options && typeof options === "object" && options.intent === "sentence_decision";
 
+  try {
+    console.log("[AG-2] before buildPrompts", {
+      requestId,
+      text: t,
+      explainLang,
+      targetLangLabel,
+      detail: detailLevel,
+      suppressStructure,
+    });
+  } catch {}
+
   const { promptBasic, promptExpand, repairPrompt } = buildPrompts({ t, targetLangLabel, explainLang });
+
+  try {
+    console.log("[AG-3] after buildPrompts", {
+      requestId,
+      hasPromptBasic: !!promptBasic,
+      hasPromptExpand: !!promptExpand,
+      hasRepairPrompt: !!repairPrompt,
+      promptBasicLength: typeof promptBasic === "string" ? promptBasic.length : 0,
+      promptExpandLength: typeof promptExpand === "string" ? promptExpand.length : 0,
+      repairPromptLength: typeof repairPrompt === "string" ? repairPrompt.length : 0,
+    });
+  } catch {}
 
   __observeGrammar("start", {
     requestId,
