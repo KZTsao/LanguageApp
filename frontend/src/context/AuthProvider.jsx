@@ -378,12 +378,16 @@ console.log("[Auth][onAuthStateChange]", {
   const signInWithGoogle = async () => {
     setLoading(true);
 
+    // 支援多站共用同一 Supabase 專案：redirectTo 動態取目前網站的 origin，
+    // 讓兩個網站各自回到自己的 /auth/callback，而不是寫死某一個網域。
+    const redirectTo = `${window.location.origin}/auth/callback`;
+
     // ✅ Production 排查：點擊登入瞬間記錄 origin / redirectTo
     try {
       prodLog("signInWithGoogle called", {
         at: new Date().toISOString(),
         origin: window.location.origin,
-        redirectTo: window.location.origin,
+        redirectTo,
       });
     } catch (e) {
       prodWarn("signInWithGoogle pre-log failed", e);
@@ -391,7 +395,7 @@ console.log("[Auth][onAuthStateChange]", {
 
     const { error } = await supabase.auth.signInWithOAuth({
       provider: "google",
-      options: { redirectTo: window.location.origin },
+      options: { redirectTo },
     });
 
     // ✅ Production 排查：signInWithOAuth 錯誤留痕
